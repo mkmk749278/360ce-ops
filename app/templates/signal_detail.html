@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Signal {{ signal_id }} — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Signal <span class="mono">{{ signal_id }}</span></h1>
+<p><a href="/signals" class="muted">← back to signals</a></p>
+
+<section class="card">
+  <h2>Live (engine API)</h2>
+  {% if live is mapping and live.error %}
+    <div class="error">{{ live.error }}</div>
+  {% else %}
+    <pre class="mono small">{{ live | tojson(indent=2) }}</pre>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Performance record <span class="muted">signal_performance.json</span></h2>
+  {% if performance %}
+    <pre class="mono small">{{ performance | tojson(indent=2) }}</pre>
+  {% else %}
+    <div class="muted">No performance record found.</div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Invalidation record <span class="muted">invalidation_records.json</span></h2>
+  {% if invalidation %}
+    <pre class="mono small">{{ invalidation | tojson(indent=2) }}</pre>
+  {% else %}
+    <div class="muted">No invalidation record (signal was not killed).</div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Signal history <span class="muted">signal_history.json</span></h2>
+  {% if history %}
+    <pre class="mono small">{{ history | tojson(indent=2) }}</pre>
+  {% else %}
+    <div class="muted">No history record found.</div>
+  {% endif %}
+</section>
+{% endblock %}

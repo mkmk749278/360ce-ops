@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Diag — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Diag — geometry vs reality</h1>
+<p class="muted">Runs <code>docker exec engine python /app/scripts/diag_geometry_vs_reality.py</code>.</p>
+<form method="post" action="/diag/geometry" class="filters">
+  <label>Limit
+    <input type="number" name="limit" min="1" max="500" value="{{ params.limit or 50 }}">
+  </label>
+  <label>Setup class (optional)
+    <input type="text" name="setup_class" value="{{ params.setup_class or '' }}" placeholder="e.g. SR_FLIP_RETEST">
+  </label>
+  <button type="submit">Run</button>
+</form>
+
+{% if result %}
+  <section class="card">
+    <h2>Result <span class="muted">rc={{ result.returncode }}</span></h2>
+    {% if result.stdout %}
+      <h3>stdout</h3>
+      <pre class="mono small">{{ result.stdout }}</pre>
+    {% endif %}
+    {% if result.stderr %}
+      <h3>stderr</h3>
+      <pre class="mono small error">{{ result.stderr }}</pre>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Performance — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Performance</h1>
+<nav class="window-picker">
+  <a href="/performance?window=7d" class="{% if window=='7d' %}on{% endif %}">7 days</a>
+  <a href="/performance?window=30d" class="{% if window=='30d' %}on{% endif %}">30 days</a>
+  <a href="/performance?window=all" class="{% if window=='all' %}on{% endif %}">all-time</a>
+</nav>
+
+{% macro stat_table(rows, label) %}
+<section class="card">
+  <h2>{{ label }}</h2>
+  {% if rows %}
+  <table class="data-table">
+    <thead><tr><th>{{ label.split(' ')[-1] | title }}</th><th>N</th><th>Wins</th><th>Losses</th><th>Neutral</th><th>Win rate</th><th>Avg PnL %</th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.key }}</td>
+        <td>{{ r.n }}</td>
+        <td>{{ r.wins }}</td>
+        <td>{{ r.losses }}</td>
+        <td>{{ r.neutral }}</td>
+        <td>{{ "%.1f%%" % (r.win_rate * 100) }}</td>
+        <td class="{% if r.avg_pnl > 0 %}pos{% elif r.avg_pnl < 0 %}neg{% endif %}">{{ "%.3f" % r.avg_pnl }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <div class="muted">No records in this window.</div>
+  {% endif %}
+</section>
+{% endmacro %}
+
+{{ stat_table(agg.by_symbol, 'By symbol') }}
+{{ stat_table(agg.by_setup, 'By setup') }}
+{{ stat_table(agg.by_regime, 'By regime') }}
+{% endblock %}

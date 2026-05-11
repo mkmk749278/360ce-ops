@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Invalidations — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Invalidation Quality Audit</h1>
+{% if agg.error %}
+  <section class="card"><div class="error">{{ agg.error }}</div></section>
+{% endif %}
+
+<section class="card">
+  <h2>Totals</h2>
+  {% if agg.totals %}
+    <div class="kv-grid">
+      {% for k, v in agg.totals.items() %}
+        <div class="kv"><span class="k">{{ k }}</span><span class="v">{{ v }}</span></div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="muted">No invalidation records loaded.</div>
+  {% endif %}
+</section>
+
+{% if agg.by_setup %}
+<section class="card">
+  <h2>By setup × classification</h2>
+  <table class="data-table">
+    <thead><tr><th>Setup</th>{% for cls in agg.totals.keys() %}<th>{{ cls }}</th>{% endfor %}<th>Total</th></tr></thead>
+    <tbody>
+    {% for setup, counts in agg.by_setup.items() %}
+      {% set row_total = counts.values() | sum %}
+      <tr><td>{{ setup }}</td>
+        {% for cls in agg.totals.keys() %}<td>{{ counts.get(cls, 0) }}</td>{% endfor %}
+        <td>{{ row_total }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if agg.by_reason %}
+<section class="card">
+  <h2>By kill-reason × classification</h2>
+  <table class="data-table">
+    <thead><tr><th>Reason</th>{% for cls in agg.totals.keys() %}<th>{{ cls }}</th>{% endfor %}<th>Total</th></tr></thead>
+    <tbody>
+    {% for reason, counts in agg.by_reason.items() %}
+      {% set row_total = counts.values() | sum %}
+      <tr><td>{{ reason }}</td>
+        {% for cls in agg.totals.keys() %}<td>{{ counts.get(cls, 0) }}</td>{% endfor %}
+        <td>{{ row_total }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if agg.rows %}
+<section class="card">
+  <h2>Recent records <span class="muted">most recent 200</span></h2>
+  <pre class="mono small">{{ agg.rows | tojson(indent=2) }}</pre>
+</section>
+{% endif %}
+{% endblock %}

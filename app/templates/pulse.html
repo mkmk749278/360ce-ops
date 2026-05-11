@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Pulse — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Engine Pulse</h1>
+
+{% include "_pulse_card.html" %}
+
+<section class="card">
+  <h2>Heartbeat <span class="muted">monitor-logs / heartbeat.txt</span></h2>
+  <pre class="mono small">{{ heartbeat }}</pre>
+</section>
+{% endblock %}
