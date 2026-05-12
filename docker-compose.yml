@@ -17,8 +17,15 @@ services:
       DIAG_TIMEOUT_SEC: "30"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      # Read-only mount of the engine's data directory on the VPS.
-      - ${ENGINE_DATA_HOST_PATH:-/opt/engine/data}:/engine-data:ro
+      # Mount the engine's named Docker volume read-only. The engine's
+      # docker-compose creates `360-v2_360scalp-v2-data` (project-prefixed);
+      # override via ENGINE_DATA_VOLUME if the engine project name changes.
+      - engine-data:/engine-data:ro
       # Docker socket so the diag runner can `docker exec engine ...`.
       # Owner-only access trust assumption per CLAUDE.md.
       - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  engine-data:
+    name: ${ENGINE_DATA_VOLUME:-360-v2_360scalp-v2-data}
+    external: true
