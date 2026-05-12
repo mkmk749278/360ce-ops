@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Truth — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Runtime Truth Report</h1>
+<div class="actions">
+  <a href="/truth/raw.md" class="btn" target="_blank">Raw markdown</a>
+  <a href="/truth/raw.json" class="btn" target="_blank">Raw JSON</a>
+</div>
+
+{% if snapshot is mapping and snapshot.error %}
+  <section class="card"><div class="error">snapshot: {{ snapshot.error }}</div></section>
+{% elif snapshot is mapping %}
+  {% for section_key, section_value in snapshot.items() %}
+    <section class="card">
+      <h2>{{ section_key | replace("_", " ") | title }}</h2>
+      <pre class="mono small">{{ section_value | tojson(indent=2) }}</pre>
+    </section>
+  {% endfor %}
+{% else %}
+  <section class="card">
+    <pre class="mono small">{{ snapshot | tojson(indent=2) }}</pre>
+  </section>
+{% endif %}
+
+<section class="card">
+  <h2>Window-over-window comparison</h2>
+  {% if comparison is mapping and comparison.error %}
+    <div class="error">{{ comparison.error }}</div>
+  {% else %}
+    <pre class="mono small">{{ comparison | tojson(indent=2) }}</pre>
+  {% endif %}
+</section>
+{% endblock %}

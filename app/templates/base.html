@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}360 CE Ops{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://unpkg.com/htmx.org@1.9.10" defer></script>
+</head>
+<body>
+  <header>
+    <div class="logo"><a href="/">360 CE Ops</a></div>
+    <nav>
+      <a href="/" class="{% if active=='pulse' %}on{% endif %}">Pulse</a>
+      <a href="/truth" class="{% if active=='truth' %}on{% endif %}">Truth</a>
+      <a href="/signals" class="{% if active=='signals' %}on{% endif %}">Signals</a>
+      <a href="/diag/geometry" class="{% if active=='diag' %}on{% endif %}">Diag</a>
+      <a href="/invalidations" class="{% if active=='invalidations' %}on{% endif %}">Invalidations</a>
+      <a href="/performance" class="{% if active=='performance' %}on{% endif %}">Performance</a>
+    </nav>
+    <div class="user"><a href="/logout">Logout</a></div>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

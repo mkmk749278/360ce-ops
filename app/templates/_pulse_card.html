@@ -1,0 +1,15 @@
+<section class="card pulse-card" hx-get="/_partial/pulse" hx-trigger="every 30s" hx-swap="outerHTML">
+  <h2>API pulse <span class="muted">refreshes every 30s</span></h2>
+  {% if pulse is mapping and pulse.error %}
+    <div class="error">API error: {{ pulse.error }}</div>
+  {% else %}
+    <pre class="mono small">{{ pulse | tojson(indent=2) }}</pre>
+  {% endif %}
+
+  <h3>Auto-mode</h3>
+  {% if auto_mode is mapping and auto_mode.error %}
+    <div class="error">API error: {{ auto_mode.error }}</div>
+  {% else %}
+    <pre class="mono small">{{ auto_mode | tojson(indent=2) }}</pre>
+  {% endif %}
+</section>

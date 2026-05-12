@@ -1,0 +1,31 @@
+services:
+  ops:
+    image: ghcr.io/mkmk749278/360ce-ops:latest
+    build: .
+    container_name: 360ce-ops
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8088:8000"
+    environment:
+      OPS_SESSION_SECRET: ${OPS_SESSION_SECRET}
+      OPS_AUTH_TOKEN: ${OPS_AUTH_TOKEN}
+      ENGINE_API_BASE: ${ENGINE_API_BASE:-https://api.luminapp.org}
+      ENGINE_DATA_DIR: /engine-data
+      MONITOR_LOGS_BASE_URL: ${MONITOR_LOGS_BASE_URL:-https://raw.githubusercontent.com/mkmk749278/360-v2/monitor-logs}
+      MONITOR_LOGS_TTL_SEC: "60"
+      ENGINE_CONTAINER_NAME: ${ENGINE_CONTAINER_NAME:-engine}
+      DIAG_TIMEOUT_SEC: "30"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # Mount the engine's named Docker volume read-only. The engine's
+      # docker-compose creates `360-v2_360scalp-v2-data` (project-prefixed);
+      # override via ENGINE_DATA_VOLUME if the engine project name changes.
+      - engine-data:/engine-data:ro
+      # Docker socket so the diag runner can `docker exec engine ...`.
+      # Owner-only access trust assumption per CLAUDE.md.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  engine-data:
+    name: ${ENGINE_DATA_VOLUME:-360-v2_360scalp-v2-data}
+    external: true
