@@ -54,7 +54,6 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: SSH-deploy on VPS
-        if: ${{ secrets.VPS_HOST != '' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
