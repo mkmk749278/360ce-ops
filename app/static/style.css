@@ -166,3 +166,9 @@ code {
   .data-table th, .data-table td { padding: 0.3rem 0.4rem; }
   .kv-grid { grid-template-columns: 1fr; }
 }
+
+/* Positions diag — row tint by risk class.  Reuses existing --neg / --pos
+   colour vars with low alpha so the row stays readable. */
+.data-table tbody tr.row-sl_breached { background: rgba(255, 0, 0, 0.08); }
+.data-table tbody tr.row-feed_stale  { background: rgba(255, 165, 0, 0.07); }
+.data-table tbody tr.row-ok { /* default */ }

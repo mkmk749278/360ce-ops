@@ -37,7 +37,7 @@
   <tbody>
   {% for r in rows %}
     <tr>
-      <td class="mono small">{{ r.created_at or "—" }}</td>
+      <td class="mono small">{% if r.created_at_relative %}<span title="{{ r.created_at_absolute or r.created_at_raw or '' }}">{{ r.created_at_relative }}</span>{% else %}{{ r.created_at_absolute or r.created_at or "—" }}{% endif %}</td>
       <td>{{ r.symbol }}</td>
       <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
       <td>{{ r.setup_class }}</td>

@@ -63,6 +63,23 @@ class EngineApiClient:
     async def positions(self) -> Any:
         return await self._get("/api/positions")
 
+    async def positions_diag(self) -> Any:
+        """Operator-facing position-state X-ray.
+
+        Owner-tier endpoint shipped in 360-v2 PR #385 that surfaces, per
+        active signal, exactly the inputs ``TradeMonitor._evaluate_signal``
+        reads — stored SL/TP, 1m candle wick the monitor is comparing
+        against, candle-feed age, and ``sl_breach_distance_pct``.
+        Distinguishes stale-feed vs monitor-evaluation-bug vs state-sync-gap
+        failure modes when a position closes on Binance but stays ACTIVE in
+        the engine.
+
+        Auth: same Bearer token the dashboard already uses for ``/api/*``.
+        Static-token bypass is treated as owner-tier by the engine, so the
+        dashboard's ``OPS_AUTH_TOKEN``-equivalent token is sufficient.
+        """
+        return await self._get("/internal/diag/positions")
+
     async def activity(self, setup_class: str | None = None) -> Any:
         params: dict[str, str] = {}
         if setup_class:
