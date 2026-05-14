@@ -28,6 +28,7 @@ from app.routes import (
     diag,
     invalidations,
     performance,
+    positions,
     pulse,
     signal_detail,
     signals,
@@ -77,6 +78,7 @@ app.include_router(signal_detail.router)
 app.include_router(diag.router)
 app.include_router(invalidations.router)
 app.include_router(performance.router)
+app.include_router(positions.router)
 
 
 @app.get("/healthz")

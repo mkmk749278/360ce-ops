@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Positions — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Positions <span class="muted small">live state X-ray</span></h1>
+
+<section class="card">
+  <p class="muted small">
+    Each row shows what <code>TradeMonitor._evaluate_signal</code> is comparing
+    against right now: stored SL/TP, current 1m candle wick, and the candle's
+    age.  A row tinted <strong>red</strong> means the wick has already crossed
+    SL but status is still ACTIVE — that's a monitor-evaluation gap.  A row
+    tinted <strong>orange</strong> means the candle feed for this symbol is
+    stale (no kline frame for &gt;180&nbsp;s), so the engine can't fairly
+    evaluate.  Green rows are healthy.
+  </p>
+  <p class="mono small">
+    monitor_running: <strong>{{ "yes" if monitor_running else "NO — engine.monitor coroutine not alive" }}</strong>
+    {% if generated_at %}<span class="muted">· snapshot at {{ generated_at }}</span>{% endif %}
+  </p>
+</section>
+
+{% if error %}
+<section class="card">
+  <div class="muted">Endpoint error: <code>{{ error }}</code></div>
+</section>
+{% elif rows %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Symbol</th>
+      <th>Side</th>
+      <th>Status</th>
+      <th>Setup</th>
+      <th>Entry</th>
+      <th>SL</th>
+      <th>TP1</th>
+      <th>TP2</th>
+      <th>Current</th>
+      <th>Candle 1m H/L</th>
+      <th>Feed age (s)</th>
+      <th>SL breach %</th>
+      <th>PnL %</th>
+      <th>Opened</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr class="row-{{ r.row_class }}">
+      <td>{{ r.symbol }}</td>
+      <td class="side-{{ (r.direction or '')|lower }}">{{ r.direction }}</td>
+      <td>{{ r.status }}</td>
+      <td>{{ r.setup_class }}</td>
+      <td class="mono">{{ r.entry }}</td>
+      <td class="mono neg">{{ r.stop_loss }}</td>
+      <td class="mono pos">{{ r.tp1 }}</td>
+      <td class="mono pos">{{ r.tp2 }}</td>
+      <td class="mono">{{ r.current_price }}</td>
+      <td class="mono small">{{ r.candle_1m_high }} / {{ r.candle_1m_low }}</td>
+      <td class="mono small">{% if r.candle_1m_age_sec is not none %}{{ r.candle_1m_age_sec }}{% else %}—{% endif %}</td>
+      <td class="mono {% if r.sl_breach_distance_pct is not none and r.sl_breach_distance_pct <= 0 %}neg{% endif %}">
+        {% if r.sl_breach_distance_pct is not none %}{{ "%.3f"|format(r.sl_breach_distance_pct) }}{% else %}—{% endif %}
+      </td>
+      <td class="{% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">
+        {{ "%.3f"|format(r.pnl_pct) if r.pnl_pct is not none else "—" }}
+      </td>
+      <td class="mono small">{% if r.timestamp_relative %}<span title="{{ r.timestamp or '' }}">{{ r.timestamp_relative }}</span>{% else %}{{ r.minutes_open }}m{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <section class="card"><div class="muted">No active positions.</div></section>
+{% endif %}
+{% endblock %}
