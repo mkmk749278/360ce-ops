@@ -97,7 +97,7 @@ def _normalize_signal(entry: dict) -> dict:
         "setup_class": entry.get("setup_class") or entry.get("setupClass", ""),
         "confidence": entry.get("confidence"),
         "status": entry.get("status") or entry.get("terminal_status") or entry.get("outcome_label") or "",
-        "regime": entry.get("regime", ""),
+        "regime": entry.get("entry_regime") or entry.get("regime", ""),
         "pnl_pct": entry.get("pnl_pct") if entry.get("pnl_pct") is not None else entry.get("pnlPct"),
         "entry": entry.get("entry") or entry.get("entry_price"),
         "sl": entry.get("sl") or entry.get("stop_loss"),
