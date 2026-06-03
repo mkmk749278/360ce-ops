@@ -64,7 +64,7 @@ def _aggregate(records: Any, window_days: int | None) -> dict:
                 continue
         symbol = r.get("symbol", "UNKNOWN")
         setup = r.get("setup_class", "UNKNOWN")
-        regime = r.get("regime", "UNKNOWN")
+        regime = r.get("entry_regime") or r.get("regime", "UNKNOWN")
         outcome = _classify_outcome(r.get("outcome_label") or r.get("status") or "")
         try:
             pnl = float(r.get("pnl_pct") or r.get("pnlPct") or 0.0)

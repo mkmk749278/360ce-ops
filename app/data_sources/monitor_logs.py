@@ -83,5 +83,8 @@ class MonitorLogsReader:
     async def heartbeat(self) -> str:
         result = await self._fetch("monitor/raw/heartbeat.txt", as_json=False)
         if isinstance(result, dict):
-            return f"<error: {result.get('error')}>"
+            error = str(result.get("error", ""))
+            if "404" in error or "Not Found" in error:
+                return "Monitoring agent not yet active."
+            return f"<error: {error}>"
         return result
