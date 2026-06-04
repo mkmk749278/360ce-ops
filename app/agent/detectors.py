@@ -23,11 +23,18 @@ class DetectorResult:
 # ---------------------------------------------------------------------------
 
 class NakedPositionDetector:
-    """OPEN position with no SL stored past the grace window.
+    """OPEN position with no SL *geometry* stored past the grace window.
 
     Reads the /internal/diag/positions response (PositionDiagDetail list).
-    A stop_loss of 0.0 on an ACTIVE position older than grace_sec is a
-    naked position — the JTOUSDT failure mode.
+
+    LIMITATION: this checks ``sig.stop_loss`` (the signal's intended SL
+    price), not whether a live protective STOP ORDER exists on Binance.
+    The real JTOUSDT failure mode — signal has a valid SL price but the
+    Binance stop order never confirmed — would show a non-zero stop_loss
+    here and slip past this detector. Catching that requires the engine to
+    publish the FSM's live ``sl_order_id`` per position to Redis; tracked
+    as a follow-up engine telemetry PR. Until then this only flags the
+    grosser failure of missing SL geometry on a genuine position.
     """
 
     name = "NakedPositionDetector"
@@ -40,13 +47,21 @@ class NakedPositionDetector:
         for item in diag_items:
             if item.get("status") != "ACTIVE":
                 continue
+            # A real open position always carries a symbol and a positive
+            # entry price. Entries in router.active_signals with an empty
+            # symbol / zero entry are signal-tracking placeholders surfaced by
+            # the Redis facade in isolated mode — NOT live Binance positions.
+            # Skip them so we don't page on phantom entries.
+            symbol = (item.get("symbol") or "").strip()
+            entry = float(item.get("entry") or 0.0)
+            if not symbol or entry <= 0.0:
+                continue
             minutes_open: int = item.get("minutes_open") or 0
             if minutes_open * 60 <= self._grace:
                 continue
             sl: float = item.get("stop_loss") or 0.0
             if sl > 0.0:
                 continue
-            symbol = item.get("symbol", "unknown")
             signal_id = item.get("signal_id", "unknown")
             results.append(DetectorResult(
                 severity="HIGH",
@@ -158,41 +173,12 @@ class EngineStatusDetector:
         return []
 
 
-# ---------------------------------------------------------------------------
-# D5 — HeartbeatAgeDetector  (WARN → HIGH)
-# ---------------------------------------------------------------------------
-
-class HeartbeatAgeDetector:
-    """Engine data-volume files must be recently written.
-
-    Checks the age (seconds since last mtime) of key files in the
-    engine-data mount.  The engine scan cycle runs every ~15s; files
-    older than warn_sec indicate a stuck scanner.
-    """
-
-    name = "HeartbeatAgeDetector"
-
-    def __init__(self, warn_sec: int = 120, high_sec: int = 300) -> None:
-        self._warn = warn_sec
-        self._high = high_sec
-
-    def check(self, file_ages: dict[str, float]) -> list[DetectorResult]:
-        if not file_ages:
-            return []
-        worst_name = max(file_ages, key=lambda k: file_ages[k])
-        worst_age = file_ages[worst_name]
-        if worst_age <= self._warn:
-            return []
-        severity: Literal["HIGH", "WARN"] = "HIGH" if worst_age > self._high else "WARN"
-        return [DetectorResult(
-            severity=severity,
-            fingerprint="heartbeat_stale",
-            description=(
-                f"Engine data stale {worst_age:.0f}s (file: {worst_name}). "
-                f"Scanner loop may be stuck."
-            ),
-            raw={"file_ages_sec": file_ages},
-        )]
+# NOTE: A file-mtime "HeartbeatAgeDetector" was removed here. It watched
+# signal_performance.json / signal_history.json, but those files only update
+# on signal lifecycle events — not every scan cycle — so a healthy-but-quiet
+# engine looked "stale" and it false-paged. Engine/scanner liveness is
+# covered correctly by RedisStalenessDetector (snapshot:tickers freshness)
+# and EngineStatusDetector (pulse status), which read engine-published state.
 
 
 # ---------------------------------------------------------------------------

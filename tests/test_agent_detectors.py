@@ -10,7 +10,6 @@ from app.agent.detectors import (
     ApiHealthDetector,
     BackgroundTaskDetector,
     EngineStatusDetector,
-    HeartbeatAgeDetector,
     NakedPositionDetector,
     RedisStalenessDetector,
     SignalSilenceDetector,
@@ -26,7 +25,7 @@ class TestNakedPositionDetector:
     def test_triggers_on_zero_sl(self):
         d = NakedPositionDetector(grace_sec=90)
         items = [{"status": "ACTIVE", "symbol": "BTCUSDT", "signal_id": "s1",
-                  "minutes_open": 5, "stop_loss": 0.0}]
+                  "minutes_open": 5, "entry": 65000.0, "stop_loss": 0.0}]
         results = d.check(items)
         assert len(results) == 1
         assert results[0].severity == "HIGH"
@@ -35,28 +34,42 @@ class TestNakedPositionDetector:
     def test_no_trigger_within_grace(self):
         d = NakedPositionDetector(grace_sec=90)
         items = [{"status": "ACTIVE", "symbol": "BTCUSDT", "signal_id": "s1",
-                  "minutes_open": 1, "stop_loss": 0.0}]
+                  "minutes_open": 1, "entry": 65000.0, "stop_loss": 0.0}]
         assert d.check(items) == []
 
     def test_no_trigger_with_valid_sl(self):
         d = NakedPositionDetector(grace_sec=90)
         items = [{"status": "ACTIVE", "symbol": "BTCUSDT", "signal_id": "s1",
-                  "minutes_open": 5, "stop_loss": 65000.0}]
+                  "minutes_open": 5, "entry": 65000.0, "stop_loss": 64000.0}]
         assert d.check(items) == []
 
     def test_no_trigger_for_non_active_status(self):
         d = NakedPositionDetector(grace_sec=90)
         items = [{"status": "SL_HIT", "symbol": "BTCUSDT", "signal_id": "s1",
-                  "minutes_open": 5, "stop_loss": 0.0}]
+                  "minutes_open": 5, "entry": 65000.0, "stop_loss": 0.0}]
+        assert d.check(items) == []
+
+    def test_no_trigger_on_empty_symbol(self):
+        # Phantom signal-tracking entry from the Redis facade in isolated
+        # mode — empty symbol, zero entry, zero SL. Must NOT page.
+        d = NakedPositionDetector(grace_sec=90)
+        items = [{"status": "ACTIVE", "symbol": "", "signal_id": "SRFLIP-50A18331",
+                  "minutes_open": 3, "entry": 0.0, "stop_loss": 0.0}]
+        assert d.check(items) == []
+
+    def test_no_trigger_on_zero_entry(self):
+        d = NakedPositionDetector(grace_sec=90)
+        items = [{"status": "ACTIVE", "symbol": "BTCUSDT", "signal_id": "s1",
+                  "minutes_open": 5, "entry": 0.0, "stop_loss": 0.0}]
         assert d.check(items) == []
 
     def test_multiple_naked_positions(self):
         d = NakedPositionDetector(grace_sec=90)
         items = [
             {"status": "ACTIVE", "symbol": "BTCUSDT", "signal_id": "s1",
-             "minutes_open": 5, "stop_loss": 0.0},
+             "minutes_open": 5, "entry": 65000.0, "stop_loss": 0.0},
             {"status": "ACTIVE", "symbol": "ETHUSDT", "signal_id": "s2",
-             "minutes_open": 10, "stop_loss": 0.0},
+             "minutes_open": 10, "entry": 3500.0, "stop_loss": 0.0},
         ]
         results = d.check(items)
         assert len(results) == 2
@@ -72,7 +85,7 @@ class TestNakedPositionDetector:
         d = NakedPositionDetector(grace_sec=90)
         # minutes_open=2 → 120s > 90s → should trigger
         items = [{"status": "ACTIVE", "symbol": "BTCUSDT", "signal_id": "s1",
-                  "minutes_open": 2, "stop_loss": 0.0}]
+                  "minutes_open": 2, "entry": 65000.0, "stop_loss": 0.0}]
         assert len(d.check(items)) == 1
 
 
@@ -164,40 +177,6 @@ class TestEngineStatusDetector:
         assert len(results) == 1
         assert results[0].severity == "HIGH"
         assert results[0].fingerprint == "engine_unreachable"
-
-
-# ---------------------------------------------------------------------------
-# D5 — HeartbeatAgeDetector
-# ---------------------------------------------------------------------------
-
-class TestHeartbeatAgeDetector:
-    def test_fresh(self):
-        d = HeartbeatAgeDetector(warn_sec=120, high_sec=300)
-        assert d.check({"signal_history.json": 10.0}) == []
-
-    def test_warn(self):
-        d = HeartbeatAgeDetector(warn_sec=120, high_sec=300)
-        results = d.check({"signal_history.json": 180.0})
-        assert len(results) == 1
-        assert results[0].severity == "WARN"
-        assert results[0].fingerprint == "heartbeat_stale"
-
-    def test_high(self):
-        d = HeartbeatAgeDetector(warn_sec=120, high_sec=300)
-        results = d.check({"signal_history.json": 400.0})
-        assert len(results) == 1
-        assert results[0].severity == "HIGH"
-
-    def test_empty(self):
-        d = HeartbeatAgeDetector()
-        assert d.check({}) == []
-
-    def test_uses_worst_file(self):
-        d = HeartbeatAgeDetector(warn_sec=120, high_sec=300)
-        ages = {"a.json": 10.0, "b.json": 250.0}
-        results = d.check(ages)
-        assert len(results) == 1
-        assert results[0].severity == "WARN"
 
 
 # ---------------------------------------------------------------------------
