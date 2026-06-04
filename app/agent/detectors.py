@@ -79,20 +79,30 @@ class NakedPositionDetector:
 # D2 — BackgroundTaskDetector  (HIGH, pages immediately)
 # ---------------------------------------------------------------------------
 
+# The four persistent engine loops. pretp_dispatcher is deliberately NOT
+# here — it's an event-driven singleton that only spawns per-symbol
+# pd_track_* tasks at position open, so it never appears as a long-lived
+# task and would false-positive.
 _REQUIRED_TASKS = (
     "trade_monitor",
     "reconciler",
     "mark_price_feed",
     "funding_exit_watcher",
-    "pretp_dispatcher",
 )
 
 
 class BackgroundTaskDetector:
     """All critical engine asyncio tasks must be alive.
 
-    Reads the /internal/diag/tasks response.  Task names may carry a
-    numeric suffix (e.g. 'trade_monitor-1') so we match by prefix.
+    Reads the /internal/diag/tasks response, which the engine now answers
+    correctly in both single-process and isolated mode (the engine container
+    publishes its task census to Redis; the API facade serves it). Task names
+    may carry a numeric suffix (e.g. 'trade_monitor-1') so we match by prefix.
+
+    Guard: an empty task list means the census itself is unavailable (engine
+    snapshot stale / endpoint error), not that every loop died — that failure
+    mode is covered by the engine-status and snapshot-freshness detectors, so
+    we skip rather than fire five HIGH pages off one missing census.
     """
 
     name = "BackgroundTaskDetector"
@@ -101,6 +111,9 @@ class BackgroundTaskDetector:
         self._required = required
 
     def check(self, tasks: list[str]) -> list[DetectorResult]:
+        # Empty census = source unavailable, not a mass task death. Skip.
+        if not tasks:
+            return []
         results: list[DetectorResult] = []
         for name in self._required:
             found = any(t == name or t.startswith(f"{name}-") for t in tasks)
