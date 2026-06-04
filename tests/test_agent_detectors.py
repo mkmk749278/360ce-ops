@@ -94,12 +94,21 @@ class TestNakedPositionDetector:
 # ---------------------------------------------------------------------------
 
 class TestBackgroundTaskDetector:
+    # The 4 persistent engine loops. pretp_dispatcher is NOT included — it's
+    # an event-driven singleton, never a long-lived task.
     _ALL = ["trade_monitor", "reconciler", "mark_price_feed",
-            "funding_exit_watcher", "pretp_dispatcher"]
+            "funding_exit_watcher"]
 
     def test_no_trigger_all_present(self):
         d = BackgroundTaskDetector()
         assert d.check(self._ALL) == []
+
+    def test_pretp_dispatcher_not_required(self):
+        # A census without pretp_dispatcher must NOT fire — it's not expected.
+        d = BackgroundTaskDetector()
+        assert d.check(self._ALL) == []
+        assert all(r.fingerprint != "task_dead:pretp_dispatcher"
+                   for r in d.check(self._ALL))
 
     def test_triggers_on_missing_task(self):
         d = BackgroundTaskDetector()
@@ -114,10 +123,17 @@ class TestBackgroundTaskDetector:
         tasks = [f"{t}-1" for t in self._ALL]
         assert d.check(tasks) == []
 
-    def test_multiple_missing(self):
+    def test_empty_census_does_not_fire(self):
+        # Empty list = census unavailable, not mass death. Covered elsewhere.
         d = BackgroundTaskDetector()
-        results = d.check([])
-        assert len(results) == 5
+        assert d.check([]) == []
+
+    def test_one_missing_among_real_tasks(self):
+        d = BackgroundTaskDetector()
+        tasks = ["trade_monitor", "reconciler", "mark_price_feed", "scanner"]
+        results = d.check(tasks)
+        assert len(results) == 1
+        assert results[0].fingerprint == "task_dead:funding_exit_watcher"
 
     def test_extra_tasks_ignored(self):
         d = BackgroundTaskDetector()
