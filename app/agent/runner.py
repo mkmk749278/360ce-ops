@@ -14,19 +14,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import time
-from pathlib import Path
-
-import httpx
 
 from app.config import load_settings
 from app.data_sources.engine_api import EngineApiClient
 from app.agent.detectors import (
     ApiHealthDetector,
-    BackgroundTaskDetector,
     DetectorResult,
     EngineStatusDetector,
-    HeartbeatAgeDetector,
     NakedPositionDetector,
     RedisStalenessDetector,
     SignalSilenceDetector,
@@ -80,20 +74,6 @@ async def _redis_idletime(container: str = "360scalp-v2-redis", key: str = "snap
         return ""
 
 
-def _data_file_ages(data_dir: str) -> dict[str, float]:
-    """Return {filename: age_seconds} for key engine data files."""
-    tracked = ("signal_performance.json", "signal_history.json")
-    now = time.time()
-    ages: dict[str, float] = {}
-    for name in tracked:
-        path = Path(data_dir) / name
-        try:
-            ages[name] = now - path.stat().st_mtime
-        except OSError:
-            pass
-    return ages
-
-
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -130,16 +110,20 @@ async def run() -> None:
     api = EngineApiClient(settings)
 
     d1 = NakedPositionDetector(grace_sec=int(os.getenv("AGENT_NAKED_POSITION_GRACE_SEC", "90")))
-    d2 = BackgroundTaskDetector()
     d3 = SigningHealthDetector()
     d4 = EngineStatusDetector()
-    d5 = HeartbeatAgeDetector(
-        warn_sec=int(os.getenv("AGENT_HEARTBEAT_WARN_SEC", "120")),
-        high_sec=int(os.getenv("AGENT_HEARTBEAT_HIGH_SEC", "300")),
-    )
     d6 = ApiHealthDetector()
     d7 = SignalSilenceDetector()
     d8 = RedisStalenessDetector(stale_sec=int(os.getenv("AGENT_REDIS_STALE_SEC", "45")))
+
+    # D2 (BackgroundTaskDetector) is intentionally NOT registered here.
+    # In isolated mode (API_PROCESS_ISOLATED=true, production), the public
+    # API serves from a separate container, so /internal/diag/tasks reports
+    # the API process's asyncio tasks — never the engine's. It false-pages
+    # all 5 engine tasks as "absent" every cycle. Restoring it requires the
+    # engine to publish its live task census to Redis (pulse); tracked as a
+    # follow-up engine telemetry PR. The class + tests are kept for the
+    # single-process case and the future Redis-backed source.
 
     log.info("Monitoring agent started — poll interval %ss", poll_interval)
 
@@ -151,9 +135,7 @@ async def run() -> None:
         pulse: dict = {}
         health: dict = {}
         diag_positions: list[dict] = []
-        tasks: list[str] = []
         container_statuses: dict[str, str] = {}
-        file_ages: dict[str, float] = {}
         redis_idletime: str = ""
         auto_mode: dict = {}
 
@@ -178,13 +160,6 @@ async def run() -> None:
             cycle_ok = False
 
         try:
-            tasks_raw = await api._get("/internal/diag/tasks") or {}
-            tasks = tasks_raw.get("tasks") or []
-        except Exception as exc:
-            log.warning("diag/tasks fetch failed: %s", exc)
-            cycle_ok = False
-
-        try:
             auto_mode = await api.auto_mode() or {}
         except Exception as exc:
             auto_mode = {}
@@ -196,11 +171,6 @@ async def run() -> None:
             cycle_ok = False
 
         try:
-            file_ages = _data_file_ages(settings.engine_data_dir)
-        except Exception as exc:
-            log.warning("data file age check failed: %s", exc)
-
-        try:
             redis_idletime = await _redis_idletime()
         except Exception as exc:
             log.warning("redis idletime check failed: %s", exc)
@@ -210,10 +180,8 @@ async def run() -> None:
 
         for detector, args in [
             (d1, {"diag_items": diag_positions}),
-            (d2, {"tasks": tasks}),
             (d3, {"container_statuses": container_statuses}),
             (d4, {"pulse": pulse}),
-            (d5, {"file_ages": file_ages}),
             (d6, {"health": health}),
             (d7, {"pulse": pulse, "mode": auto_mode.get("mode") or pulse.get("mode", "off")}),
             (d8, {"idletime_output": redis_idletime}),
