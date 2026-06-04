@@ -1,6 +1,6 @@
 # Monitoring Agent — Design Specification
 
-**Status:** Draft — awaiting owner sign-off before implementation  
+**Status:** Draft — sign-off items 1–3 resolved; item 4 (healthchecks.io setup) pending owner action  
 **Scope:** Tier 0 (deterministic reflexes) + Tier 2 (dead-man heartbeat)  
 **Repo:** `360ce-ops`  
 **Implementation PR will follow** this spec PR after owner approval.
@@ -40,11 +40,11 @@ This spec defines a **lightweight, always-on monitoring agent** that runs in the
 │  · DataVolumeReader    healthchecks.io ping  (Tier 2)              │
 │  · DiagRunner                                                       │
 └─────────────────────────────────────────────────────────────────────┘
-        ↑                         ↑
-  engine-data volume (ro)   /var/run/docker.sock (already mounted)
+        ↑                         ↑                    ↑
+  engine-data volume (ro)   docker.sock (ro use)   360ce-ops-redis (alert state)
 ```
 
-The agent is a **new Docker service** (`monitoring-agent`) added to the existing `docker-compose.yml`. It reuses all four existing data-source modules — no new collection plumbing is needed.
+The agent is a **new Docker service** (`monitoring-agent`) added to the existing `docker-compose.yml`. It reuses all four existing data-source modules — no new collection plumbing is needed. Alert state lives in a **dedicated ops Redis** (see §6) — never the engine's Redis.
 
 ---
 
@@ -92,7 +92,7 @@ Each detector returns a **list** — multiple simultaneous instances of the same
 
 #### D1 — NakedPositionDetector  `severity: HIGH`
 
-- **Source:** `EngineApiClient.positions()` + `EngineApiClient.signals()`
+- **Source:** `EngineApiClient.positions()` + `EngineApiClient.positions_diag()` (`/internal/diag/positions`)
 - **Trigger:** Any position with `state == "OPEN"` where:
   - No associated live SL order ID in the FSM state, **or**
   - The signal's recorded `sl_price` is absent / zero
@@ -103,8 +103,8 @@ Each detector returns a **list** — multiple simultaneous instances of the same
 
 #### D2 — BackgroundTaskDetector  `severity: HIGH`
 
-- **Source:** `EngineApiClient.pulse()` → `tasks` list
-- **Trigger:** Any of the following task names missing from the pulse response:
+- **Source:** **New** `/internal/diag/tasks` engine endpoint (see §14 — prerequisite PR). Returns the names from `asyncio.all_tasks()`. The current `/api/pulse` does **not** expose this.
+- **Trigger:** Any of the following task names missing:
   - `trade_monitor`
   - `reconciler`
   - `mark_price_feed`
@@ -130,7 +130,7 @@ Each detector returns a **list** — multiple simultaneous instances of the same
 
 #### D5 — HeartbeatAgeDetector  `severity: WARN → HIGH`
 
-- **Source:** `EngineApiClient.pulse()` → `heartbeat_age_sec` field
+- **Source:** `EngineApiClient.pulse()` → `uptime_seconds` delta / truth snapshot age
 - **Trigger:**
   - `age > AGENT_HEARTBEAT_WARN_SEC` (default: 120) → WARN
   - `age > AGENT_HEARTBEAT_HIGH_SEC` (default: 300) → HIGH (escalated in alert_state, see §6)
@@ -139,14 +139,14 @@ Each detector returns a **list** — multiple simultaneous instances of the same
 
 #### D6 — WSFeedDetector  `severity: WARN`
 
-- **Source:** `EngineApiClient.pulse()` → `ws_status` field; or `monitor_logs.py` last-fetched log content
-- **Trigger:** `ws_rest_fallback_active: true`, or WS reconnect count > `AGENT_WS_RECONNECT_THRESHOLD` (default: 3) in the last hour
+- **Source:** `monitor_logs.py` last-fetched log content; or engine log markers via `DiagRunner`
+- **Trigger:** `ws_rest_fallback_activated` marker present, or WS reconnect count > `AGENT_WS_RECONNECT_THRESHOLD` (default: 3) in the last hour
 - **Fingerprint:** `ws_feed:fallback` or `ws_feed:reconnect_storm`
 - **Rationale:** REST fallback means reduced price fidelity. Not an immediate money risk but warrants owner awareness.
 
 #### D7 — SignalSilenceDetector  `severity: WARN`
 
-- **Source:** `EngineApiClient.activity()` → emitted signal count
+- **Source:** `EngineApiClient.activity()` + `pulse()` (`signals_today`) + `auto_mode()`
 - **Trigger:** Zero signals emitted in `AGENT_SIGNAL_SILENCE_WINDOW_H` (default: 4) rolling hours  
   AND engine is not in an explicitly suppressed state (auto-mode off, kill switch active)
 - **Fingerprint:** `signal_silence:{window_h}h`
@@ -156,7 +156,7 @@ Each detector returns a **list** — multiple simultaneous instances of the same
 #### D8 — RedisStalenessDetector  `severity: WARN`
 
 - **Source:** `DiagRunner` → `docker exec 360scalp-v2-redis redis-cli TTL snapshot:engine`
-  (already part of the diag runner repertoire)
+  (already part of the diag runner repertoire). Reads the **engine's** Redis; does not write to it.
 - **Trigger:** Most recent snapshot key age > `AGENT_REDIS_STALE_SEC` (default: 45)  
   (SnapshotWriter pushes every ~15s scan cycle; 45s = 3 missed cycles)
 - **Fingerprint:** `redis_stale`
@@ -164,9 +164,9 @@ Each detector returns a **list** — multiple simultaneous instances of the same
 
 ---
 
-## 6. Alert State (Redis)
+## 6. Alert State (dedicated ops Redis)
 
-The agent shares the ops Redis instance (or creates its own in-memory fallback if Redis is unavailable — same pattern as the engine).
+**CTE decision (sign-off item 2):** the agent uses a **dedicated `360ce-ops-redis`** container for alert state — *not* the engine's `360scalp-v2-redis`. Writing alert-state keys to the engine's Redis would breach the "no writes to engine state" charter; a separate instance keeps that boundary clean and still gives persistent dedup across agent restarts (no double-paging on deploys). Falls back to an in-memory dict if Redis is unreachable, same pattern as the engine.
 
 ```
 Key schema:   alert:state:{fingerprint}
@@ -207,6 +207,8 @@ TTL: AGENT_ALERT_EXPIRY_SEC (default: 3600)
 
 ## 7. Notifier
 
+**CTE/owner decision (sign-off item 1):** reuse the **engine's existing Telegram bot token**. Alerts go to a **distinct chat/topic** (`AGENT_TELEGRAM_CHAT_ID`) so operational alerts stay visually separate from subscriber signal traffic. No new bot to register.
+
 ### Telegram format
 
 ```
@@ -214,8 +216,6 @@ TTL: AGENT_ALERT_EXPIRY_SEC (default: 3600)
 Symbol: BTCUSDT  Signal: sig_abc123
 Age: 4m 32s  No SL order on record.
 First seen: 14:03:21 UTC  (this cycle: #1)
-
-[engine pulse link if available]
 ```
 
 For WARN:
@@ -230,8 +230,6 @@ Recovery:
 ✅ Recovered — Heartbeat Stale
 Condition cleared after 4m 15s.
 ```
-
-Messages go to `AGENT_TELEGRAM_CHAT_ID` (owner's chat) via `AGENT_TELEGRAM_BOT_TOKEN`. These are separate env vars from the engine's Telegram config — the agent uses its own bot or the same bot with a dedicated command, owner's choice.
 
 ### healthchecks.io (Tier 2)
 
@@ -282,8 +280,9 @@ All new fields go into the existing `Settings` dataclass with `_env_int` / `_env
 | Env var | Default | Description |
 |---|---|---|
 | `AGENT_POLL_INTERVAL_S` | `60` | Seconds between full detector passes |
-| `AGENT_TELEGRAM_BOT_TOKEN` | — (required) | Bot token for agent alerts |
-| `AGENT_TELEGRAM_CHAT_ID` | — (required) | Owner chat ID |
+| `AGENT_TELEGRAM_BOT_TOKEN` | — (reuse engine bot) | Bot token for agent alerts |
+| `AGENT_TELEGRAM_CHAT_ID` | — (required) | Distinct chat/topic for system alerts |
+| `AGENT_REDIS_URL` | `redis://360ce-ops-redis:6379/0` | Dedicated ops Redis for alert state |
 | `AGENT_HEALTHCHECKS_URL` | `""` | healthchecks.io ping URL; empty = disabled |
 | `AGENT_DEDUP_SEC` | `1800` | Suppress re-page for same fingerprint |
 | `AGENT_ALERT_EXPIRY_SEC` | `3600` | Redis key TTL for resolved alerts |
@@ -297,10 +296,10 @@ All new fields go into the existing `Settings` dataclass with `_env_int` / `_env
 
 ---
 
-## 10. Docker Service Addition
+## 10. Docker Service Additions
 
 ```yaml
-# docker-compose.yml addition
+# docker-compose.yml additions
   monitoring-agent:
     image: ghcr.io/mkmk749278/360ce-ops:latest
     build: .
@@ -308,24 +307,32 @@ All new fields go into the existing `Settings` dataclass with `_env_int` / `_env
     restart: unless-stopped
     command: python -m app.agent.runner
     environment:
-      OPS_SESSION_SECRET: ${OPS_SESSION_SECRET}    # reused for Redis
       OPS_AUTH_TOKEN: ${OPS_AUTH_TOKEN}
       ENGINE_API_BASE: ${ENGINE_API_BASE:-https://api.luminapp.org}
       ENGINE_DATA_DIR: /engine-data
       ENGINE_CONTAINER_NAME: ${ENGINE_CONTAINER_NAME:-engine}
       AGENT_TELEGRAM_BOT_TOKEN: ${AGENT_TELEGRAM_BOT_TOKEN}
       AGENT_TELEGRAM_CHAT_ID: ${AGENT_TELEGRAM_CHAT_ID}
-      AGENT_HEALTHCHECKS_URL: ${AGENT_HEALTHCHECKS_URL:-""}
+      AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://360ce-ops-redis:6379/0}
+      AGENT_HEALTHCHECKS_URL: ${AGENT_HEALTHCHECKS_URL:-}
       AGENT_POLL_INTERVAL_S: ${AGENT_POLL_INTERVAL_S:-60}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - engine-data:/engine-data:ro
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - ops
+      - 360ce-ops-redis
+
+  360ce-ops-redis:
+    image: redis:7-alpine
+    container_name: 360ce-ops-redis
+    restart: unless-stopped
+    command: redis-server --save "" --appendonly no --maxmemory 32mb --maxmemory-policy allkeys-lru
+    # Ephemeral by design — alert state is short-lived (TTL 1h). No persistence
+    # needed; a restart at worst re-pages an active alert once.
 ```
 
-No new image — same `Dockerfile`, different `CMD`. The image build for the dashboard also covers the agent.
+No new image for the agent — same `Dockerfile`, different `CMD`. The dashboard image build also covers the agent.
 
 ---
 
@@ -352,7 +359,7 @@ async def test_naked_position_within_grace():
     assert results == []  # within grace period
 ```
 
-`alert_state.py` is tested with an in-memory dict mock for Redis. The `notifier.py` Telegram call is mocked — we test the message *format*, not the network call.
+`alert_state.py` is tested with `fakeredis` or an in-memory dict mock. The `notifier.py` Telegram call is mocked — we test the message *format*, not the network call.
 
 ---
 
@@ -376,16 +383,51 @@ The structural shape of everything else — detectors, alert_state, poll loop, h
 
 ---
 
-## 13. Open Questions for Owner Sign-Off
+## 13. Sign-Off Items — Resolution Status
 
-These are the only items that need your input before implementation begins:
+| # | Item | Resolution |
+|---|---|---|
+| 1 | Telegram bot | **Resolved (owner):** reuse existing engine bot token; alerts to a distinct chat/topic via `AGENT_TELEGRAM_CHAT_ID`. |
+| 2 | Alert-state store | **Resolved (CTE):** dedicated ephemeral `360ce-ops-redis` container. Never the engine's Redis — preserves the no-writes-to-engine charter while giving persistent dedup across restarts. |
+| 3 | `/api/pulse` task list | **Resolved (CTE):** confirmed *not* exposed today (`build_pulse` returns summary fields only). D2 depends on a new read-only `/internal/diag/tasks` engine endpoint — prerequisite PR, see §14. |
+| 4 | healthchecks.io account | **Pending owner action.** Create the check, paste the ping URL into `.env` as `AGENT_HEALTHCHECKS_URL`. Step-by-step in §15. |
 
-1. **Telegram bot:** Use the engine's existing bot (different chat/command) or register a new dedicated ops-alert bot? Dedicated is cleaner for distinguishing signal alerts from system alerts.
+---
 
-2. **Redis:** The ops stack doesn't currently have Redis. Options:
-   - Add a minimal Redis service to `docker-compose.yml` for alert state (recommended — persistent dedup across agent restarts)
-   - Use in-memory dict with no persistence (alert state resets on agent restart; may double-page on deploys)
+## 14. Prerequisite: `/internal/diag/tasks` engine endpoint (360-v2)
 
-3. **`/api/pulse` task list:** Does the engine's current `/api/pulse` response include `asyncio` task names? If not, we may need a small 360-v2 PR to add them before D2 (BackgroundTaskDetector) can work. I'll check during implementation and file that PR if needed.
+D2 (BackgroundTaskDetector) needs the engine's live asyncio task names. The current API does not expose them. Before the agent implementation lands, a small **read-only** endpoint ships to 360-v2:
 
-4. **healthchecks.io account:** Owner creates the check and pastes the ping URL into `.env` as `AGENT_HEALTHCHECKS_URL`. Takes 2 minutes. Let me know when it's set up and I'll wire the config.
+```python
+@app.get("/internal/diag/tasks", tags=["meta"])
+async def diag_tasks() -> dict:
+    """Owner-tier read-only task census. Returns the set of named
+    asyncio tasks currently alive in the engine event loop."""
+    names = sorted(
+        t.get_name() for t in asyncio.all_tasks() if not t.done()
+    )
+    return {"tasks": names, "count": len(names)}
+```
+
+- Follows the existing `/internal/diag/*` owner-tier auth pattern (same Bearer token).
+- Read-only, no engine state mutation — **not** on the owner-sign-off list (signing / FSM / evaluators / business-rules / routing).
+- Ships as its own `feat/` PR to 360-v2, reviewed and merged before the agent's `feat/` PR here.
+
+---
+
+## 15. healthchecks.io setup — owner walkthrough (sign-off item 4)
+
+Two minutes, free tier covers this:
+
+1. Go to **https://healthchecks.io** → sign up (or log in).
+2. Click **“Add Check”**. Name it `360ce-monitoring-agent`.
+3. Set **Period** = `60 seconds`, **Grace** = `120 seconds`.
+   *(period+grace = 3 min → if the agent stops pinging, you're alerted within 3 minutes.)*
+4. Copy the **ping URL** it shows (looks like `https://hc-ping.com/<uuid>`).
+5. Paste it into the VPS `.env` as:
+   ```
+   AGENT_HEALTHCHECKS_URL=https://hc-ping.com/<your-uuid>
+   ```
+6. (Optional but recommended) In healthchecks.io → **Integrations**, add **Email** (on by default) and **Telegram** so a dead agent pings you on the same channel as everything else.
+
+That's all — leave `AGENT_HEALTHCHECKS_URL` empty and Tier 2 simply stays disabled (Tier 0 on-box alerting still runs). Tell me the URL is in `.env` and I'll confirm the config wiring in the implementation PR.
