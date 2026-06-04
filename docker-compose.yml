@@ -25,6 +25,44 @@ services:
       # Owner-only access trust assumption per CLAUDE.md.
       - /var/run/docker.sock:/var/run/docker.sock
 
+  monitoring-agent:
+    image: ghcr.io/mkmk749278/360ce-ops:latest
+    build: .
+    container_name: 360ce-ops-agent
+    restart: unless-stopped
+    command: python -m app.agent.runner
+    environment:
+      OPS_SESSION_SECRET: ${OPS_SESSION_SECRET}
+      OPS_AUTH_TOKEN: ${OPS_AUTH_TOKEN}
+      ENGINE_API_BASE: ${ENGINE_API_BASE:-https://api.luminapp.org}
+      ENGINE_DATA_DIR: /engine-data
+      ENGINE_CONTAINER_NAME: ${ENGINE_CONTAINER_NAME:-engine}
+      AGENT_TELEGRAM_BOT_TOKEN: ${AGENT_TELEGRAM_BOT_TOKEN}
+      AGENT_TELEGRAM_CHAT_ID: ${AGENT_TELEGRAM_CHAT_ID}
+      AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://360ce-ops-redis:6379/0}
+      AGENT_HEALTHCHECKS_URL: ${AGENT_HEALTHCHECKS_URL:-}
+      AGENT_POLL_INTERVAL_S: ${AGENT_POLL_INTERVAL_S:-60}
+      AGENT_NAKED_POSITION_GRACE_SEC: ${AGENT_NAKED_POSITION_GRACE_SEC:-90}
+      AGENT_HEARTBEAT_WARN_SEC: ${AGENT_HEARTBEAT_WARN_SEC:-120}
+      AGENT_HEARTBEAT_HIGH_SEC: ${AGENT_HEARTBEAT_HIGH_SEC:-300}
+      AGENT_REDIS_STALE_SEC: ${AGENT_REDIS_STALE_SEC:-45}
+      AGENT_DEDUP_SEC: ${AGENT_DEDUP_SEC:-1800}
+      AGENT_ALERT_EXPIRY_SEC: ${AGENT_ALERT_EXPIRY_SEC:-3600}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - engine-data:/engine-data:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - 360ce-ops-redis
+
+  360ce-ops-redis:
+    image: redis:7-alpine
+    container_name: 360ce-ops-redis
+    restart: unless-stopped
+    # Ephemeral alert state — no persistence needed. 32 MB cap with LRU
+    # eviction covers O(10) alert keys with 1h TTL with room to spare.
+    command: redis-server --save "" --appendonly no --maxmemory 32mb --maxmemory-policy allkeys-lru
+
 volumes:
   engine-data:
     name: ${ENGINE_DATA_VOLUME:-360-v2_360scalp-v2-data}
