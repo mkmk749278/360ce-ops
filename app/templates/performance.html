@@ -34,6 +34,32 @@
 </section>
 {% endmacro %}
 
+<section class="card">
+  <h2>Confidence score → outcome</h2>
+  {% if agg.confidence_pnl_corr is not none %}
+    {% set r = agg.confidence_pnl_corr %}
+    <p>
+      Pearson correlation between confidence score and PnL %:
+      <strong class="{% if r > 0.2 %}pos{% elif r < -0.2 %}neg{% endif %}">{{ "%+.3f" % r }}</strong>
+      <span class="muted">(n = {{ agg.confidence_pnl_n }})</span>
+    </p>
+    <p class="muted">
+      {% if r|abs < 0.15 %}
+        ≈ 0 — the confidence score does <strong>not</strong> predict outcome in this window.
+        Raising the score threshold reduces signal volume without improving quality;
+        the lever is setup selection and risk management, not the score gate.
+      {% elif r > 0 %}
+        Positive — higher confidence is tracking better outcomes in this window.
+      {% else %}
+        Negative — higher confidence is tracking <em>worse</em> outcomes in this window; investigate the scoring model.
+      {% endif %}
+    </p>
+  {% else %}
+    <div class="muted">Not enough confidence-tagged records in this window to compute a correlation.</div>
+  {% endif %}
+</section>
+
+{{ stat_table(agg.by_score_band, 'By score band') }}
 {{ stat_table(agg.by_symbol, 'By symbol') }}
 {{ stat_table(agg.by_setup, 'By setup') }}
 {{ stat_table(agg.by_regime, 'By regime') }}
