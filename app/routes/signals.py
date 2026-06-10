@@ -6,6 +6,8 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
+from app.reports import csv_response
+
 router = APIRouter()
 
 
@@ -122,12 +124,16 @@ def _extract_signals(payload: Any) -> list[dict[str, Any]]:
     return []
 
 
-@router.get("/signals")
-async def signals(
+async def _build_rows(
     request: Request,
-    status: str | None = Query(None),
-    setup_class: str | None = Query(None),
-):
+    status: str | None,
+    setup_class: str | None,
+) -> list[dict[str, Any]]:
+    """Merge live ``/api/signals`` with the monitor ``signals_last100`` dump,
+    de-dupe by id, apply the status / setup filters, and return newest-first.
+
+    Shared by the page route and the CSV export so the download is always a
+    faithful copy of what the table shows."""
     api = request.app.state.engine_api
     logs = request.app.state.monitor_logs
 
@@ -151,6 +157,16 @@ async def signals(
         rows.append(norm)
 
     rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return rows
+
+
+@router.get("/signals")
+async def signals(
+    request: Request,
+    status: str | None = Query(None),
+    setup_class: str | None = Query(None),
+):
+    rows = await _build_rows(request, status, setup_class)
 
     setup_classes = sorted({r["setup_class"] for r in rows if r["setup_class"]})
     statuses = sorted({r["status"] for r in rows if r["status"]})
@@ -168,3 +184,25 @@ async def signals(
             "active": "signals",
         },
     )
+
+
+# Column order for the signals CSV — flat, spreadsheet-friendly scalars.
+_SIGNAL_EXPORT_COLS = [
+    "id", "symbol", "side", "setup_class", "confidence", "status",
+    "regime", "pnl_pct", "entry", "sl", "tp1", "channel",
+    "created_at_absolute", "created_at_raw",
+]
+
+
+@router.get("/signals/export.csv")
+async def signals_export(
+    request: Request,
+    status: str | None = Query(None),
+    setup_class: str | None = Query(None),
+):
+    """Download the (filtered) signal table as CSV — same merge + filters as
+    the page, one row per signal."""
+    rows = await _build_rows(request, status, setup_class)
+    data = [[r.get(col) for col in _SIGNAL_EXPORT_COLS] for r in rows]
+    suffix = status or setup_class or "all"
+    return csv_response(f"signals_{suffix}", _SIGNAL_EXPORT_COLS, data)

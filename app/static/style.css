@@ -60,6 +60,7 @@ h3 { font-size: 0.95rem; margin: 0.8rem 0 0.4rem; color: var(--fg-dim); }
 .error { color: var(--neg); }
 .pos { color: var(--pos); }
 .neg { color: var(--neg); }
+.warn { color: var(--warn); }
 
 .mono { font-family: var(--mono); font-size: 0.85rem; }
 .small { font-size: 0.78rem; }

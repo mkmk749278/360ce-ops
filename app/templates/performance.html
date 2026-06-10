@@ -8,6 +8,13 @@
   <a href="/performance?window=all" class="{% if window=='all' %}on{% endif %}">all-time</a>
 </nav>
 
+<div class="actions">
+  <a class="btn" href="/performance/export.csv?view=symbol&window={{ window }}">Download by-symbol CSV</a>
+  <a class="btn" href="/performance/export.csv?view=setup&window={{ window }}">Download by-setup CSV</a>
+  <a class="btn" href="/performance/export.csv?view=regime&window={{ window }}">Download by-regime CSV</a>
+  <a class="btn" href="/performance/export.csv?view=score_band&window={{ window }}">Download score-band CSV</a>
+</div>
+
 {% macro stat_table(rows, label) %}
 <section class="card">
   <h2>{{ label }}</h2>

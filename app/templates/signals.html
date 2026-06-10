@@ -19,6 +19,10 @@
   <span class="muted">{{ rows | length }} rows</span>
 </form>
 
+<div class="actions">
+  <a class="btn" href="/signals/export.csv{% if filter_status or filter_setup %}?{% if filter_status %}status={{ filter_status | urlencode }}{% endif %}{% if filter_status and filter_setup %}&{% endif %}{% if filter_setup %}setup_class={{ filter_setup | urlencode }}{% endif %}{% endif %}">Download CSV (current filter)</a>
+</div>
+
 {% if rows %}
 <table class="data-table">
   <thead>
