@@ -14,7 +14,19 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from app.reports import csv_response
+
 router = APIRouter()
+
+
+def _resolve_window(window: str) -> tuple[str, int | None]:
+    """Map a window token to ``(normalized_token, days_or_None)``.  Anything
+    unrecognized collapses to all-time so a hand-edited query never 500s."""
+    if window == "7d":
+        return "7d", 7
+    if window == "30d":
+        return "30d", 30
+    return "all", None
 
 
 def _parse_dt(value: Any) -> datetime | None:
@@ -184,16 +196,41 @@ def _aggregate(records: Any, window_days: int | None) -> dict:
 async def performance(request: Request, window: str = "all"):
     vol = request.app.state.data_volume
     perf = vol.signal_performance()
-    if window == "7d":
-        days: int | None = 7
-    elif window == "30d":
-        days = 30
-    else:
-        days = None
-        window = "all"
+    window, days = _resolve_window(window)
     agg = _aggregate(perf, days)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "performance.html",
         {"request": request, "agg": agg, "window": window, "active": "performance"},
     )
+
+
+# Which aggregation each export view maps to, and the label for its first column.
+_EXPORT_VIEWS = {
+    "symbol": ("by_symbol", "symbol"),
+    "setup": ("by_setup", "setup"),
+    "regime": ("by_regime", "regime"),
+    "score_band": ("by_score_band", "score_band"),
+}
+
+
+@router.get("/performance/export.csv")
+async def performance_export(request: Request, window: str = "all", view: str = "symbol"):
+    """Download a performance table as CSV.  ``view`` selects the breakdown
+    (symbol / setup / regime / score_band); ``window`` matches the page picker."""
+    vol = request.app.state.data_volume
+    _window, days = _resolve_window(window)
+    agg = _aggregate(vol.signal_performance(), days)
+
+    agg_key, label = _EXPORT_VIEWS.get(view, _EXPORT_VIEWS["symbol"])
+    table = agg.get(agg_key, [])
+
+    header = [label, "n", "wins", "losses", "neutral", "win_rate_pct", "avg_pnl_pct"]
+    rows = [
+        [
+            r["key"], r["n"], r["wins"], r["losses"], r["neutral"],
+            "%.1f" % (r["win_rate"] * 100), "%.4f" % r["avg_pnl"],
+        ]
+        for r in table
+    ]
+    return csv_response(f"performance_{label}_{_window}", header, rows)

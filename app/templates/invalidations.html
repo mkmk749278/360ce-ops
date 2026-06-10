@@ -6,12 +6,18 @@
   <section class="card"><div class="error">{{ agg.error }}</div></section>
 {% endif %}
 
+<div class="actions">
+  <a class="btn" href="/invalidations/export.csv?view=family">Download family CSV</a>
+  <a class="btn" href="/invalidations/export.csv?view=setup">Download setup CSV</a>
+  <a class="btn" href="/invalidations/export.csv?view=reason">Download raw-reason CSV</a>
+</div>
+
 <section class="card">
   <h2>Totals</h2>
   {% if agg.totals %}
     <div class="kv-grid">
-      {% for k, v in agg.totals.items() %}
-        <div class="kv"><span class="k">{{ k }}</span><span class="v">{{ v }}</span></div>
+      {% for k in agg.classes %}
+        <div class="kv"><span class="k">{{ k }}</span><span class="v">{{ agg.totals.get(k, 0) }}</span></div>
       {% endfor %}
     </div>
   {% else %}
@@ -19,37 +25,40 @@
   {% endif %}
 </section>
 
+{% macro class_table(rows, first_col, caption=None) %}
+<table class="data-table">
+  <thead><tr><th>{{ first_col }}</th>{% for cls in agg.classes %}<th>{{ cls }}</th>{% endfor %}<th>Total</th><th>Premature %</th></tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>{{ r.key }}</td>
+      {% for cls in agg.classes %}<td>{{ r.counts.get(cls, 0) }}</td>{% endfor %}
+      <td>{{ r.total }}</td>
+      <td class="{% if r.premature_rate >= 0.25 %}neg{% elif r.premature_rate > 0 %}warn{% endif %}">{{ "%.1f%%" % (r.premature_rate * 100) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endmacro %}
+
+{% if agg.by_family %}
+<section class="card">
+  <h2>By kill-reason family <span class="muted">premature rate per mechanism — worst first</span></h2>
+  {{ class_table(agg.by_family, 'Reason family') }}
+</section>
+{% endif %}
+
 {% if agg.by_setup %}
 <section class="card">
-  <h2>By setup × classification</h2>
-  <table class="data-table">
-    <thead><tr><th>Setup</th>{% for cls in agg.totals.keys() %}<th>{{ cls }}</th>{% endfor %}<th>Total</th></tr></thead>
-    <tbody>
-    {% for setup, counts in agg.by_setup.items() %}
-      {% set row_total = counts.values() | sum %}
-      <tr><td>{{ setup }}</td>
-        {% for cls in agg.totals.keys() %}<td>{{ counts.get(cls, 0) }}</td>{% endfor %}
-        <td>{{ row_total }}</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <h2>By setup × classification <span class="muted">worst premature rate first</span></h2>
+  {{ class_table(agg.by_setup, 'Setup') }}
 </section>
 {% endif %}
 
 {% if agg.by_reason %}
 <section class="card">
-  <h2>By kill-reason × classification</h2>
-  <table class="data-table">
-    <thead><tr><th>Reason</th>{% for cls in agg.totals.keys() %}<th>{{ cls }}</th>{% endfor %}<th>Total</th></tr></thead>
-    <tbody>
-    {% for reason, counts in agg.by_reason.items() %}
-      {% set row_total = counts.values() | sum %}
-      <tr><td>{{ reason }}</td>
-        {% for cls in agg.totals.keys() %}<td>{{ counts.get(cls, 0) }}</td>{% endfor %}
-        <td>{{ row_total }}</td></tr>
-    {% endfor %}
-    </tbody>
-  </table>
+  <h2>By raw kill-reason <span class="muted">every distinct string — use the family table above for patterns</span></h2>
+  {{ class_table(agg.by_reason, 'Reason') }}
 </section>
 {% endif %}
 
