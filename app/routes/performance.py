@@ -118,10 +118,26 @@ def _aggregate(records: Any, window_days: int | None) -> dict:
         if not isinstance(r, dict):
             continue
         if window_days is not None:
-            ts = _parse_dt(r.get("closed_at") or r.get("terminal_at") or r.get("created_at"))
+            # Engine records (data/signal_performance.json = asdict(SignalRecord))
+            # carry the close time as ``terminal_outcome_timestamp`` and always
+            # carry a ``timestamp`` (record creation).  The legacy
+            # closed_at/terminal_at/created_at names this route used never exist
+            # on the payload, so every windowed query silently dropped every
+            # record (all-time worked because it skips this filter).  Prefer the
+            # real fields; keep the old names as a forward-compat fallback.
+            ts = _parse_dt(
+                r.get("terminal_outcome_timestamp")
+                or r.get("timestamp")
+                or r.get("create_timestamp")
+                or r.get("closed_at")
+                or r.get("terminal_at")
+                or r.get("created_at")
+            )
             if ts is None:
                 continue
-            if (now - ts).days > window_days:
+            # Use total_seconds (not timedelta.days, which truncates and would
+            # admit up to window_days + 1 days).
+            if (now - ts).total_seconds() > window_days * 86400:
                 continue
         symbol = r.get("symbol", "UNKNOWN")
         setup = r.get("setup_class", "UNKNOWN")
