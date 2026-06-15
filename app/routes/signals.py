@@ -138,10 +138,18 @@ async def _build_rows(
     logs = request.app.state.monitor_logs
 
     live = await api.signals(status=status, setup_class=setup_class)
-    historic = await logs.signals_last100()
-
     live_list = _extract_signals(live)
-    hist_list = _extract_signals(historic)
+
+    # The monitor ``signals_last100`` dump is a TTL-cached artefact on the
+    # monitor-logs branch that ``/reset_full`` (engine-side) cannot clear, so
+    # merging it unconditionally left phantom pre-reset rows on the page and
+    # made a genuine clear look like it had failed.  Use it only as a FALLBACK
+    # when the live engine API returns nothing (API cold / engine restarting),
+    # so the tab otherwise reflects true live engine state and a reset shows.
+    if live_list:
+        hist_list: list[dict[str, Any]] = []
+    else:
+        hist_list = _extract_signals(await logs.signals_last100())
 
     seen_ids: set[str] = set()
     rows: list[dict[str, Any]] = []
