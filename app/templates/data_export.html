@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Data Export · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Data Export</h1>
+<p class="muted">
+  Raw engine <code>/engine-data</code> artifacts, downloaded as timestamped JSON.
+  Read-only. <code>signal_history.json</code> carries each signal's
+  <code>component_scores</code> (the 7 scoring dimensions) + outcome — the
+  source for offline score calibration.
+</p>
+<table>
+  <thead>
+    <tr><th>Artifact</th><th>Records</th><th>Notes</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><strong>{{ r.label }}</strong><br><code>{{ r.key }}.json</code></td>
+      <td>
+        {% if r.error %}<span class="err">{{ r.error }}</span>
+        {% elif r.count is not none %}{{ r.count }}
+        {% else %}&mdash;{% endif %}
+      </td>
+      <td class="muted">{{ r.why }}</td>
+      <td>
+        {% if not r.error %}
+        <a class="btn" href="/data/download/{{ r.key }}">Download JSON</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
