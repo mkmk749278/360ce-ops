@@ -12,17 +12,18 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 from datetime import datetime, timezone
 from typing import Any, Iterable, Sequence
 
 from starlette.responses import StreamingResponse
 
 
-def _timestamped(filename_stem: str) -> str:
-    """``stem`` → ``stem_YYYYMMDD-HHMMSSZ.csv`` so downloaded snapshots are
+def _timestamped(filename_stem: str, ext: str = "csv") -> str:
+    """``stem`` → ``stem_YYYYMMDD-HHMMSSZ.<ext>`` so downloaded snapshots are
     self-dating on the operator's disk (multiple pulls don't clobber)."""
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%SZ")
-    return f"{filename_stem}_{stamp}.csv"
+    return f"{filename_stem}_{stamp}.{ext}"
 
 
 def csv_response(
@@ -46,6 +47,25 @@ def csv_response(
         media_type="text/csv",
         headers={
             "Content-Disposition": f'attachment; filename="{_timestamped(filename_stem)}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+def json_response(filename_stem: str, payload: Any) -> StreamingResponse:
+    """Download an engine JSON artifact verbatim as a timestamped attachment.
+
+    Used by the Data Export page to hand the operator the raw ``data/*.json``
+    the engine wrote — notably ``signal_history.json`` (the per-signal
+    component_scores + outcomes needed for offline score-calibration), which the
+    analytics pages don't surface.  Read-only — it only re-serializes data the
+    data-volume reader already loaded."""
+    body = json.dumps(payload, separators=(",", ":"), default=str)
+    return StreamingResponse(
+        iter([body]),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="{_timestamped(filename_stem, "json")}"',
             "Cache-Control": "no-store",
         },
     )
