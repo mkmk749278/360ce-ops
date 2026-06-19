@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Raw Edge — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Raw Edge — without pre-TP &amp; invalidation</h1>
+<p class="muted">
+  How far signals actually move into the profit zone (MFE), how many hit a
+  <em>proper</em> full SL vs were closed by the exit machinery, and how much edge
+  pre-TP banking + the invalidation kill-switch give back. Performance scores the
+  realized outcome; this isolates the raw entry edge from the exit machinery.
+</p>
+
+<nav class="window-picker">
+  <a href="/raw-edge?window=7d" class="{% if window=='7d' %}on{% endif %}">7 days</a>
+  <a href="/raw-edge?window=30d" class="{% if window=='30d' %}on{% endif %}">30 days</a>
+  <a href="/raw-edge?window=all" class="{% if window=='all' %}on{% endif %}">all-time</a>
+</nav>
+
+<div class="actions">
+  <a class="btn" href="/raw-edge/export.csv?view=setup&window={{ window }}">Download by-setup CSV</a>
+  <a class="btn" href="/raw-edge/export.csv?view=regime&window={{ window }}">Download by-regime CSV</a>
+  <a class="btn" href="/raw-edge/export.csv?view=score_band&window={{ window }}">Download score-band CSV</a>
+</div>
+
+{% if agg.overall %}
+{% set o = agg.overall %}
+<section class="card">
+  <h2>Book-level — what the exit machinery is doing to the raw edge</h2>
+  <table class="data-table">
+    <tbody>
+      <tr><td>Closed signals</td><td><strong>{{ o.n }}</strong></td></tr>
+      <tr><td>Avg max-favourable-excursion (profit zone reached)</td>
+          <td class="{% if o.avg_mfe > 0 %}pos{% endif %}">{{ "%.3f%%" % o.avg_mfe }}</td></tr>
+      <tr><td>Avg realized PnL (after pre-TP + invalidation)</td>
+          <td class="{% if o.avg_realized > 0 %}pos{% elif o.avg_realized < 0 %}neg{% endif %}">{{ "%.3f%%" % o.avg_realized }}</td></tr>
+      <tr><td><strong>Capture</strong> (realized ÷ MFE) — fraction of the favourable move we kept</td>
+          <td class="{% if o.capture is not none and o.capture < 0.5 %}neg{% endif %}">
+            {% if o.capture is not none %}{{ "%.0f%%" % (o.capture * 100) }}{% else %}n/a{% endif %}</td></tr>
+      <tr><td>Avg give-back (MFE − realized) per signal</td>
+          <td class="{% if o.giveback_avg > 0.1 %}neg{% endif %}">{{ "%.3f%%" % o.giveback_avg }}</td></tr>
+      <tr><td>Runners (MFE ≥ {{ "%.0f%%" % runner_threshold }})</td>
+          <td>{{ ((o.runner_rate * o.n) | round | int) }} ({{ "%.0f%%" % (o.runner_rate * 100) }})</td></tr>
+      <tr><td>Exit mix — pre-TP / invalidation / true SL / expiry</td>
+          <td>{{ "%.0f%%" % (o.pretp_rate*100) }} / {{ "%.0f%%" % (o.inval_rate*100) }}
+              / {{ "%.0f%%" % (o.true_sl_rate*100) }} / {{ "%.0f%%" % (o.expiry_rate*100) }}</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">
+    Low capture with a healthy average MFE means the <strong>exit machinery</strong>
+    (pre-TP banking flat + residual riding to break-even, invalidation cutting early)
+    is the drag — not the entry. A high true-SL share with low MFE means the
+    <strong>entry</strong> is wrong and the stop is doing its job.
+  </p>
+  <p class="muted">
+    Note: capture is structurally below 100% — after pre-TP we hold only a
+    residual, so we can never keep the full MFE. Read it <em>relative</em> across
+    bands/setups, not as an absolute target; a band that is markedly lower (or
+    negative) than its peers is where the exit machinery is bleeding most.
+  </p>
+</section>
+{% else %}
+<section class="card"><div class="muted">No closed signals in this window.</div></section>
+{% endif %}
+
+{% macro edge_table(rows, label) %}
+<section class="card">
+  <h2>{{ label }}</h2>
+  {% if rows %}
+  <table class="data-table">
+    <thead><tr>
+      <th>{{ label.split(' ')[-1] | title }}</th><th>N</th>
+      <th>Avg MFE</th><th>Med MFE</th><th>Runners</th>
+      <th>Avg realized</th><th>Give-back</th><th>Capture</th>
+      <th>Pre-TP</th><th>Inval</th><th>True SL</th><th>Expiry</th>
+    </tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>{{ r.key }}</td>
+        <td>{{ r.n }}</td>
+        <td class="{% if r.avg_mfe > 0 %}pos{% endif %}">{{ "%.3f" % r.avg_mfe }}</td>
+        <td>{{ "%.3f" % r.median_mfe }}</td>
+        <td>{{ "%.0f%%" % (r.runner_rate * 100) }}</td>
+        <td class="{% if r.avg_realized > 0 %}pos{% elif r.avg_realized < 0 %}neg{% endif %}">{{ "%.3f" % r.avg_realized }}</td>
+        <td class="{% if r.giveback_avg > 0.1 %}neg{% endif %}">{{ "%.3f" % r.giveback_avg }}</td>
+        <td class="{% if r.capture is not none and r.capture < 0.5 %}neg{% endif %}">
+          {% if r.capture is not none %}{{ "%.0f%%" % (r.capture * 100) }}{% else %}—{% endif %}</td>
+        <td>{{ "%.0f%%" % (r.pretp_rate * 100) }}</td>
+        <td>{{ "%.0f%%" % (r.inval_rate * 100) }}</td>
+        <td>{{ "%.0f%%" % (r.true_sl_rate * 100) }}</td>
+        <td>{{ "%.0f%%" % (r.expiry_rate * 100) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="muted">No records in this window.</div>{% endif %}
+</section>
+{% endmacro %}
+
+{{ edge_table(agg.by_band, 'By score band') }}
+{{ edge_table(agg.by_setup, 'By setup') }}
+{{ edge_table(agg.by_regime, 'By regime') }}
+
+<section class="card">
+  <h2>Invalidation give-back — kills that cut a winner (PREMATURE)</h2>
+  <p class="muted">
+    From the engine's post-kill classifier (60-min window). Missed-R is the
+    favourable excursion the kill forfeited vs holding to TP1 — the invalidation
+    half of the give-back the capture tables above show for pre-TP.
+  </p>
+  {% if inval.families %}
+  <p>
+    <strong>{{ inval.premature_total }}</strong> premature kills forfeited
+    <strong class="{% if inval.missed_R_total > 0 %}neg{% endif %}">{{ "%.1f" % inval.missed_R_total }}R</strong> total.
+  </p>
+  <table class="data-table">
+    <thead><tr><th>Kill family</th><th>Premature</th><th>Protective</th><th>Neutral</th><th>Premature rate</th><th>Missed R</th></tr></thead>
+    <tbody>
+    {% for f in inval.families %}
+      <tr>
+        <td>{{ f.key }}</td>
+        <td class="{% if f.premature > 0 %}neg{% endif %}">{{ f.premature }}</td>
+        <td class="pos">{{ f.protective }}</td>
+        <td>{{ f.neutral }}</td>
+        <td class="{% if f.premature_rate > 0.3 %}neg{% endif %}">{{ "%.0f%%" % (f.premature_rate * 100) }}</td>
+        <td class="{% if f.missed_R > 0 %}neg{% endif %}">{{ "%.1f" % f.missed_R }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}<div class="muted">No classified invalidation records available.</div>{% endif %}
+</section>
+{% endblock %}

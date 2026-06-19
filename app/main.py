@@ -31,6 +31,7 @@ from app.routes import (
     performance,
     positions,
     pulse,
+    raw_edge,
     signal_detail,
     signals,
     truth,
@@ -79,6 +80,7 @@ app.include_router(signal_detail.router)
 app.include_router(diag.router)
 app.include_router(invalidations.router)
 app.include_router(performance.router)
+app.include_router(raw_edge.router)
 app.include_router(positions.router)
 app.include_router(data_export.router)
 
