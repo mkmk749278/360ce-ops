@@ -40,6 +40,33 @@ class EngineApiClient:
         except httpx.HTTPError as exc:
             return {"error": str(exc), "endpoint": path}
 
+    async def _post(self, path: str, payload: dict[str, Any]) -> Any:
+        """POST a JSON body to an engine control endpoint.
+
+        Returns parsed JSON on success, or ``{"error": ..., "status_code":
+        ...}`` on failure so the control route can surface a precise banner
+        (409 same-mode, 503 not-initialised, 403 non-owner) instead of a
+        generic crash.  The dashboard's static token is owner-tier on the
+        engine, so owner-gated writes authorise.
+        """
+        try:
+            r = await self.client.post(path, json=payload)
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPStatusError as exc:
+            detail: Any = None
+            try:
+                detail = exc.response.json().get("detail")
+            except Exception:
+                detail = exc.response.text
+            return {
+                "error": detail or str(exc),
+                "status_code": exc.response.status_code,
+                "endpoint": path,
+            }
+        except httpx.HTTPError as exc:
+            return {"error": str(exc), "endpoint": path}
+
     async def health(self) -> Any:
         return await self._get("/api/health")
 
@@ -88,3 +115,29 @@ class EngineApiClient:
 
     async def agents(self) -> Any:
         return await self._get("/api/agents")
+
+    # ---- Control plane (writes — owner-tier) -----------------------------
+    # The dashboard is the engine control plane now that Telegram is
+    # unavailable in-region (2026-06-20).  These call the engine's
+    # owner-gated write endpoints; the static Bearer token is owner-tier.
+
+    async def set_auto_mode(self, mode: str) -> Any:
+        """Flip the engine-wide auto-execution mode (off/paper/live/both).
+
+        Engine returns 409 when the requested mode is already active —
+        surfaced as an ``error`` so the route renders it as a no-op notice
+        rather than a success."""
+        return await self._post("/api/auto-mode", {"mode": mode})
+
+    async def kill_switch_state(self) -> Any:
+        """Current global kill-switch state ``{engaged, reason,
+        initialised}``."""
+        return await self._get("/api/kill-switch")
+
+    async def set_kill_switch(self, engaged: bool, reason: str | None = None) -> Any:
+        """Engage (halt all auto-trade) or disengage the global kill
+        switch.  Owner-gated on the engine."""
+        payload: dict[str, Any] = {"engaged": engaged}
+        if reason:
+            payload["reason"] = reason
+        return await self._post("/api/kill-switch", payload)

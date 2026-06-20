@@ -32,6 +32,7 @@ class Settings:
     monitor_logs_ttl_sec: int
     engine_container_name: str
     diag_timeout_sec: int
+    audit_log_path: str
     port: int
     log_level: str
 
@@ -49,6 +50,10 @@ def load_settings() -> Settings:
         monitor_logs_ttl_sec=_env_int("MONITOR_LOGS_TTL_SEC", 60),
         engine_container_name=_env("ENGINE_CONTAINER_NAME", "engine"),
         diag_timeout_sec=_env_int("DIAG_TIMEOUT_SEC", 30),
+        # Append-only control-action audit log.  Put it on a writable
+        # volume in prod (not the read-only /engine-data mount) so it
+        # survives container restarts.
+        audit_log_path=_env("OPS_AUDIT_LOG", "/data/ops_audit.jsonl"),
         port=_env_int("OPS_PORT", 8000),
         log_level=_env("LOG_LEVEL", "INFO"),
     )
