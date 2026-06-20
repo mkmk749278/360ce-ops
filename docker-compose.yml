@@ -19,6 +19,9 @@ services:
       # below — NOT the read-only /engine-data mount — so the record of
       # every owner control action survives the ~60s main-push redeploy.
       OPS_AUDIT_LOG: ${OPS_AUDIT_LOG:-/data/ops_audit.jsonl}
+      # Read-only access to the monitoring agent's alert state so the
+      # dashboard's /alerts panel can surface live safety findings.
+      AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://360ce-ops-redis:6379/0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       # Mount the engine's named Docker volume read-only. The engine's
@@ -31,6 +34,9 @@ services:
       # Docker socket so the diag runner can `docker exec engine ...`.
       # Owner-only access trust assumption per CLAUDE.md.
       - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      # Shared Redis holds the agent's alert state, read by /alerts.
+      - 360ce-ops-redis
 
   monitoring-agent:
     image: ghcr.io/mkmk749278/360ce-ops:latest

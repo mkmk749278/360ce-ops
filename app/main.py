@@ -19,11 +19,13 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth_mw import AuthRedirectMiddleware
 from app.config import load_settings
+from app.data_sources.agent_alerts import AgentAlertsReader
 from app.data_sources.data_volume import DataVolumeReader
 from app.data_sources.diag_runner import DiagRunner
 from app.data_sources.engine_api import EngineApiClient
 from app.data_sources.monitor_logs import MonitorLogsReader
 from app.routes import (
+    alerts,
     auth,
     control,
     data_export,
@@ -54,12 +56,14 @@ async def lifespan(app: FastAPI):
     app.state.data_volume = DataVolumeReader(settings)
     app.state.monitor_logs = MonitorLogsReader(settings)
     app.state.diag_runner = DiagRunner(settings)
+    app.state.agent_alerts = AgentAlertsReader(settings)
     logger.info("ops up — engine_api=%s data_dir=%s", settings.engine_api_base, settings.engine_data_dir)
     try:
         yield
     finally:
         await app.state.engine_api.aclose()
         await app.state.monitor_logs.aclose()
+        await app.state.agent_alerts.aclose()
 
 
 app = FastAPI(title="360 CE Ops", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -84,6 +88,7 @@ app.include_router(performance.router)
 app.include_router(raw_edge.router)
 app.include_router(positions.router)
 app.include_router(control.router)
+app.include_router(alerts.router)
 app.include_router(data_export.router)
 
 
