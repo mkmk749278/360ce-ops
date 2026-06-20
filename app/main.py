@@ -25,6 +25,7 @@ from app.data_sources.engine_api import EngineApiClient
 from app.data_sources.monitor_logs import MonitorLogsReader
 from app.routes import (
     auth,
+    control,
     data_export,
     diag,
     invalidations,
@@ -82,6 +83,7 @@ app.include_router(invalidations.router)
 app.include_router(performance.router)
 app.include_router(raw_edge.router)
 app.include_router(positions.router)
+app.include_router(control.router)
 app.include_router(data_export.router)
 
 

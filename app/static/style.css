@@ -173,3 +173,31 @@ code {
 .data-table tbody tr.row-sl_breached { background: rgba(255, 0, 0, 0.08); }
 .data-table tbody tr.row-feed_stale  { background: rgba(255, 165, 0, 0.07); }
 .data-table tbody tr.row-ok { /* default */ }
+
+/* ---- Control plane (write surface) ---- */
+.flash { padding: 0.7rem 1rem; border-radius: 4px; margin: 1rem 0; font-weight: 600; }
+.flash-ok  { background: rgba(63,185,80,0.12);  border: 1px solid var(--pos); color: var(--pos); }
+.flash-err { background: rgba(248,81,73,0.12);   border: 1px solid var(--neg); color: var(--neg); }
+
+.ks-state { font-weight: 700; font-size: 1.05rem; }
+.ks-on  { color: var(--neg); }
+.ks-off { color: var(--pos); }
+
+.btn-row { display: flex; gap: 0.6rem; margin: 0.6rem 0; flex-wrap: wrap; }
+.btn-row form { margin: 0; }
+.btn-danger  { background: var(--neg); color: #0d1117; border: none; }
+.btn-go      { background: var(--pos); color: #0d1117; border: none; }
+.btn-current { background: var(--bg-elev); color: var(--fg-dim); border: 1px solid var(--border); cursor: default; }
+.btn-plain   { background: var(--bg-elev); color: var(--accent); border: 1px solid var(--border); }
+.control-card form input[type=text] {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+  border-radius: 4px; padding: 0.4rem 0.6rem; margin-right: 0.5rem; min-width: 14rem;
+}
+.mode-live  { color: var(--neg); }
+.mode-paper { color: var(--warn); }
+.mode-off   { color: var(--fg-dim); }
+
+table.audit { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-family: var(--mono); }
+table.audit th, table.audit td { text-align: left; padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border); }
+table.audit .row-err td { color: var(--neg); }
+table.audit .row-ok  td { color: var(--fg); }

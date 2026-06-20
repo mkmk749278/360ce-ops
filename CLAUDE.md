@@ -18,7 +18,13 @@ For every change, ask: **"how does this make signals more profitable for paid su
 
 ## Scope of this repo
 
-Read-only diagnostic dashboard. Diagnostic-first. **No writes to the engine.** Control surfaces (auto-mode flips, breaker, settings) stay in Telegram + the Lumin app until the dashboard has earned trust.
+Diagnostic dashboard **and the engine control plane** (promoted 2026-06-20). Diagnostic-first, but no longer read-only: Telegram is banned in-region, so the owner's manual control of the engine (auto-mode flips, kill switch, and — over time — manual close / per-user settings) now lives here. Monitoring of signals/positions/PnL stays primarily in the Lumin app; **ops owns control**.
+
+Control doctrine (non-negotiable for every write surface):
+- **Owner-gated end to end.** Writes call the engine's owner-gated endpoints; the dashboard's static Bearer token is owner-tier on the engine. Everything stays behind the single-password auth gate.
+- **Audited.** Every control action is appended to the audit log (`app/audit.py` → `OPS_AUDIT_LOG`). Audit writes are best-effort and never block the action — being able to hit the kill switch matters more than logging it.
+- **PRG + confirm.** Control routes use POST→redirect→GET so a refresh can't re-fire an action; destructive actions (engage kill switch, switch to LIVE) require an explicit confirm.
+- **The engine is the source of truth.** Ops never holds control state locally; it reads it back from the engine after every write.
 
 ## Change-management protocol (mirrors 360-v2's)
 
@@ -44,9 +50,9 @@ Every change ships via PR. Fresh topic branch off `main`. Design-summary in the 
 
 ## Hard limits
 
-- No engine code is modified from this repo.
-- No writes to engine state from this dashboard.
-- No multi-user. No multi-tenant. No publicly-accessible endpoints (everything behind the auth gate).
+- No engine code is modified from this repo. (Engine *endpoints* are added in `mkmk749278/360-v2`; ops only *calls* them.)
+- **Writes to engine state are allowed only through owner-gated engine endpoints, and only when audited** (see Control doctrine above). No direct mutation of engine data files, Redis, or SQLite from this repo — control flows through the engine's HTTP control surface, which owns the invariants (kill-switch write-through, FSM transitions, blast-radius caps). Never reach around the engine to flip state.
+- No multi-user. No multi-tenant. No publicly-accessible endpoints (everything behind the auth gate). As a control plane this matters more, not less.
 - The `docker.sock` mount is acceptable only because access is owner-only; never broaden user access without first replacing the diag runner with an engine-side endpoint.
 
 ## Commands
