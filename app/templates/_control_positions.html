@@ -1,0 +1,27 @@
+{# Live open-positions table — polled by the control panel every 5s. #}
+{% if error %}
+  <p class="muted">Could not read positions: {{ error }}</p>
+{% elif not rows %}
+  <p class="ks-state ks-off">✓ No open positions.</p>
+{% else %}
+  <table class="audit positions-live">
+    <thead>
+      <tr><th>Symbol</th><th>Dir</th><th>Entry</th><th>Mark</th><th>SL</th><th>PnL%</th><th>Open</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="{% if r.get('row_class') == 'sl_breached' %}row-err{% elif r.get('row_class') == 'feed_stale' %}row-warn{% endif %}">
+        <td><strong>{{ r.get('symbol') }}</strong></td>
+        <td>{{ (r.get('direction') or '')|upper }}</td>
+        <td>{{ r.get('entry') }}</td>
+        <td>{{ r.get('current_price') if r.get('current_price') is not none else '—' }}</td>
+        <td>{{ r.get('stop_loss') if r.get('stop_loss') else '⚠ none' }}</td>
+        <td>{% if r.get('pnl_pct') is not none %}{{ '%.2f'|format(r.get('pnl_pct')) }}{% else %}—{% endif %}</td>
+        <td>{{ r.get('minutes_open') or 0 }}m</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">{{ rows|length }} open · auto-refreshes every 5s
+    {%- if not monitor_running %} · ⚠ monitor not running{% endif %}</p>
+{% endif %}

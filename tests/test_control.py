@@ -197,6 +197,40 @@ def test_kill_switch_engage_calls_engine_and_audits(monkeypatch):
         assert "ENGAGED" in r.text
 
 
+def test_control_positions_partial_renders_open_positions(monkeypatch):
+    async def fake_diag(self):
+        return {
+            "monitor_running": True,
+            "items": [
+                {"status": "ACTIVE", "symbol": "BTCUSDT", "direction": "long",
+                 "entry": 65000.0, "current_price": 65500.0, "stop_loss": 64000.0,
+                 "pnl_pct": 0.77, "minutes_open": 12, "signal_id": "abc"},
+                # Phantom placeholder (no symbol / zero entry) — must be filtered.
+                {"status": "ACTIVE", "symbol": "", "entry": 0.0, "signal_id": "x"},
+            ],
+        }
+
+    monkeypatch.setattr(EngineApiClient, "positions_diag", fake_diag)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/control/positions")
+        assert r.status_code == 200
+        assert "BTCUSDT" in r.text
+        assert "1 open" in r.text  # phantom row filtered out
+
+
+def test_control_positions_partial_empty(monkeypatch):
+    async def fake_diag(self):
+        return {"monitor_running": True, "items": []}
+
+    monkeypatch.setattr(EngineApiClient, "positions_diag", fake_diag)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/control/positions")
+        assert r.status_code == 200
+        assert "No open positions" in r.text
+
+
 def test_auto_trade_global_flip_calls_engine_and_audits(monkeypatch):
     calls: dict = {}
 

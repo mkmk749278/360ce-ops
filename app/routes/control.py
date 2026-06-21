@@ -19,6 +19,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
 from app import audit
+from app.routes.positions import _enrich_row
 
 router = APIRouter()
 
@@ -56,6 +57,46 @@ async def _render(request: Request):
 @router.get("/control")
 async def control_page(request: Request):
     return await _render(request)
+
+
+@router.get("/control/positions")
+async def control_positions_partial(request: Request):
+    """HTMX partial — the live open-positions table the control panel polls.
+
+    Read-only for now (the foundation of the control panel's position view);
+    the per-position close action lands as a separate owner-sign-off PR since
+    it fires real Binance order changes through the FSM.
+    """
+    api = request.app.state.engine_api
+    templates = request.app.state.templates
+    payload = await api.positions_diag()
+    items: list = []
+    error = None
+    monitor_running = False
+    if isinstance(payload, dict):
+        if payload.get("error"):
+            error = str(payload.get("error"))
+        else:
+            raw = payload.get("items") or []
+            if isinstance(raw, list):
+                items = [_enrich_row(it) for it in raw if isinstance(it, dict)]
+            monitor_running = bool(payload.get("monitor_running", False))
+    # Only genuine open positions (skip phantom placeholder rows).
+    items = [
+        r for r in items
+        if (r.get("symbol") or "").strip()
+        and float(r.get("entry") or 0.0) > 0.0
+    ]
+    items.sort(key=lambda r: -(r.get("minutes_open") or 0))
+    return templates.TemplateResponse(
+        "_control_positions.html",
+        {
+            "request": request,
+            "rows": items,
+            "error": error,
+            "monitor_running": monitor_running,
+        },
+    )
 
 
 @router.post("/control/auto-mode")

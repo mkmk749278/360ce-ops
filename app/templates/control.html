@@ -95,6 +95,13 @@
 </section>
 
 <section class="card">
+  <h2>Open positions <span class="muted">(live)</span></h2>
+  <div hx-get="/control/positions" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    <p class="muted">Loading positions…</p>
+  </div>
+</section>
+
+<section class="card">
   <h2>Recent control actions</h2>
   {% if audit %}
   <table class="audit">
