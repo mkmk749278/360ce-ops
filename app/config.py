@@ -33,6 +33,7 @@ class Settings:
     engine_container_name: str
     diag_timeout_sec: int
     audit_log_path: str
+    agent_redis_url: str
     port: int
     log_level: str
 
@@ -54,6 +55,9 @@ def load_settings() -> Settings:
         # volume in prod (not the read-only /engine-data mount) so it
         # survives container restarts.
         audit_log_path=_env("OPS_AUDIT_LOG", "/data/ops_audit.jsonl"),
+        # Same Redis the monitoring agent writes alert state to — the web
+        # dashboard reads it to render the alerts panel.
+        agent_redis_url=_env("AGENT_REDIS_URL", "redis://360ce-ops-redis:6379/0"),
         port=_env_int("OPS_PORT", 8000),
         log_level=_env("LOG_LEVEL", "INFO"),
     )

@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Alerts · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Safety Alerts</h1>
+<p class="muted">
+  Live findings from the 24/7 monitoring agent (naked position, signing
+  service, engine / Redis health). This is the alert surface now that
+  Telegram is unavailable — check it regularly; there is no push.
+</p>
+
+{% if error %}
+<div class="flash flash-err">
+  Could not read agent alert state: {{ error }}
+  <div class="muted">The monitoring agent or its Redis may be down — that
+  itself is worth investigating.</div>
+</div>
+{% endif %}
+
+{% if alerts %}
+  {% if high_count %}
+  <div class="flash flash-err">{{ high_count }} HIGH-severity alert{{ 's' if high_count != 1 }} active.</div>
+  {% endif %}
+  <section class="card">
+    <table class="audit alerts">
+      <thead>
+        <tr><th>Sev</th><th>Alert</th><th>Cycles</th><th>First seen (UTC)</th><th>Last seen</th></tr>
+      </thead>
+      <tbody>
+        {% for a in alerts %}
+        <tr class="{% if a.severity == 'HIGH' %}row-err{% else %}row-warn{% endif %}">
+          <td><span class="sev sev-{{ a.severity|lower }}">{{ a.severity }}</span></td>
+          <td>
+            <strong>{{ a.kind }}</strong>
+            <div class="muted">{{ a.description }}</div>
+          </td>
+          <td>{{ a.count }}</td>
+          <td>{{ a.first_seen[:19] }}</td>
+          <td>{{ a.last_seen[:19] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% elif not error %}
+  <section class="card">
+    <p class="ks-state ks-off">✓ No active alerts — all clear.</p>
+  </section>
+{% endif %}
+{% endblock %}

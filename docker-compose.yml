@@ -15,15 +15,28 @@ services:
       MONITOR_LOGS_TTL_SEC: "60"
       ENGINE_CONTAINER_NAME: ${ENGINE_CONTAINER_NAME:-engine}
       DIAG_TIMEOUT_SEC: "30"
+      # Control-plane audit log. Lives on the persistent `ops-data` volume
+      # below — NOT the read-only /engine-data mount — so the record of
+      # every owner control action survives the ~60s main-push redeploy.
+      OPS_AUDIT_LOG: ${OPS_AUDIT_LOG:-/data/ops_audit.jsonl}
+      # Read-only access to the monitoring agent's alert state so the
+      # dashboard's /alerts panel can surface live safety findings.
+      AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://360ce-ops-redis:6379/0}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       # Mount the engine's named Docker volume read-only. The engine's
       # docker-compose creates `360-v2_360scalp-v2-data` (project-prefixed);
       # override via ENGINE_DATA_VOLUME if the engine project name changes.
       - engine-data:/engine-data:ro
+      # Writable volume for the control-plane audit log (persists across
+      # redeploys). Owner-only, never mounted into the engine.
+      - ops-data:/data
       # Docker socket so the diag runner can `docker exec engine ...`.
       # Owner-only access trust assumption per CLAUDE.md.
       - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      # Shared Redis holds the agent's alert state, read by /alerts.
+      - 360ce-ops-redis
 
   monitoring-agent:
     image: ghcr.io/mkmk749278/360ce-ops:latest
@@ -65,3 +78,6 @@ volumes:
   engine-data:
     name: ${ENGINE_DATA_VOLUME:-360-v2_360scalp-v2-data}
     external: true
+  # Persistent, ops-owned writable volume for the control-plane audit log.
+  ops-data:
+    name: ${OPS_DATA_VOLUME:-360ce-ops-data}

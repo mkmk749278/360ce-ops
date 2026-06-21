@@ -112,12 +112,18 @@ class AlertStateStore:
                 "last_seen": now,
                 "count": 1,
                 "severity": result.severity,
+                # Persist the human-readable message so the ops dashboard's
+                # alerts panel can render active alerts without re-running the
+                # detectors — the panel is the alert surface now that Telegram
+                # is gone (2026-06-20).
+                "description": result.description,
                 "paged": False,
                 "last_paged": None,
             }
         else:
             state["last_seen"] = now
             state["count"] = state.get("count", 0) + 1
+            state["description"] = result.description
             # Severity can only escalate
             if result.severity == "HIGH" and state["severity"] == "WARN":
                 state["severity"] = "HIGH"
