@@ -42,6 +42,29 @@
 </section>
 
 <section class="card">
+  <h2>Global auto-trade</h2>
+  {% if glob.get('initialised') is false %}
+    <p class="muted">Unavailable — the engine reports the flag never initialised.</p>
+  {% elif glob.get('enabled') %}
+    <p class="ks-state ks-off">✓ ENABLED — new orders allowed engine-wide.</p>
+    <form method="post" action="/control/auto-trade-global"
+          onsubmit="return confirm('DISABLE global auto-trade? New orders halt engine-wide (open positions are left untouched).');">
+      <input type="hidden" name="enabled" value="false">
+      <button type="submit" class="btn btn-danger">Disable global auto-trade</button>
+    </form>
+  {% else %}
+    <p class="ks-state ks-on">⛔ DISABLED — no new orders are placed.</p>
+    <form method="post" action="/control/auto-trade-global"
+          onsubmit="return confirm('ENABLE global auto-trade engine-wide?');">
+      <input type="hidden" name="enabled" value="true">
+      <button type="submit" class="btn btn-go">Enable global auto-trade</button>
+    </form>
+  {% endif %}
+  <p class="muted">Master gate, separate from the kill switch: disabling stops
+  new entries without cancelling existing Binance positions.</p>
+</section>
+
+<section class="card">
   <h2>Auto-execution mode</h2>
   {% if auto.get('error') %}
     <p class="muted">Could not read current mode: {{ auto.error }}</p>
@@ -69,6 +92,13 @@
     {% endfor %}
   </div>
   <p class="muted">Off halts new entries; Paper simulates; Live fires real orders.</p>
+</section>
+
+<section class="card">
+  <h2>Open positions <span class="muted">(live)</span></h2>
+  <div hx-get="/control/positions" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    <p class="muted">Loading positions…</p>
+  </div>
 </section>
 
 <section class="card">
