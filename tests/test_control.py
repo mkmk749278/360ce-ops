@@ -24,6 +24,10 @@ def _login(client: TestClient) -> None:
     client.post("/login", data={"password": "test-token"})
 
 
+async def _fake_glob(self):
+    return {"enabled": True, "initialised": True}
+
+
 # ---- audit log ----------------------------------------------------------
 
 
@@ -63,17 +67,26 @@ def test_control_page_requires_auth():
         assert r.headers["location"] == "/login"
 
 
-def test_control_page_renders_state(monkeypatch):
+def _patch_reads(monkeypatch, *, mode="paper"):
+    """Monkeypatch the three read calls _render makes, so control tests
+    don't hit the network."""
     async def fake_auto_mode(self):
-        return {"mode": "paper"}
+        return {"mode": mode}
 
     async def fake_ks(self):
         return {"engaged": False, "initialised": True, "reason": None}
 
+    async def fake_glob(self):
+        return {"enabled": True, "initialised": True}
+
     monkeypatch.setattr(EngineApiClient, "auto_mode", fake_auto_mode)
     monkeypatch.setattr(EngineApiClient, "kill_switch_state", fake_ks)
+    monkeypatch.setattr(EngineApiClient, "auto_trade_global_state", fake_glob)
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
 
+
+def test_control_page_renders_state(monkeypatch):
+    _patch_reads(monkeypatch, mode="paper")
     with TestClient(app) as client:
         _login(client)
         r = client.get("/control")
@@ -95,7 +108,11 @@ def test_auto_mode_flip_calls_engine_and_audits(monkeypatch):
     async def fake_ks(self):
         return {"engaged": False, "initialised": True}
 
+    async def fake_glob(self):
+        return {"enabled": True, "initialised": True}
+
     recorded: list = []
+    monkeypatch.setattr(EngineApiClient, "auto_trade_global_state", fake_glob)
     monkeypatch.setattr(EngineApiClient, "set_auto_mode", fake_set)
     monkeypatch.setattr(EngineApiClient, "auto_mode", fake_auto_mode)
     monkeypatch.setattr(EngineApiClient, "kill_switch_state", fake_ks)
@@ -131,6 +148,7 @@ def test_auto_mode_invalid_is_rejected_without_engine_call(monkeypatch):
     monkeypatch.setattr(EngineApiClient, "set_auto_mode", fake_set)
     monkeypatch.setattr(EngineApiClient, "auto_mode", fake_auto_mode)
     monkeypatch.setattr(EngineApiClient, "kill_switch_state", fake_ks)
+    monkeypatch.setattr(EngineApiClient, "auto_trade_global_state", _fake_glob)
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
 
     with TestClient(app) as client:
@@ -159,6 +177,7 @@ def test_kill_switch_engage_calls_engine_and_audits(monkeypatch):
     monkeypatch.setattr(EngineApiClient, "set_kill_switch", fake_set_ks)
     monkeypatch.setattr(EngineApiClient, "auto_mode", fake_auto_mode)
     monkeypatch.setattr(EngineApiClient, "kill_switch_state", fake_ks)
+    monkeypatch.setattr(EngineApiClient, "auto_trade_global_state", _fake_glob)
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
     monkeypatch.setattr(
         control_route.audit, "record",
@@ -176,3 +195,39 @@ def test_kill_switch_engage_calls_engine_and_audits(monkeypatch):
         assert calls["reason"] == "manual halt"
         assert recorded[0]["action"] == "kill_switch"
         assert "ENGAGED" in r.text
+
+
+def test_auto_trade_global_flip_calls_engine_and_audits(monkeypatch):
+    calls: dict = {}
+
+    async def fake_set_glob(self, enabled):
+        calls["enabled"] = enabled
+        return {"enabled": enabled, "initialised": True}
+
+    async def fake_glob(self):
+        return {"enabled": calls.get("enabled", False), "initialised": True}
+
+    async def fake_auto_mode(self):
+        return {"mode": "off"}
+
+    async def fake_ks(self):
+        return {"engaged": False, "initialised": True}
+
+    recorded: list = []
+    monkeypatch.setattr(EngineApiClient, "set_auto_trade_global", fake_set_glob)
+    monkeypatch.setattr(EngineApiClient, "auto_trade_global_state", fake_glob)
+    monkeypatch.setattr(EngineApiClient, "auto_mode", fake_auto_mode)
+    monkeypatch.setattr(EngineApiClient, "kill_switch_state", fake_ks)
+    monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
+    monkeypatch.setattr(
+        control_route.audit, "record",
+        lambda *a, **k: recorded.append(k),
+    )
+
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post("/control/auto-trade-global", data={"enabled": "false"})
+        assert r.status_code == 200
+        assert calls["enabled"] is False
+        assert recorded[0]["action"] == "auto_trade_global"
+        assert "DISABLED" in r.text

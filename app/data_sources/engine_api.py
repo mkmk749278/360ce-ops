@@ -141,3 +141,13 @@ class EngineApiClient:
         if reason:
             payload["reason"] = reason
         return await self._post("/api/kill-switch", payload)
+
+    async def auto_trade_global_state(self) -> Any:
+        """Global ``auto_trade_globally_enabled`` flag ``{enabled,
+        initialised}`` — distinct from the kill switch; disabling halts new
+        order placement engine-wide without touching existing positions."""
+        return await self._get("/api/auto-trade-global")
+
+    async def set_auto_trade_global(self, enabled: bool) -> Any:
+        """Enable/disable global auto-trade. Owner-gated on the engine."""
+        return await self._post("/api/auto-trade-global", {"enabled": enabled})
