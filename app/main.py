@@ -20,9 +20,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.auth_mw import AuthRedirectMiddleware
 from app.config import load_settings
 from app.data_sources.agent_alerts import AgentAlertsReader
+from app.data_sources.binance_klines import BinanceKlinesClient
 from app.data_sources.data_volume import DataVolumeReader
 from app.data_sources.diag_runner import DiagRunner
 from app.data_sources.engine_api import EngineApiClient
+from app.data_sources.free_run import FreeRunTracker
 from app.data_sources.monitor_logs import MonitorLogsReader
 from app.routes import (
     alerts,
@@ -58,6 +60,8 @@ async def lifespan(app: FastAPI):
     app.state.monitor_logs = MonitorLogsReader(settings)
     app.state.diag_runner = DiagRunner(settings)
     app.state.agent_alerts = AgentAlertsReader(settings)
+    app.state.binance_klines = BinanceKlinesClient(settings)
+    app.state.free_run = FreeRunTracker(settings, app.state.binance_klines)
     logger.info("ops up — engine_api=%s data_dir=%s", settings.engine_api_base, settings.engine_data_dir)
     try:
         yield
@@ -65,6 +69,7 @@ async def lifespan(app: FastAPI):
         await app.state.engine_api.aclose()
         await app.state.monitor_logs.aclose()
         await app.state.agent_alerts.aclose()
+        await app.state.binance_klines.aclose()
 
 
 app = FastAPI(title="360 CE Ops", docs_url=None, redoc_url=None, lifespan=lifespan)

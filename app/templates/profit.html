@@ -15,12 +15,21 @@
 
 {% block content %}
 <h1>Signal Profit Tracker</h1>
-<p class="muted">Each signal runs until it terminates — the exit is its stop.
-  <strong>Current</strong> is live profit; <strong>Max profit</strong> is the best the
-  trade ever showed (peak-to-entry) before it gave any back.</p>
+<p class="muted">A parallel "what if we'd held to the stop" view — real trading is
+  unchanged. Every signal is replayed on Binance 1m candles from dispatch, exiting
+  <em>only</em> at its original stop. <strong>Max profit</strong> is the best it ever
+  showed (peak-to-entry); <strong>Result</strong> is the held-to-stop outcome (the SL
+  loss once stopped, else live P/L). <strong>Real exit</strong> is what the engine
+  actually did — the gap between the two is the give-back.</p>
 
 {% if error %}
 <section class="card neg">Engine API error: {{ error }}</section>
+{% endif %}
+
+{% if summary.degraded %}
+<section class="card neg">⚠ {{ summary.degraded }} row(s) couldn't be replayed from
+  Binance candles (network/policy) — those show the engine's own numbers, not the
+  held-to-stop replay.</section>
 {% endif %}
 
 <form method="get" action="/profit" class="filters">
@@ -28,12 +37,13 @@
     <select name="view" onchange="this.form.submit()">
       <option value="all"    {% if view == 'all' %}selected{% endif %}>all</option>
       <option value="active" {% if view == 'active' %}selected{% endif %}>active only</option>
-      <option value="closed" {% if view == 'closed' %}selected{% endif %}>closed only</option>
+      <option value="closed" {% if view == 'closed' %}selected{% endif %}>stopped only</option>
     </select>
   </label>
   <span class="muted">
-    {{ rows | length }} rows · {{ summary.active }} active · {{ summary.closed }} closed
+    {{ rows | length }} rows · {{ summary.active }} active · {{ summary.closed }} stopped
     {% if summary.best_mfe is not none %}· best max profit {{ pct(summary.best_mfe) }}{% endif %}
+    {% if summary.avg_giveback is not none %}· avg give-back {{ pct(summary.avg_giveback) }}{% endif %}
   </span>
 </form>
 
@@ -49,11 +59,13 @@
       <th>Side</th>
       <th>Entry</th>
       <th>SL</th>
-      <th>Current</th>
-      <th>Cur P/L</th>
-      <th>Max</th>
+      <th>At</th>
+      <th>Result (held)</th>
+      <th>Max price</th>
       <th>Max profit</th>
-      <th>Status</th>
+      <th>Held status</th>
+      <th>Real exit</th>
+      <th>Give-back</th>
       <th>Age</th>
       <th></th>
     </tr>
@@ -61,18 +73,23 @@
   <tbody>
   {% for r in rows %}
     <tr>
-      <td>{{ r.symbol }}</td>
+      <td>{{ r.symbol }}{% if r.degraded %} <span class="small muted" title="Binance candles unavailable — engine values shown">≈</span>{% endif %}</td>
       <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
       <td class="mono">{{ px(r.entry) }}</td>
       <td class="mono">{{ px(r.sl) }}</td>
       <td class="mono">{{ px(r.current) }}</td>
-      <td class="mono {% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">{{ pct(r.pnl_pct) }}</td>
+      <td class="mono {% if r.result_pct is not none and r.result_pct > 0 %}pos{% elif r.result_pct is not none and r.result_pct < 0 %}neg{% endif %}">{{ pct(r.result_pct) }}</td>
       <td class="mono">{{ px(r.max_price) }}</td>
       <td class="mono {% if r.mfe_pct is not none and r.mfe_pct > 0 %}pos{% endif %}">{{ pct(r.mfe_pct) }}</td>
       <td>
-        {% if r.is_active %}<span class="pos">Active</span>
-        {% else %}<span class="muted" title="{{ r.close_reason }}">Closed{% if r.close_reason %} · {{ r.close_reason }}{% endif %}</span>{% endif %}
+        {% if r.is_active %}<span class="pos">Active{% if r.capped %} <span class="small muted" title="Stop not touched within the replay window">·capped</span>{% endif %}</span>
+        {% else %}<span class="muted">Stopped</span>{% endif %}
       </td>
+      <td class="small muted">
+        {% if r.real_is_active %}live
+        {% else %}{{ r.real_status }}{% if r.real_pnl_pct is not none %} · {{ pct(r.real_pnl_pct) }}{% endif %}{% endif %}
+      </td>
+      <td class="mono small {% if r.giveback_pct is not none and r.giveback_pct > 0 %}neg{% endif %}">{{ pct(r.giveback_pct) }}</td>
       <td class="small muted">{{ r.created_relative or "—" }}</td>
       <td><a href="/signals/{{ r.id }}">→</a></td>
     </tr>

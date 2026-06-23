@@ -1,20 +1,23 @@
-"""Signal profit tracker — every signal's running and peak profit.
+"""Signal profit tracker — every signal replayed under "held to the stop".
 
-Operator view built around the "let it run" model: a signal is treated as
-*Active* (still in flight) until it terminates, and its terminal exit is the
-stop. While a signal runs we surface two numbers the raw Signals table does
-not put side-by-side:
+This page is a **parallel observation only**. Real trading is untouched: the
+engine's exits (pre-TP, invalidation, expiry, TP) still fire for real, and the
+live Signals tab / the app keep showing the real outcomes. Here we ignore those
+exits and replay Binance 1m candles from each signal's dispatch forward under a
+single rule — *exit only at the original stop* — to surface what the live table
+cannot:
 
-* **Current profit** — ``pnl_pct`` from the engine (mark-to-entry, live for
-  active signals; the realised result for closed ones).
-* **Max profit hit** — ``max_favorable_excursion_pct`` (MFE): the best the
-  trade ever showed, peak-to-entry, before it gave any of it back. This is the
-  number that tells the operator "how much was on the table" versus what the
-  exit actually captured.
+* **Max profit** — the best the trade ever showed (peak-to-entry) before the
+  stop was touched. "How much was on the table."
+* **Result (held)** — the SL loss once price first touches the stop, or the
+  live P/L while it's still running. The held-to-stop outcome, not the real one.
+* **Real exit** — what the engine *actually* did, shown muted alongside, so the
+  give-back (max profit vs what the real exit captured) is visible at a glance.
 
-Both fields are sourced from the engine's ``/api/signals`` (exposed there in
-360-v2 alongside this page). Read-only: this route only reshapes the engine's
-own signal payload — it never mutates engine state.
+The replay is ``app/data_sources/free_run.py``; the candles come from Binance
+Futures public market data. Read-only — this route never mutates engine state.
+When candles can't be fetched the row degrades to the engine's own numbers and
+the page says so.
 """
 from __future__ import annotations
 
@@ -23,37 +26,23 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
+from app.data_sources.free_run import FreeRunResult
 from app.reports import csv_response
 
 router = APIRouter()
 
-# Statuses the engine stamps on a signal that is still in flight. Anything
-# else (SL_HIT, INVALIDATED, BREAKEVEN_EXIT, TP*_HIT, EXPIRED, CANCELLED, …)
-# is a terminal outcome → the signal is Closed.
+# Engine statuses that mean the signal is still live (used only to label the
+# "Real exit" column — the held-to-stop status comes from the replay).
 _ACTIVE_STATUSES = frozenset({"ACTIVE", "OPEN", "RUNNING"})
 
 
 def _f(value: Any) -> float | None:
-    """Best-effort float; ``None`` when the engine omitted / nulled a field."""
     if value is None or value == "":
         return None
     try:
         return float(value)
     except (TypeError, ValueError):
         return None
-
-
-def _peak_price(entry: float | None, side: str, mfe_pct: float | None) -> float | None:
-    """Reconstruct the price at max favorable excursion from entry + MFE.
-
-    The engine tracks MFE as a percentage of entry, not an absolute price, so
-    derive the peak so it sits in the same column units as entry / SL /
-    current. LONG peaks above entry, SHORT below.
-    """
-    if entry is None or mfe_pct is None or entry <= 0:
-        return None
-    frac = mfe_pct / 100.0
-    return entry * (1 + frac) if side == "LONG" else entry * (1 - frac)
 
 
 def _format_relative(value: Any) -> str | None:
@@ -80,32 +69,42 @@ def _format_relative(value: Any) -> str | None:
     return f"{hours // 24}d ago"
 
 
-def _normalize(entry: dict) -> dict:
+def _row(entry: dict, fr: FreeRunResult) -> dict:
+    """Combine an engine signal with its held-to-stop replay into a view row."""
     side = str(entry.get("direction") or entry.get("side") or "").upper()
-    raw_status = str(entry.get("status") or "").upper()
-    is_active = raw_status in _ACTIVE_STATUSES or raw_status == ""
     entry_px = _f(entry.get("entry") if entry.get("entry") is not None else entry.get("entry_price"))
     sl_px = _f(entry.get("stop_loss") if entry.get("stop_loss") is not None else entry.get("sl"))
-    current_px = _f(entry.get("current_price"))
-    pnl_pct = _f(entry.get("pnl_pct"))
-    mfe_pct = _f(entry.get("max_favorable_excursion_pct"))
-    mae_pct = _f(entry.get("max_adverse_excursion_pct"))
+
+    raw_status = str(entry.get("status") or "").upper()
+    real_is_active = raw_status in _ACTIVE_STATUSES or raw_status == ""
+    # Give-back: max profit the held-to-stop run showed vs what the engine's
+    # real exit actually realised. Only meaningful once the engine has closed.
+    real_pnl = _f(entry.get("pnl_pct"))
+    giveback = None
+    if not real_is_active and fr.mfe_pct is not None and real_pnl is not None:
+        giveback = fr.mfe_pct - real_pnl
+
     return {
         "id": entry.get("signal_id") or entry.get("id") or "",
         "symbol": entry.get("symbol", ""),
         "side": side,
         "entry": entry_px,
         "sl": sl_px,
-        "current": current_px,
-        "pnl_pct": pnl_pct,
-        "mfe_pct": mfe_pct,
-        "mae_pct": mae_pct,
-        "max_price": _peak_price(entry_px, side, mfe_pct),
-        "is_active": is_active,
-        "status": "Active" if is_active else "Closed",
-        # The actual terminal reason (SL_HIT, INVALIDATED, …) for the tooltip,
-        # so "Closed" doesn't hide *how* it closed.
-        "close_reason": "" if is_active else raw_status,
+        # --- held-to-stop (free run) ---
+        "current": fr.current_price,
+        "result_pct": fr.result_pct,
+        "mfe_pct": fr.mfe_pct,
+        "max_price": fr.mfe_price,
+        "is_active": fr.is_active,
+        "status": "Active" if fr.is_active else "Stopped",
+        "capped": fr.capped,
+        "degraded": fr.degraded,
+        "hold_mins": fr.hold_mins,
+        # --- engine's real exit (muted comparison) ---
+        "real_is_active": real_is_active,
+        "real_status": "" if real_is_active else raw_status,
+        "real_pnl_pct": real_pnl,
+        "giveback_pct": giveback,
         "minutes_ago": entry.get("minutes_ago"),
         "created_relative": _format_relative(entry.get("timestamp")),
     }
@@ -122,39 +121,50 @@ def _extract_items(payload: Any) -> list[dict]:
 
 
 async def _build_rows(request: Request, view: str) -> tuple[list[dict], str | None]:
-    """Fetch all signals from the engine and reshape into profit rows.
+    """Fetch all signals, replay each held-to-stop, reshape into rows.
 
-    ``view`` filters to active / closed / all. Active rows sort first (the
-    operator is watching the live book), then closed, each newest-first.
+    ``view`` filters to active / stopped / all on the *held-to-stop* status
+    (not the engine's real status). Active rows sort first, then by recency.
     """
     api = request.app.state.engine_api
+    tracker = request.app.state.free_run
     payload = await api.signals(status="all")
 
     error: str | None = None
     if isinstance(payload, dict) and payload.get("error"):
         error = str(payload.get("error"))
 
-    rows = [_normalize(e) for e in _extract_items(payload)]
-    rows = [r for r in rows if r["id"]]
+    items = [e for e in _extract_items(payload) if (e.get("signal_id") or e.get("id"))]
+    results = await tracker.compute_many(items)
+
+    rows = []
+    for e in items:
+        sid = str(e.get("signal_id") or e.get("id") or "")
+        fr = results.get(sid)
+        if fr is None:
+            continue
+        rows.append(_row(e, fr))
 
     if view == "active":
         rows = [r for r in rows if r["is_active"]]
     elif view == "closed":
         rows = [r for r in rows if not r["is_active"]]
 
-    # Active first, then by recency (smaller minutes_ago = more recent).
     rows.sort(key=lambda r: (0 if r["is_active"] else 1, r.get("minutes_ago") if r.get("minutes_ago") is not None else 10**9))
     return rows, error
 
 
 def _summary(rows: list[dict]) -> dict:
     active = [r for r in rows if r["is_active"]]
-    closed = [r for r in rows if not r["is_active"]]
+    stopped = [r for r in rows if not r["is_active"]]
     mfes = [r["mfe_pct"] for r in rows if r["mfe_pct"] is not None]
+    givebacks = [r["giveback_pct"] for r in rows if r["giveback_pct"] is not None]
     return {
         "active": len(active),
-        "closed": len(closed),
+        "closed": len(stopped),
         "best_mfe": max(mfes) if mfes else None,
+        "avg_giveback": (sum(givebacks) / len(givebacks)) if givebacks else None,
+        "degraded": sum(1 for r in rows if r["degraded"]),
     }
 
 
@@ -177,13 +187,14 @@ async def profit(request: Request, view: str = Query("all", pattern="^(all|activ
 
 _EXPORT_COLS = [
     "id", "symbol", "side", "entry", "sl", "current",
-    "pnl_pct", "mfe_pct", "mae_pct", "max_price", "status", "close_reason",
+    "result_pct", "mfe_pct", "max_price", "status", "hold_mins",
+    "real_status", "real_pnl_pct", "giveback_pct", "degraded",
 ]
 
 
 @router.get("/profit/export.csv")
 async def profit_export(request: Request, view: str = Query("all", pattern="^(all|active|closed)$")):
-    """Download the (filtered) profit table as CSV — same shape as the page."""
+    """Download the (filtered) held-to-stop table as CSV — same shape as the page."""
     rows, _ = await _build_rows(request, view)
     data = [[r.get(col) for col in _EXPORT_COLS] for r in rows]
     return csv_response(f"signal_profit_{view}", _EXPORT_COLS, data)
