@@ -139,6 +139,31 @@ def test_tracker_replays_and_caches_terminal_result():
     assert fake.calls == 1
 
 
+def test_tracker_replays_against_original_stop_not_shifted_stop():
+    # Pre-TP signal: live stop_loss shifted to entry (100), original was 98.
+    # Price rises to 105 and never reaches 98. Using the shifted stop would
+    # record an instant flat stop-out; the original stop must let it run.
+    tracker, _ = _tracker(candles=[_k(0, 102, 99.5, 101), _k(1, 105, 101, 104)])
+    r = asyncio.run(tracker.compute(_sig(
+        entry=100.0, stop_loss=100.0, original_stop_loss=98.0,
+        max_favorable_excursion_pct=0.0, status="PROFIT_LOCKED",
+    )))
+    assert r.sl_hit is False                  # original stop (98) never hit
+    assert abs(r.mfe_pct - 5.0) < 1e-9        # ran to 105
+
+
+def test_tracker_floors_max_profit_at_engine_recorded_mfe():
+    # Candles only show +1%, but the engine recorded a 7.5% MFE tick-by-tick.
+    # The coarse replay must not under-report below ground truth.
+    tracker, _ = _tracker(candles=[_k(0, 101.0, 99.0, 100.5)])
+    r = asyncio.run(tracker.compute(_sig(
+        entry=100.0, stop_loss=90.0, original_stop_loss=90.0,
+        max_favorable_excursion_pct=7.5,
+    )))
+    assert abs(r.mfe_pct - 7.5) < 1e-9
+    assert abs(r.mfe_price - 107.5) < 1e-9    # derived from the floored pct
+
+
 def test_tracker_degrades_to_engine_values_on_fetch_failure():
     tracker, _ = _tracker(fail=True)
     r = asyncio.run(tracker.compute(_sig()))

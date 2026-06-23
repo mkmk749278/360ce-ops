@@ -201,7 +201,15 @@ class FreeRunTracker:
     async def _replay_one(self, signal: dict) -> FreeRunResult:
         symbol = str(signal.get("symbol") or "")
         entry = _f(signal.get("entry"))
-        sl = _f(signal.get("stop_loss"))
+        # Held-to-stop means the *original* protective stop, not the live one.
+        # The engine shifts stop_loss to break-even/TP1 as a trade progresses,
+        # so a pre-TP signal carries a stop sitting at entry — replaying against
+        # that records an instant flat stop-out. Prefer original_stop_loss
+        # (exposed by the engine for exactly this), fall back to stop_loss when
+        # it's absent (0/None) e.g. before the engine ships the field.
+        sl = _f(signal.get("original_stop_loss"))
+        if sl is None or sl <= 0:
+            sl = _f(signal.get("stop_loss"))
         direction = str(signal.get("direction") or signal.get("side") or "").upper()
         dispatch_ms = _dispatch_ms(signal.get("timestamp"))
 
@@ -224,10 +232,23 @@ class FreeRunTracker:
         # "capped" only matters when the stop was never touched within the
         # window — then the Active result is provisional, not the final story.
         capped = capped_window and not sim["sl_hit"]
+        # Floor max profit at the engine's own recorded MFE. The engine tracks
+        # max-favourable-excursion tick-by-tick over the real trade; that's
+        # ground truth and a lower bound on "best it ever showed" — never let a
+        # coarser 1m-candle replay report less than what actually happened.
+        mfe_pct = sim["mfe_pct"]
+        mfe_price = sim["mfe_price"]
+        engine_mfe = _f(signal.get("max_favorable_excursion_pct"))
+        if engine_mfe is not None and engine_mfe > (mfe_pct or 0.0):
+            mfe_pct = engine_mfe
+            mfe_price = (
+                entry * (1 + mfe_pct / 100.0) if direction == "LONG"
+                else entry * (1 - mfe_pct / 100.0)
+            )
         return FreeRunResult(
             sl_hit=sim["sl_hit"],
-            mfe_pct=sim["mfe_pct"],
-            mfe_price=sim["mfe_price"],
+            mfe_pct=mfe_pct,
+            mfe_price=mfe_price,
             result_pct=sim["result_pct"],
             current_price=sim["current_price"],
             hold_mins=sim["hold_mins"],
