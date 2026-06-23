@@ -29,7 +29,7 @@ from app.config import load_settings  # noqa: E402
 from app.data_sources.binance_klines import Kline  # noqa: E402
 from app.data_sources.free_run import FreeRunTracker, simulate_to_stop  # noqa: E402
 from app.main import app  # noqa: E402
-from app.routes.profit import _build_rows, _summary  # noqa: E402
+from app.routes.profit import _aggregates, _build_rows, _summary  # noqa: E402
 
 _MIN = 60_000
 
@@ -215,6 +215,35 @@ def test_summary_counts_best_mfe_and_giveback():
     # Give-back only counts the stopped row: 7.5 max profit − 3.0 realised.
     assert abs(s["avg_giveback"] - 4.5) < 1e-9
     assert s["degraded"] == 0
+
+
+def test_aggregates_group_giveback_by_exit_and_setup():
+    items = [
+        _sig(signal_id="A", status="INVALIDATED", setup_class="SR_FLIP_RETEST",
+             max_favorable_excursion_pct=10.0, pnl_pct=-0.3),
+        _sig(signal_id="B", status="PROFIT_LOCKED", setup_class="SR_FLIP_RETEST",
+             max_favorable_excursion_pct=0.0, pnl_pct=0.4),
+        _sig(signal_id="C", status="INVALIDATED", setup_class="VWAP_RECLAIM",
+             max_favorable_excursion_pct=2.0, pnl_pct=0.0),
+        # Engine-live row contributes no give-back → excluded from the roll-up.
+        _sig(signal_id="D", status="ACTIVE", setup_class="VWAP_RECLAIM"),
+    ]
+    rows, _ = asyncio.run(_build_rows(_req(items), "all"))
+    agg = _aggregates(rows)
+    assert agg["n"] == 3
+    assert abs(agg["total_giveback"] - 11.9) < 1e-9   # 10.3 - 0.4 + 2.0
+
+    by_exit = {g["key"]: g for g in agg["by_exit"]}
+    assert by_exit["INVALIDATED"]["n"] == 2
+    assert abs(by_exit["INVALIDATED"]["total_giveback"] - 12.3) < 1e-9  # 10.3 + 2.0
+    assert abs(by_exit["PROFIT_LOCKED"]["total_giveback"] - (-0.4)) < 1e-9
+    # Biggest total give-back sorts first.
+    assert agg["by_exit"][0]["key"] == "INVALIDATED"
+
+    by_setup = {g["key"]: g for g in agg["by_setup"]}
+    assert by_setup["SR_FLIP_RETEST"]["n"] == 2
+    assert abs(by_setup["SR_FLIP_RETEST"]["total_giveback"] - 9.9) < 1e-9  # 10.3 - 0.4
+    assert abs(by_setup["VWAP_RECLAIM"]["total_giveback"] - 2.0) < 1e-9
 
 
 def test_engine_error_surfaced():

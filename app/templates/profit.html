@@ -51,6 +51,39 @@
   <a class="btn" href="/profit/export.csv?view={{ view }}">Download CSV (current view)</a>
 </div>
 
+{% if aggregates.n %}
+{%- macro gb_tables(groups, label) -%}
+<table class="data-table">
+  <thead>
+    <tr><th>{{ label }}</th><th>n</th><th>Total give-back</th><th>Avg give-back</th><th>Avg max profit</th><th>Avg real P/L</th></tr>
+  </thead>
+  <tbody>
+  {% for g in groups %}
+    <tr>
+      <td>{{ g.key }}</td>
+      <td class="mono">{{ g.n }}</td>
+      <td class="mono {% if g.total_giveback > 0 %}neg{% elif g.total_giveback < 0 %}pos{% endif %}">{{ pct(g.total_giveback) }}</td>
+      <td class="mono {% if g.avg_giveback > 0 %}neg{% elif g.avg_giveback < 0 %}pos{% endif %}">{{ pct(g.avg_giveback) }}</td>
+      <td class="mono {% if g.avg_mfe > 0 %}pos{% endif %}">{{ pct(g.avg_mfe) }}</td>
+      <td class="mono {% if g.avg_real > 0 %}pos{% elif g.avg_real < 0 %}neg{% endif %}">{{ pct(g.avg_real) }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{%- endmacro -%}
+<section class="card">
+  <h2>Give-back roll-up <span class="small muted">— {{ aggregates.n }} engine-closed signals · total {{ pct(aggregates.total_giveback) }}</span></h2>
+  <p class="muted small">Give-back = held-to-stop max profit − what the engine's real exit realised.
+    <span class="neg">Positive</span> = the hold would have shown more (winners cut);
+    <span class="pos">negative</span> = the real exit beat holding (e.g. pre-TP banked a move a stop would have surrendered).
+    Rolled up over the engine-closed signals in this view.</p>
+  <h3 class="small">By real exit</h3>
+  {{ gb_tables(aggregates.by_exit, "Real exit") }}
+  <h3 class="small">By setup</h3>
+  {{ gb_tables(aggregates.by_setup, "Setup") }}
+</section>
+{% endif %}
+
 {% if rows %}
 <table class="data-table">
   <thead>

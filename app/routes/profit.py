@@ -105,6 +105,7 @@ def _row(entry: dict, fr: FreeRunResult) -> dict:
         "real_status": "" if real_is_active else raw_status,
         "real_pnl_pct": real_pnl,
         "giveback_pct": giveback,
+        "setup_class": entry.get("setup_class") or "UNKNOWN",
         "minutes_ago": entry.get("minutes_ago"),
         "created_relative": _format_relative(entry.get("timestamp")),
     }
@@ -168,6 +169,54 @@ def _summary(rows: list[dict]) -> dict:
     }
 
 
+def _group_giveback(rows: list[dict], key: str) -> list[dict]:
+    """Aggregate give-back over the engine-closed rows, grouped by ``key``.
+
+    Give-back is held-to-stop max profit minus what the engine's real exit
+    realised, so it only exists on rows the engine has actually closed. We sum
+    and average it per group, alongside the average max profit and realised P/L
+    that produced it, then sort by *total* give-back so the cohort leaving the
+    most on the table sits first. A positive total means the held-to-stop run
+    would have shown more than the real exit captured (winners cut); a negative
+    total means the real exit beat holding (e.g. pre-TP banking a move that a
+    pure stop would have surrendered).
+    """
+    buckets: dict[str, dict] = {}
+    for r in rows:
+        if r["real_is_active"] or r.get("giveback_pct") is None:
+            continue
+        name = str(r.get(key) or "UNKNOWN")
+        b = buckets.setdefault(name, {"n": 0, "gb": 0.0, "mfe": 0.0, "real": 0.0})
+        b["n"] += 1
+        b["gb"] += r["giveback_pct"]
+        b["mfe"] += r["mfe_pct"] or 0.0
+        b["real"] += r["real_pnl_pct"] or 0.0
+    out = []
+    for name, b in buckets.items():
+        n = b["n"]
+        out.append({
+            "key": name,
+            "n": n,
+            "total_giveback": b["gb"],
+            "avg_giveback": b["gb"] / n,
+            "avg_mfe": b["mfe"] / n,
+            "avg_real": b["real"] / n,
+        })
+    out.sort(key=lambda x: x["total_giveback"], reverse=True)
+    return out
+
+
+def _aggregates(rows: list[dict]) -> dict:
+    """Give-back rolled up by the engine's real exit type and by setup_class."""
+    closed = [r for r in rows if not r["real_is_active"] and r.get("giveback_pct") is not None]
+    return {
+        "n": len(closed),
+        "total_giveback": sum(r["giveback_pct"] for r in closed),
+        "by_exit": _group_giveback(rows, "real_status"),
+        "by_setup": _group_giveback(rows, "setup_class"),
+    }
+
+
 @router.get("/profit")
 async def profit(request: Request, view: str = Query("all", pattern="^(all|active|closed)$")):
     rows, error = await _build_rows(request, view)
@@ -178,6 +227,7 @@ async def profit(request: Request, view: str = Query("all", pattern="^(all|activ
             "request": request,
             "rows": rows,
             "summary": _summary(rows),
+            "aggregates": _aggregates(rows),
             "view": view,
             "error": error,
             "active": "profit",
@@ -186,7 +236,7 @@ async def profit(request: Request, view: str = Query("all", pattern="^(all|activ
 
 
 _EXPORT_COLS = [
-    "id", "symbol", "side", "entry", "sl", "current",
+    "id", "symbol", "side", "setup_class", "entry", "sl", "current",
     "result_pct", "mfe_pct", "max_price", "status", "hold_mins",
     "real_status", "real_pnl_pct", "giveback_pct", "degraded",
 ]
