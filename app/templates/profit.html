@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Profit — 360 CE Ops{% endblock %}
+
+{%- macro px(v) -%}
+{%- if v is none -%}—
+{%- elif v >= 1000 -%}{{ "%.2f"|format(v) }}
+{%- elif v >= 1 -%}{{ "%.4f"|format(v) }}
+{%- else -%}{{ "%.6f"|format(v) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro pct(v) -%}
+{%- if v is none -%}—{%- else -%}{{ "%+.2f"|format(v) }}%{%- endif -%}
+{%- endmacro -%}
+
+{% block content %}
+<h1>Signal Profit Tracker</h1>
+<p class="muted">Each signal runs until it terminates — the exit is its stop.
+  <strong>Current</strong> is live profit; <strong>Max profit</strong> is the best the
+  trade ever showed (peak-to-entry) before it gave any back.</p>
+
+{% if error %}
+<section class="card neg">Engine API error: {{ error }}</section>
+{% endif %}
+
+<form method="get" action="/profit" class="filters">
+  <label>View
+    <select name="view" onchange="this.form.submit()">
+      <option value="all"    {% if view == 'all' %}selected{% endif %}>all</option>
+      <option value="active" {% if view == 'active' %}selected{% endif %}>active only</option>
+      <option value="closed" {% if view == 'closed' %}selected{% endif %}>closed only</option>
+    </select>
+  </label>
+  <span class="muted">
+    {{ rows | length }} rows · {{ summary.active }} active · {{ summary.closed }} closed
+    {% if summary.best_mfe is not none %}· best max profit {{ pct(summary.best_mfe) }}{% endif %}
+  </span>
+</form>
+
+<div class="actions">
+  <a class="btn" href="/profit/export.csv?view={{ view }}">Download CSV (current view)</a>
+</div>
+
+{% if rows %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Symbol</th>
+      <th>Side</th>
+      <th>Entry</th>
+      <th>SL</th>
+      <th>Current</th>
+      <th>Cur P/L</th>
+      <th>Max</th>
+      <th>Max profit</th>
+      <th>Status</th>
+      <th>Age</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td>{{ r.symbol }}</td>
+      <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
+      <td class="mono">{{ px(r.entry) }}</td>
+      <td class="mono">{{ px(r.sl) }}</td>
+      <td class="mono">{{ px(r.current) }}</td>
+      <td class="mono {% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">{{ pct(r.pnl_pct) }}</td>
+      <td class="mono">{{ px(r.max_price) }}</td>
+      <td class="mono {% if r.mfe_pct is not none and r.mfe_pct > 0 %}pos{% endif %}">{{ pct(r.mfe_pct) }}</td>
+      <td>
+        {% if r.is_active %}<span class="pos">Active</span>
+        {% else %}<span class="muted" title="{{ r.close_reason }}">Closed{% if r.close_reason %} · {{ r.close_reason }}{% endif %}</span>{% endif %}
+      </td>
+      <td class="small muted">{{ r.created_relative or "—" }}</td>
+      <td><a href="/signals/{{ r.id }}">→</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+  <section class="card"><div class="muted">No signals to track yet.</div></section>
+{% endif %}
+{% endblock %}

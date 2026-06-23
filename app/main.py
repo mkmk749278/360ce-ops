@@ -33,6 +33,7 @@ from app.routes import (
     invalidations,
     performance,
     positions,
+    profit,
     pulse,
     raw_edge,
     signal_detail,
@@ -87,6 +88,7 @@ app.include_router(invalidations.router)
 app.include_router(performance.router)
 app.include_router(raw_edge.router)
 app.include_router(positions.router)
+app.include_router(profit.router)
 app.include_router(control.router)
 app.include_router(alerts.router)
 app.include_router(data_export.router)
