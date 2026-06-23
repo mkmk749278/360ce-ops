@@ -22,6 +22,13 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class Settings:
     session_secret: str
@@ -34,6 +41,12 @@ class Settings:
     diag_timeout_sec: int
     audit_log_path: str
     agent_redis_url: str
+    # Free-run ("held to SL") candle replay — Profit tab only.
+    binance_futures_rest_base: str
+    free_run_enabled: bool
+    free_run_max_lookback_min: int
+    free_run_cache_ttl_sec: int
+    free_run_concurrency: int
     port: int
     log_level: str
 
@@ -58,6 +71,18 @@ def load_settings() -> Settings:
         # Same Redis the monitoring agent writes alert state to — the web
         # dashboard reads it to render the alerts panel.
         agent_redis_url=_env("AGENT_REDIS_URL", "redis://360ce-ops-redis:6379/0"),
+        # Profit tab "held to SL" replay. We trade USDT-M futures, so the
+        # candles come from Binance Futures (fapi), matching the engine's
+        # own kline source. Public market data — no key, read-only.
+        binance_futures_rest_base=_env("BINANCE_FUTURES_REST_BASE", "https://fapi.binance.com"),
+        free_run_enabled=_env_bool("FREE_RUN_ENABLED", True),
+        # Cap the replay window so a signal whose stop is never touched can't
+        # drive an unbounded candle pull. 7 days of 1m candles ≈ 7 requests.
+        free_run_max_lookback_min=_env_int("FREE_RUN_MAX_LOOKBACK_MIN", 10080),
+        # Active rows are re-replayed at most this often; terminal (SL-hit)
+        # rows are immutable and cached for the process lifetime.
+        free_run_cache_ttl_sec=_env_int("FREE_RUN_CACHE_TTL_SEC", 30),
+        free_run_concurrency=_env_int("FREE_RUN_CONCURRENCY", 5),
         port=_env_int("OPS_PORT", 8000),
         log_level=_env("LOG_LEVEL", "INFO"),
     )
