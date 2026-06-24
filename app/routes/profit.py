@@ -198,6 +198,7 @@ def _row(entry: dict, fr: FreeRunResult) -> dict:
         "real_pnl_pct": real_pnl,
         "giveback_pct": giveback,
         "setup_class": entry.get("setup_class") or "UNKNOWN",
+        "confidence": _f(entry.get("confidence")),
         "minutes_ago": entry.get("minutes_ago"),
         "created_relative": _format_relative(entry.get("timestamp")),
     }
@@ -480,6 +481,88 @@ def _strategy_summary(rows: list[dict], fee_pct: float = 0.0) -> dict:
     }
 
 
+# Score bands for the confidence breakdown.  Boundaries chosen so each band
+# represents a meaningful quality tier: sub-threshold, mid, good, high.
+_SCORE_BANDS: list[tuple[float, float, str]] = [
+    (0.0,  0.3,   "< 0.30"),
+    (0.3,  0.5,   "0.30–0.50"),
+    (0.5,  0.7,   "0.50–0.70"),
+    (0.7,  1.001, "≥ 0.70"),
+]
+_BAND_ORDER = {label: i for i, (_, _, label) in enumerate(_SCORE_BANDS)}
+_BAND_ORDER["unknown"] = len(_SCORE_BANDS)
+
+
+def _conf_band(conf: float | None) -> str:
+    if conf is None:
+        return "unknown"
+    for lo, hi, label in _SCORE_BANDS:
+        if lo <= conf < hi:
+            return label
+    return _SCORE_BANDS[-1][2]
+
+
+def _stat_block(pcts: list[float]) -> dict:
+    if not pcts:
+        return {"n": 0, "avg": None, "total": None, "win_rate": None}
+    wins = sum(1 for v in pcts if v > 1e-9)
+    return {
+        "n": len(pcts),
+        "avg": sum(pcts) / len(pcts),
+        "total": sum(pcts),
+        "win_rate": wins / len(pcts) * 100.0,
+    }
+
+
+def _group_by(
+    rows: list[dict],
+    key_fn,
+    fee_pct: float,
+) -> list[dict]:
+    """Aggregate strategy vs engine real exits by an arbitrary grouping key.
+
+    Both sides are net of ``fee_pct`` (strategy_pct is already net; real_pnl_pct
+    is price-based from the engine so we deduct here for a fair comparison).
+    Only closed (non-active) rows participate — active signals haven't resolved.
+    """
+    buckets: dict[str, tuple[list[float], list[float]]] = {}
+    for r in rows:
+        if r["is_active"]:
+            continue
+        key = key_fn(r)
+        strat_list, real_list = buckets.setdefault(key, ([], []))
+        if r.get("strategy_pct") is not None:
+            strat_list.append(r["strategy_pct"])
+        if r.get("real_pnl_pct") is not None:
+            real_list.append(r["real_pnl_pct"] - fee_pct)
+    out = []
+    for key, (strat_list, real_list) in buckets.items():
+        s = _stat_block(strat_list)
+        rv = _stat_block(real_list)
+        edge = (
+            s["total"] - rv["total"]
+            if s["total"] is not None and rv["total"] is not None
+            else None
+        )
+        out.append({"key": key, "strategy": s, "real": rv, "edge": edge})
+    return out
+
+
+def _breakdown_scoreband(rows: list[dict], fee_pct: float) -> list[dict]:
+    """Strategy vs real exits broken down by confidence score band."""
+    result = _group_by(rows, lambda r: _conf_band(r.get("confidence")), fee_pct)
+    result.sort(key=lambda x: _BAND_ORDER.get(x["key"], 99))
+    return result
+
+
+def _breakdown_path(rows: list[dict], fee_pct: float) -> list[dict]:
+    """Strategy vs real exits broken down by setup_class (evaluator path)."""
+    result = _group_by(rows, lambda r: r.get("setup_class") or "UNKNOWN", fee_pct)
+    # Most-fired path first so the dominant setups surface at the top.
+    result.sort(key=lambda x: x["strategy"]["n"], reverse=True)
+    return result
+
+
 def _paginate(rows: list[dict], page: int) -> dict:
     """Split rows into the active head (always shown) + one page of closed rows.
 
@@ -544,6 +627,8 @@ async def profit(
             "summary": _summary(rows),
             "aggregates": _aggregates(rows),
             "strategy_summary": _strategy_summary(rows, fee),
+            "breakdown_scoreband": _breakdown_scoreband(rows, fee),
+            "breakdown_path": _breakdown_path(rows, fee),
             "strategies": [(k, s.label) for k, s in catalog.items()],
             "strategy": strategy,
             "strategy_label": catalog[strategy].label,
