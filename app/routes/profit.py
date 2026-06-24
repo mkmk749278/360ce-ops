@@ -279,6 +279,7 @@ async def _build_rows(
     window: str = "live",
     strategy_key: str = "tp1",
     target_pct: float = 1.0,
+    fee_pct: float = 0.07,
 ) -> tuple[list[dict], str | None]:
     """Fetch signals, replay each held-to-stop, reshape into rows.
 
@@ -294,6 +295,10 @@ async def _build_rows(
     (``app/data_sources/exit_sim.py``) layered onto each row — the "what if we
     only exited at TP/SL, no pre-TP, no invalidation" analysis. Computed from
     the engine's own recorded fields, so it covers every row (no Binance dep).
+
+    ``fee_pct`` is the round-trip trading fee (maker + taker, default 0.07%).
+    Deducted from closed-signal strategy P/L only (active signals haven't paid
+    the exit leg yet).
     """
     tracker = request.app.state.free_run
     strategy = get_strategy(strategy_key, target_pct)
@@ -350,13 +355,19 @@ async def _build_rows(
         inp = SignalInputs.from_dict(e)
         if inp is not None:
             ex = evaluate(inp, strategy)
-            row["strategy_pct"] = ex.result_pct
+            gross = ex.result_pct
+            # Deduct round-trip fee for closed signals (entry + exit both paid).
+            # Active signals haven't closed yet — don't pre-charge the exit leg.
+            net = (gross - fee_pct) if (gross is not None and not ex.is_active) else gross
+            row["strategy_pct"] = net
+            row["strategy_pct_gross"] = gross
             row["strategy_labels"] = "+".join(ex.filled_labels) if ex.filled_labels else ""
             row["strategy_approx"] = ex.approx
             row["strategy_active"] = ex.is_active
             row["strategy_sl_frac"] = ex.sl_frac
         else:
             row["strategy_pct"] = None
+            row["strategy_pct_gross"] = None
             row["strategy_labels"] = ""
             row["strategy_approx"] = False
             row["strategy_active"] = False
@@ -491,6 +502,13 @@ def _resolve_target_pct(raw: float | None) -> float:
     return max(0.1, min(20.0, raw))
 
 
+def _resolve_fee_pct(raw: float | None) -> float:
+    """Clamp round-trip fee to 0..2% band, default 0.07 (Binance std maker+taker)."""
+    if raw is None:
+        return 0.07
+    return max(0.0, min(2.0, raw))
+
+
 @router.get("/profit")
 async def profit(
     request: Request,
@@ -498,13 +516,15 @@ async def profit(
     window: str = Query("live", pattern="^(live|7d|30d|all)$"),
     strategy: str = Query("tp1"),
     target_pct: float = Query(1.0),
+    fee_pct: float = Query(0.07),
     page: int = Query(1, ge=1),
 ):
     target = _resolve_target_pct(target_pct)
+    fee = _resolve_fee_pct(fee_pct)
     catalog = build_catalog(target)
     if strategy not in catalog:
         strategy = "tp1"
-    rows, error = await _build_rows(request, view, window, strategy, target)
+    rows, error = await _build_rows(request, view, window, strategy, target, fee)
     pagination = _paginate(rows, page)
     templates = request.app.state.templates
     return templates.TemplateResponse(
@@ -519,6 +539,7 @@ async def profit(
             "strategy": strategy,
             "strategy_label": catalog[strategy].label,
             "target_pct": target,
+            "fee_pct": fee,
             "pagination": pagination,
             "view": view,
             "window": window,
@@ -532,7 +553,7 @@ _EXPORT_COLS = [
     "id", "symbol", "side", "setup_class", "entry", "sl", "tp1", "tp2", "tp3",
     "current", "result_pct", "mfe_pct", "max_price", "tp_reach", "status", "hold_mins",
     "real_status", "real_pnl_pct", "giveback_pct",
-    "strategy_pct", "strategy_labels", "strategy_approx", "degraded",
+    "strategy_pct", "strategy_pct_gross", "strategy_labels", "strategy_approx", "degraded",
 ]
 
 
@@ -543,11 +564,13 @@ async def profit_export(
     window: str = Query("live", pattern="^(live|7d|30d|all)$"),
     strategy: str = Query("tp1"),
     target_pct: float = Query(1.0),
+    fee_pct: float = Query(0.07),
 ):
     """Download the full (filtered) table as CSV — every row, not paginated."""
     target = _resolve_target_pct(target_pct)
+    fee = _resolve_fee_pct(fee_pct)
     if strategy not in build_catalog(target):
         strategy = "tp1"
-    rows, _ = await _build_rows(request, view, window, strategy, target)
+    rows, _ = await _build_rows(request, view, window, strategy, target, fee)
     data = [[r.get(col) for col in _EXPORT_COLS] for r in rows]
     return csv_response(f"signal_profit_{window}_{view}_{strategy}", _EXPORT_COLS, data)
