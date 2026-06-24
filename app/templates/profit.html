@@ -33,6 +33,14 @@
 {% endif %}
 
 <form method="get" action="/profit" class="filters">
+  <label>Window
+    <select name="window" onchange="this.form.submit()">
+      <option value="live" {% if window == 'live' %}selected{% endif %}>live (recent ~500)</option>
+      <option value="7d"   {% if window == '7d' %}selected{% endif %}>last 7 days</option>
+      <option value="30d"  {% if window == '30d' %}selected{% endif %}>last 30 days</option>
+      <option value="all"  {% if window == 'all' %}selected{% endif %}>all time</option>
+    </select>
+  </label>
   <label>View
     <select name="view" onchange="this.form.submit()">
       <option value="all"    {% if view == 'all' %}selected{% endif %}>all</option>
@@ -47,8 +55,17 @@
   </span>
 </form>
 
+{% if window != 'live' %}
+<section class="card small muted">
+  <strong>Historical window ({{ window }}):</strong> data from
+  <code>signal_performance.json</code> — TP1/TP2 price columns unavailable
+  (not stored in performance records); <em>Reached</em> comes from recorded
+  <code>hit_tp</code> level instead. Active positions are live-window only.
+</section>
+{% endif %}
+
 <div class="actions">
-  <a class="btn" href="/profit/export.csv?view={{ view }}">Download CSV (current view)</a>
+  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}">Download CSV (current view)</a>
 </div>
 
 {% if aggregates.n %}
