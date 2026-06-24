@@ -120,6 +120,56 @@
   {% endif %}
 </section>
 
+{%- macro breakdown_table(rows, caption) -%}
+{% if rows %}
+<section class="card">
+  <h2>{{ caption }}: <span class="muted small">{{ strategy_label }} vs engine real exits · net of {{ '%g'|format(fee_pct) }}% fee</span></h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>{{ caption }}</th>
+        <th>n</th>
+        <th colspan="3" style="text-align:center;border-left:1px solid #333">{{ strategy_label }}</th>
+        <th colspan="3" style="text-align:center;border-left:1px solid #333">Engine real</th>
+        <th style="border-left:1px solid #333">Edge</th>
+      </tr>
+      <tr class="small muted">
+        <th></th><th></th>
+        <th style="border-left:1px solid #333">Avg</th><th>Total</th><th>Win%</th>
+        <th style="border-left:1px solid #333">Avg</th><th>Total</th><th>Win%</th>
+        <th style="border-left:1px solid #333" title="Strategy total − real total (net of fee). Positive = strategy wins."></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for g in rows %}
+    {% set s = g.strategy %}{% set r = g.real %}
+      <tr>
+        <td class="small">{{ g.key }}</td>
+        <td class="mono muted">{{ s.n }}</td>
+        <td class="mono {% if s.avg is not none and s.avg > 0 %}pos{% elif s.avg is not none and s.avg < 0 %}neg{% endif %}" style="border-left:1px solid #333">{{ pct(s.avg) }}</td>
+        <td class="mono {% if s.total is not none and s.total > 0 %}pos{% elif s.total is not none and s.total < 0 %}neg{% endif %}">{{ pct(s.total) }}</td>
+        <td class="mono muted">{% if s.win_rate is not none %}{{ "%.0f"|format(s.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="mono {% if r.avg is not none and r.avg > 0 %}pos{% elif r.avg is not none and r.avg < 0 %}neg{% endif %}" style="border-left:1px solid #333">{{ pct(r.avg) }}</td>
+        <td class="mono {% if r.total is not none and r.total > 0 %}pos{% elif r.total is not none and r.total < 0 %}neg{% endif %}">{{ pct(r.total) }}</td>
+        <td class="mono muted">{% if r.win_rate is not none %}{{ "%.0f"|format(r.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="mono {% if g.edge is not none and g.edge > 0 %}pos{% elif g.edge is not none and g.edge < 0 %}neg{% endif %}" style="border-left:1px solid #333">{{ pct(g.edge) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin-top:.5rem">Edge = strategy total − engine real total (both net of fee). <span class="pos">Positive</span> = this strategy would have beaten the engine's exits on these signals. <span class="neg">Negative</span> = engine exits were better.</p>
+</section>
+{% endif %}
+{%- endmacro -%}
+
+{% if breakdown_scoreband %}
+{{ breakdown_table(breakdown_scoreband, "Score band") }}
+{% endif %}
+
+{% if breakdown_path %}
+{{ breakdown_table(breakdown_path, "Signal path") }}
+{% endif %}
+
 {% if window != 'live' %}
 <section class="card small muted">
   <strong>Historical window ({{ window }}):</strong> data from
