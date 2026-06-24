@@ -28,6 +28,20 @@ The replay is ``app/data_sources/free_run.py``; the candles come from Binance
 Futures public market data. Read-only — this route never mutates engine state.
 When candles can't be fetched the row degrades to the engine's own numbers and
 the page says so.
+
+**Exit-method test** (``app/data_sources/exit_sim.py``)
+
+Layered on top: a what-if where each signal is closed *only* at TP or SL — no
+pre-TP banking, no invalidation — under a selectable scaled-exit strategy (e.g.
+100% at TP1, a flat +1%, or 50% TP1 / 50% TP2). It answers the owner's question
+"are the entries fine and the exit method wrong?": the headline card compares
+the strategy's net P/L to the engine's real exits over the same signals. This
+is computed entirely from the engine's recorded ground truth (hit_tp,
+first-touch timestamps, MFE/MAE, TP-based PnL), so it needs **no** Binance
+candles and fills every row — including the ones the held-to-stop replay can't.
+
+The closed-signal history is paginated (50/page); active signals are pinned and
+always shown.
 """
 from __future__ import annotations
 
@@ -36,6 +50,12 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
+from app.data_sources.exit_sim import (
+    SignalInputs,
+    build_catalog,
+    evaluate,
+    get_strategy,
+)
 from app.data_sources.free_run import FreeRunResult
 from app.reports import csv_response
 
@@ -46,6 +66,10 @@ router = APIRouter()
 _ACTIVE_STATUSES = frozenset({"ACTIVE", "OPEN", "RUNNING"})
 
 _WINDOW_DAYS: dict[str, int | None] = {"7d": 7, "30d": 30, "all": None}
+
+# Closed-signal history is paginated; active signals are always shown (pinned)
+# regardless of page, per the owner's "default to last 50 + keep active" ask.
+_PAGE_SIZE = 50
 
 
 def _f(value: Any) -> float | None:
@@ -230,9 +254,18 @@ def _from_perf_record(r: dict) -> dict:
         # hit_tp: which TP was reached (0=none,1=TP1,2=TP2,3=TP3); used as
         # tp_reach fallback in _row() when TP prices are absent.
         "hit_tp": r.get("hit_tp") or r.get("signal_quality_hit_tp"),
+        "hit_sl": r.get("hit_sl"),
         "status": status,
         "pnl_pct": r.get("pnl_pct"),
         "max_favorable_excursion_pct": r.get("max_favorable_excursion_pct", 0.0),
+        "max_adverse_excursion_pct": r.get("max_adverse_excursion_pct", 0.0),
+        # Engine's TP-based PnL + first-touch ordering — the ground truth the
+        # exit-strategy simulator uses to price TP legs and resolve TP-vs-SL
+        # order without needing Binance candles (covers every row).
+        "signal_quality_pnl_pct": r.get("signal_quality_pnl_pct"),
+        "signal_quality_hit_tp": r.get("signal_quality_hit_tp"),
+        "first_tp_touch_timestamp": r.get("first_tp_touch_timestamp"),
+        "first_sl_touch_timestamp": r.get("first_sl_touch_timestamp"),
         "setup_class": r.get("setup_class") or "UNKNOWN",
         "confidence": r.get("confidence"),
         "timestamp": ts_iso,
@@ -241,7 +274,11 @@ def _from_perf_record(r: dict) -> dict:
 
 
 async def _build_rows(
-    request: Request, view: str, window: str = "live"
+    request: Request,
+    view: str,
+    window: str = "live",
+    strategy_key: str = "tp1",
+    target_pct: float = 1.0,
 ) -> tuple[list[dict], str | None]:
     """Fetch signals, replay each held-to-stop, reshape into rows.
 
@@ -252,8 +289,14 @@ async def _build_rows(
 
     ``view`` filters to active / stopped / all on the *held-to-stop* status.
     Active rows sort first, then by recency.
+
+    ``strategy_key`` + ``target_pct`` select the scaled-exit what-if strategy
+    (``app/data_sources/exit_sim.py``) layered onto each row — the "what if we
+    only exited at TP/SL, no pre-TP, no invalidation" analysis. Computed from
+    the engine's own recorded fields, so it covers every row (no Binance dep).
     """
     tracker = request.app.state.free_run
+    strategy = get_strategy(strategy_key, target_pct)
     error: str | None = None
 
     if window == "live":
@@ -302,7 +345,23 @@ async def _build_rows(
         fr = results.get(sid)
         if fr is None:
             continue
-        rows.append(_row(e, fr))
+        row = _row(e, fr)
+        # Layer the scaled-exit what-if result onto the row.
+        inp = SignalInputs.from_dict(e)
+        if inp is not None:
+            ex = evaluate(inp, strategy)
+            row["strategy_pct"] = ex.result_pct
+            row["strategy_labels"] = "+".join(ex.filled_labels) if ex.filled_labels else ""
+            row["strategy_approx"] = ex.approx
+            row["strategy_active"] = ex.is_active
+            row["strategy_sl_frac"] = ex.sl_frac
+        else:
+            row["strategy_pct"] = None
+            row["strategy_labels"] = ""
+            row["strategy_approx"] = False
+            row["strategy_active"] = False
+            row["strategy_sl_frac"] = 0.0
+        rows.append(row)
 
     if view == "active":
         rows = [r for r in rows if r["is_active"]]
@@ -365,21 +424,102 @@ def _aggregates(rows: list[dict]) -> dict:
     }
 
 
+def _strategy_summary(rows: list[dict]) -> dict:
+    """Net read-out for the selected what-if exit strategy vs the engine's real
+    exits, over the closed rows in this view.
+
+    This is the headline that answers "is the exit method the problem?": if the
+    strategy's average/total beats the engine's real average/total on the same
+    signals, the entries were fine and the engine's exits gave the edge back.
+    """
+    closed = [r for r in rows if not r["is_active"]]
+    strat = [r["strategy_pct"] for r in closed if r.get("strategy_pct") is not None]
+    real = [r["real_pnl_pct"] for r in closed if r.get("real_pnl_pct") is not None]
+
+    def _stat(vals: list[float]) -> dict:
+        if not vals:
+            return {"n": 0, "avg": None, "total": None, "win_rate": None}
+        wins = sum(1 for v in vals if v > 1e-9)
+        return {
+            "n": len(vals),
+            "avg": sum(vals) / len(vals),
+            "total": sum(vals),
+            "win_rate": wins / len(vals) * 100.0,
+        }
+
+    s = _stat(strat)
+    r = _stat(real)
+    edge = None
+    if s["total"] is not None and r["total"] is not None:
+        edge = s["total"] - r["total"]
+    return {
+        "strategy": s,
+        "real": r,
+        "edge_total": edge,
+        "approx": sum(1 for row in closed if row.get("strategy_approx")),
+    }
+
+
+def _paginate(rows: list[dict], page: int) -> dict:
+    """Split rows into the active head (always shown) + one page of closed rows.
+
+    Active signals are never paged out — they're the live state the owner wants
+    in view at all times. Closed signals fill the rest of the page (50 each).
+    """
+    active = [r for r in rows if r["is_active"]]
+    closed = [r for r in rows if not r["is_active"]]
+    total_pages = max(1, (len(closed) + _PAGE_SIZE - 1) // _PAGE_SIZE)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * _PAGE_SIZE
+    page_closed = closed[start:start + _PAGE_SIZE]
+    # Active rows pin to the top of page 1; later pages show closed only.
+    page_rows = (active + page_closed) if page == 1 else page_closed
+    return {
+        "rows": page_rows,
+        "page": page,
+        "total_pages": total_pages,
+        "n_active": len(active),
+        "n_closed": len(closed),
+        "showing": len(page_rows),
+    }
+
+
+def _resolve_target_pct(raw: float | None) -> float:
+    """Clamp the fixed-target percent to a sane band (0.1%..20%), default 1%."""
+    if raw is None:
+        return 1.0
+    return max(0.1, min(20.0, raw))
+
+
 @router.get("/profit")
 async def profit(
     request: Request,
     view: str = Query("all", pattern="^(all|active|closed)$"),
     window: str = Query("live", pattern="^(live|7d|30d|all)$"),
+    strategy: str = Query("tp1"),
+    target_pct: float = Query(1.0),
+    page: int = Query(1, ge=1),
 ):
-    rows, error = await _build_rows(request, view, window)
+    target = _resolve_target_pct(target_pct)
+    catalog = build_catalog(target)
+    if strategy not in catalog:
+        strategy = "tp1"
+    rows, error = await _build_rows(request, view, window, strategy, target)
+    pagination = _paginate(rows, page)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "profit.html",
         {
             "request": request,
-            "rows": rows,
+            "rows": pagination["rows"],
             "summary": _summary(rows),
             "aggregates": _aggregates(rows),
+            "strategy_summary": _strategy_summary(rows),
+            "strategies": [(k, s.label) for k, s in catalog.items()],
+            "strategy": strategy,
+            "strategy_label": catalog[strategy].label,
+            "target_pct": target,
+            "pagination": pagination,
             "view": view,
             "window": window,
             "error": error,
@@ -391,7 +531,8 @@ async def profit(
 _EXPORT_COLS = [
     "id", "symbol", "side", "setup_class", "entry", "sl", "tp1", "tp2", "tp3",
     "current", "result_pct", "mfe_pct", "max_price", "tp_reach", "status", "hold_mins",
-    "real_status", "real_pnl_pct", "giveback_pct", "degraded",
+    "real_status", "real_pnl_pct", "giveback_pct",
+    "strategy_pct", "strategy_labels", "strategy_approx", "degraded",
 ]
 
 
@@ -400,8 +541,13 @@ async def profit_export(
     request: Request,
     view: str = Query("all", pattern="^(all|active|closed)$"),
     window: str = Query("live", pattern="^(live|7d|30d|all)$"),
+    strategy: str = Query("tp1"),
+    target_pct: float = Query(1.0),
 ):
-    """Download the (filtered) held-to-stop table as CSV — same shape as the page."""
-    rows, _ = await _build_rows(request, view, window)
+    """Download the full (filtered) table as CSV — every row, not paginated."""
+    target = _resolve_target_pct(target_pct)
+    if strategy not in build_catalog(target):
+        strategy = "tp1"
+    rows, _ = await _build_rows(request, view, window, strategy, target)
     data = [[r.get(col) for col in _EXPORT_COLS] for r in rows]
-    return csv_response(f"signal_profit_{window}_{view}", _EXPORT_COLS, data)
+    return csv_response(f"signal_profit_{window}_{view}_{strategy}", _EXPORT_COLS, data)
