@@ -48,12 +48,69 @@
       <option value="closed" {% if view == 'closed' %}selected{% endif %}>stopped only</option>
     </select>
   </label>
+  <label>Exit strategy
+    <select name="strategy" onchange="this.form.submit()">
+      {% for key, label in strategies %}
+      <option value="{{ key }}" {% if strategy == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Fixed target %
+    <input type="number" name="target_pct" value="{{ '%g'|format(target_pct) }}"
+           step="0.1" min="0.1" max="20" style="width:5em"
+           onchange="this.form.submit()">
+  </label>
   <span class="muted">
-    {{ rows | length }} rows · {{ summary.active }} active · {{ summary.closed }} stopped
+    {{ summary.active }} active · {{ summary.closed }} stopped
     {% if summary.best_mfe is not none %}· best max profit {{ pct(summary.best_mfe) }}{% endif %}
     {% if summary.avg_giveback is not none %}· avg give-back {{ pct(summary.avg_giveback) }}{% endif %}
   </span>
 </form>
+
+{% set ss = strategy_summary %}
+<section class="card">
+  <h2>Exit-method test: <span class="pos">{{ strategy_label }}</span></h2>
+  <p class="muted small">If we closed every signal <strong>only at TP or SL</strong>
+    (no pre-TP banking, no invalidation) under this strategy — how would it compare
+    to what the engine's real exits did, on the same signals? Computed from the
+    engine's own recorded TP-hits / first-touch / MFE-MAE, so it covers every row
+    (no Binance dependency).{% if ss.approx %} <em>{{ ss.approx }} older row(s) price TP
+    legs from the engine's recorded TP-based PnL (no stored TP price) — marked
+    <span class="muted">≈</span>.</em>{% endif %}</p>
+  {% if ss.strategy.n %}
+  <table class="data-table">
+    <thead>
+      <tr><th>Exit method</th><th>n</th><th>Avg P/L</th><th>Win rate</th><th>Total P/L</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>{{ strategy_label }}</strong> (TP/SL only)</td>
+        <td class="mono">{{ ss.strategy.n }}</td>
+        <td class="mono {% if ss.strategy.avg > 0 %}pos{% elif ss.strategy.avg < 0 %}neg{% endif %}">{{ pct(ss.strategy.avg) }}</td>
+        <td class="mono">{{ "%.0f"|format(ss.strategy.win_rate) }}%</td>
+        <td class="mono {% if ss.strategy.total > 0 %}pos{% elif ss.strategy.total < 0 %}neg{% endif %}">{{ pct(ss.strategy.total) }}</td>
+      </tr>
+      {% if ss.real.n %}
+      <tr>
+        <td class="muted">Engine real exits</td>
+        <td class="mono muted">{{ ss.real.n }}</td>
+        <td class="mono {% if ss.real.avg > 0 %}pos{% elif ss.real.avg < 0 %}neg{% endif %}">{{ pct(ss.real.avg) }}</td>
+        <td class="mono muted">{{ "%.0f"|format(ss.real.win_rate) }}%</td>
+        <td class="mono {% if ss.real.total > 0 %}pos{% elif ss.real.total < 0 %}neg{% endif %}">{{ pct(ss.real.total) }}</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+  {% if ss.edge_total is not none %}
+  <p class="small">Edge of this exit method over the engine's real exits:
+    <strong class="{% if ss.edge_total > 0 %}pos{% elif ss.edge_total < 0 %}neg{% endif %}">{{ pct(ss.edge_total) }}</strong> total.
+    {% if ss.edge_total > 0 %}The simple TP/SL exit would have done better — evidence the exit logic, not the entries, is giving back the edge.
+    {% else %}The engine's real exits beat this simple rule on these signals.{% endif %}</p>
+  {% endif %}
+  {% else %}
+  <p class="muted">No closed signals in this view to score yet.</p>
+  {% endif %}
+</section>
 
 {% if window != 'live' %}
 <section class="card small muted">
@@ -65,7 +122,7 @@
 {% endif %}
 
 <div class="actions">
-  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}">Download CSV (current view)</a>
+  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}">Download CSV (all rows, current view)</a>
 </div>
 
 {% if aggregates.n %}
@@ -116,6 +173,7 @@
       <th>Max price</th>
       <th>Max profit</th>
       <th>Reached</th>
+      <th title="{{ strategy_label }} — exit at TP/SL only, no pre-TP/invalidation">Strategy P/L</th>
       <th>Held status</th>
       <th>Real exit</th>
       <th>Give-back</th>
@@ -137,6 +195,10 @@
       <td class="mono">{{ px(r.max_price) }}</td>
       <td class="mono {% if r.mfe_pct is not none and r.mfe_pct > 0 %}pos{% endif %}">{{ pct(r.mfe_pct) }}</td>
       <td class="small {% if r.tp_reach %}pos{% else %}muted{% endif %}">{{ r.tp_reach or "—" }}</td>
+      <td class="mono {% if r.strategy_pct is not none and r.strategy_pct > 0 %}pos{% elif r.strategy_pct is not none and r.strategy_pct < 0 %}neg{% endif %}"
+          title="{% if r.strategy_labels %}filled: {{ r.strategy_labels }}{% endif %}{% if r.strategy_sl_frac %} · {{ '%.0f'|format(r.strategy_sl_frac * 100) }}% stopped{% endif %}">
+        {{ pct(r.strategy_pct) }}{% if r.strategy_approx %} <span class="small muted" title="TP leg priced from engine TP-based PnL (no stored TP price)">≈</span>{% endif %}
+      </td>
       <td>
         {% if r.is_active %}<span class="pos">Active{% if r.capped %} <span class="small muted" title="Stop not touched within the replay window">·capped</span>{% endif %}</span>
         {% else %}<span class="muted">Stopped</span>{% endif %}
@@ -152,6 +214,21 @@
   {% endfor %}
   </tbody>
 </table>
+
+{% set pg = pagination %}
+<div class="filters" style="align-items:center">
+  <span class="muted small">
+    Showing {{ pg.showing }} of {{ pg.n_closed }} stopped
+    {% if pg.page == 1 and pg.n_active %}+ {{ pg.n_active }} active (pinned){% endif %}
+    · page {{ pg.page }}/{{ pg.total_pages }}
+  </span>
+  {% if pg.total_pages > 1 %}
+  <span>
+    {% if pg.page > 1 %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&page={{ pg.page - 1 }}">← prev</a>{% endif %}
+    {% if pg.page < pg.total_pages %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&page={{ pg.page + 1 }}">next →</a>{% endif %}
+  </span>
+  {% endif %}
+</div>
 {% else %}
   <section class="card"><div class="muted">No signals to track yet.</div></section>
 {% endif %}

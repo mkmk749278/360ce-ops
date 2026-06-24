@@ -29,7 +29,13 @@ from app.config import load_settings  # noqa: E402
 from app.data_sources.binance_klines import Kline  # noqa: E402
 from app.data_sources.free_run import FreeRunTracker, simulate_to_stop  # noqa: E402
 from app.main import app  # noqa: E402
-from app.routes.profit import _aggregates, _build_rows, _summary  # noqa: E402
+from app.routes.profit import (  # noqa: E402
+    _aggregates,
+    _build_rows,
+    _paginate,
+    _strategy_summary,
+    _summary,
+)
 
 _MIN = 60_000
 
@@ -323,3 +329,61 @@ def test_profit_route_renders_rows(monkeypatch):
         assert "ETHUSDT" in r.text
         # max profit (engine MFE 5%) rendered in the Max profit column
         assert "+5.00%" in r.text
+        # The exit-method test card renders with the default strategy.
+        assert "Exit-method test" in r.text
+
+
+# --------------------------------------------------------------------------- #
+# Pagination — active pinned, closed paged 50/page
+# --------------------------------------------------------------------------- #
+
+def _prow(i, active):
+    return {"id": f"S{i}", "is_active": active, "minutes_ago": i,
+            "strategy_pct": None, "strategy_approx": False, "real_pnl_pct": None}
+
+
+def test_paginate_pins_active_and_pages_closed():
+    rows = [_prow(0, True), _prow(1, True)] + [_prow(10 + i, False) for i in range(120)]
+    p1 = _paginate(rows, 1)
+    assert p1["n_active"] == 2
+    assert p1["n_closed"] == 120
+    assert p1["total_pages"] == 3            # 120 / 50 → 3 pages
+    # Page 1 = 2 active (pinned) + first 50 closed.
+    assert p1["showing"] == 52
+    assert p1["rows"][0]["is_active"] is True
+
+    p2 = _paginate(rows, 2)
+    # Later pages show closed only (active not repeated).
+    assert all(not r["is_active"] for r in p2["rows"])
+    assert p2["showing"] == 50
+
+    p3 = _paginate(rows, 3)
+    assert p3["showing"] == 20
+
+    # Out-of-range page clamps to the last page.
+    assert _paginate(rows, 99)["page"] == 3
+
+
+def test_paginate_handles_empty():
+    p = _paginate([], 1)
+    assert p["total_pages"] == 1 and p["showing"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Strategy summary — strategy vs engine real, edge
+# --------------------------------------------------------------------------- #
+
+def test_strategy_summary_compares_to_engine_real():
+    rows = [
+        {"is_active": False, "strategy_pct": 2.0, "real_pnl_pct": -0.5, "strategy_approx": True},
+        {"is_active": False, "strategy_pct": -2.0, "real_pnl_pct": -1.0, "strategy_approx": False},
+        # Active row is excluded from the closed-signal scoring.
+        {"is_active": True, "strategy_pct": 1.0, "real_pnl_pct": None, "strategy_approx": False},
+    ]
+    s = _strategy_summary(rows)
+    assert s["strategy"]["n"] == 2
+    assert abs(s["strategy"]["total"] - 0.0) < 1e-9       # 2 - 2
+    assert abs(s["real"]["total"] - (-1.5)) < 1e-9        # -0.5 - 1.0
+    # Strategy total (0) beats engine real total (-1.5) → positive edge.
+    assert abs(s["edge_total"] - 1.5) < 1e-9
+    assert s["approx"] == 1
