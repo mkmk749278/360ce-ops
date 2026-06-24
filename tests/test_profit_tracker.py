@@ -199,7 +199,7 @@ def _req(items, tracker=None):
         tracker, _ = _tracker(enabled=False)
 
     class _API:
-        async def signals(self, status=None, setup_class=None):
+        async def signals(self, status=None, setup_class=None, limit=None):
             return {"items": items, "total": len(items)}
 
     return types.SimpleNamespace(
@@ -280,7 +280,7 @@ def test_engine_error_surfaced():
         app=types.SimpleNamespace(
             state=types.SimpleNamespace(
                 engine_api=types.SimpleNamespace(
-                    signals=lambda status=None, setup_class=None: _err()
+                    signals=lambda status=None, setup_class=None, limit=None: _err()
                 ),
                 free_run=tracker,
             )
@@ -312,7 +312,7 @@ def test_profit_route_renders_rows(monkeypatch):
         # Force the engine-values path so the render never reaches Binance.
         client.app.state.free_run._enabled = False
 
-        async def _fake_signals(self, status=None, setup_class=None):
+        async def _fake_signals(self, status=None, setup_class=None, limit=None):
             return {"items": [_sig(signal_id="REND", symbol="ETHUSDT")], "total": 1}
 
         from app.data_sources.engine_api import EngineApiClient
