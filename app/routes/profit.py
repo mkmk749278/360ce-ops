@@ -435,9 +435,14 @@ def _aggregates(rows: list[dict]) -> dict:
     }
 
 
-def _strategy_summary(rows: list[dict]) -> dict:
+def _strategy_summary(rows: list[dict], fee_pct: float = 0.0) -> dict:
     """Net read-out for the selected what-if exit strategy vs the engine's real
     exits, over the closed rows in this view.
+
+    Both sides are net of ``fee_pct`` (round-trip: maker entry + taker close)
+    so the comparison is apples-to-apples. ``strategy_pct`` on each row is
+    already net of fee (applied in ``_build_rows``); ``real_pnl_pct`` comes
+    from the engine's price-based P/L (no fee deducted), so we deduct here.
 
     This is the headline that answers "is the exit method the problem?": if the
     strategy's average/total beats the engine's real average/total on the same
@@ -445,7 +450,11 @@ def _strategy_summary(rows: list[dict]) -> dict:
     """
     closed = [r for r in rows if not r["is_active"]]
     strat = [r["strategy_pct"] for r in closed if r.get("strategy_pct") is not None]
-    real = [r["real_pnl_pct"] for r in closed if r.get("real_pnl_pct") is not None]
+    real = [
+        r["real_pnl_pct"] - fee_pct
+        for r in closed
+        if r.get("real_pnl_pct") is not None
+    ]
 
     def _stat(vals: list[float]) -> dict:
         if not vals:
@@ -534,7 +543,7 @@ async def profit(
             "rows": pagination["rows"],
             "summary": _summary(rows),
             "aggregates": _aggregates(rows),
-            "strategy_summary": _strategy_summary(rows),
+            "strategy_summary": _strategy_summary(rows, fee),
             "strategies": [(k, s.label) for k, s in catalog.items()],
             "strategy": strategy,
             "strategy_label": catalog[strategy].label,
