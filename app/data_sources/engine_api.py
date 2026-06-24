@@ -76,12 +76,19 @@ class EngineApiClient:
     async def auto_mode(self) -> Any:
         return await self._get("/api/auto-mode")
 
-    async def signals(self, status: str | None = None, setup_class: str | None = None) -> Any:
-        params: dict[str, str] = {}
+    async def signals(
+        self,
+        status: str | None = None,
+        setup_class: str | None = None,
+        limit: int | None = None,
+    ) -> Any:
+        params: dict[str, Any] = {}
         if status:
             params["status"] = status
         if setup_class:
             params["setup_class"] = setup_class
+        if limit is not None:
+            params["limit"] = limit
         return await self._get("/api/signals", **params)
 
     async def signal(self, signal_id: str) -> Any:

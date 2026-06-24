@@ -155,7 +155,7 @@ async def _build_rows(request: Request, view: str) -> tuple[list[dict], str | No
     """
     api = request.app.state.engine_api
     tracker = request.app.state.free_run
-    payload = await api.signals(status="all")
+    payload = await api.signals(status="all", limit=500)
 
     error: str | None = None
     if isinstance(payload, dict) and payload.get("error"):
