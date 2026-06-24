@@ -307,9 +307,10 @@ def build_catalog(target_pct: float = 1.0) -> dict[str, Strategy]:
     tp1, tp2, tp3 = Target(_TP_LEVEL, 1), Target(_TP_LEVEL, 2), Target(_TP_LEVEL, 3)
     strategies = [
         Strategy("tp1", "TP1 full (100% @ TP1)", (Leg(1.0, tp1),)),
-        Strategy("flat", f"Flat +{g:g}% (100%)", (Leg(1.0, fixed),)),
+        Strategy("flat", f"Pre-TP only +{g:g}% · no invalidation", (Leg(1.0, fixed),)),
         Strategy("tp1_tp2", "50% TP1 · 50% TP2", (Leg(0.5, tp1), Leg(0.5, tp2))),
-        Strategy("flat_tp1", f"50% @ +{g:g}% · 50% TP1", (Leg(0.5, fixed), Leg(0.5, tp1))),
+        Strategy("flat_tp1", f"Pre-TP +{g:g}% · TP1 · no invalidation",
+                 (Leg(0.5, fixed), Leg(0.5, tp1))),
         Strategy("tp1_tp2_tp3", "TP1/TP2/TP3 thirds",
                  (Leg(1 / 3, tp1), Leg(1 / 3, tp2), Leg(1 / 3, tp3))),
     ]
