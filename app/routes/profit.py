@@ -14,6 +14,16 @@ cannot:
 * **Real exit** — what the engine *actually* did, shown muted alongside, so the
   give-back (max profit vs what the real exit captured) is visible at a glance.
 
+**Window modes**
+
+* ``live`` (default) — live engine API snapshot, shows active positions + recent
+  closed history (up to 500 signals from the engine's in-memory cache).
+* ``7d`` / ``30d`` / ``all`` — read ``signal_performance.json`` from the mounted
+  data volume.  This file has the complete persistent record (potentially
+  thousands of signals) and supports date-range filtering.  TP1/TP2 price
+  columns are unavailable in performance records (not stored there), but the
+  "Reached" column is filled from ``hit_tp`` (which TP level was actually hit).
+
 The replay is ``app/data_sources/free_run.py``; the candles come from Binance
 Futures public market data. Read-only — this route never mutates engine state.
 When candles can't be fetched the row degrades to the engine's own numbers and
@@ -35,6 +45,8 @@ router = APIRouter()
 # "Real exit" column — the held-to-stop status comes from the replay).
 _ACTIVE_STATUSES = frozenset({"ACTIVE", "OPEN", "RUNNING"})
 
+_WINDOW_DAYS: dict[str, int | None] = {"7d": 7, "30d": 30, "all": None}
+
 
 def _f(value: Any) -> float | None:
     if value is None or value == "":
@@ -42,6 +54,17 @@ def _f(value: Any) -> float | None:
     try:
         return float(value)
     except (TypeError, ValueError):
+        return None
+
+
+def _epoch_to_iso(value: Any) -> str | None:
+    """Convert a float Unix epoch to an ISO-8601 string for _format_relative / _dispatch_ms."""
+    if value is None:
+        return None
+    try:
+        dt = datetime.fromtimestamp(float(value), tz=timezone.utc)
+        return dt.isoformat()
+    except (TypeError, ValueError, OSError):
         return None
 
 
@@ -88,6 +111,21 @@ def _tp_reach(
     return None
 
 
+def _hit_tp_label(hit_tp: Any) -> str | None:
+    """Map the performance record's integer hit_tp (0/1/2/3) to a label."""
+    try:
+        n = int(hit_tp or 0)
+    except (TypeError, ValueError):
+        return None
+    if n >= 3:
+        return "TP3"
+    if n == 2:
+        return "TP2"
+    if n == 1:
+        return "TP1"
+    return None
+
+
 def _row(entry: dict, fr: FreeRunResult) -> dict:
     """Combine an engine signal with its held-to-stop replay into a view row."""
     side = str(entry.get("direction") or entry.get("side") or "").upper()
@@ -99,12 +137,16 @@ def _row(entry: dict, fr: FreeRunResult) -> dict:
 
     raw_status = str(entry.get("status") or "").upper()
     real_is_active = raw_status in _ACTIVE_STATUSES or raw_status == ""
-    # Give-back: max profit the held-to-stop run showed vs what the engine's
-    # real exit actually realised. Only meaningful once the engine has closed.
     real_pnl = _f(entry.get("pnl_pct"))
     giveback = None
     if not real_is_active and fr.mfe_pct is not None and real_pnl is not None:
         giveback = fr.mfe_pct - real_pnl
+
+    # TP reach: prefer price-based calculation (live API has TP prices); fall
+    # back to the performance record's hit_tp integer when prices aren't stored.
+    tp_reach = _tp_reach(fr.mfe_price, tp1, tp2, tp3, side)
+    if tp_reach is None:
+        tp_reach = _hit_tp_label(entry.get("hit_tp"))
 
     return {
         "id": entry.get("signal_id") or entry.get("id") or "",
@@ -120,7 +162,7 @@ def _row(entry: dict, fr: FreeRunResult) -> dict:
         "result_pct": fr.result_pct,
         "mfe_pct": fr.mfe_pct,
         "max_price": fr.mfe_price,
-        "tp_reach": _tp_reach(fr.mfe_price, tp1, tp2, tp3, side),
+        "tp_reach": tp_reach,
         "is_active": fr.is_active,
         "status": "Active" if fr.is_active else "Stopped",
         "capped": fr.capped,
@@ -147,21 +189,111 @@ def _extract_items(payload: Any) -> list[dict]:
     return []
 
 
-async def _build_rows(request: Request, view: str) -> tuple[list[dict], str | None]:
-    """Fetch all signals, replay each held-to-stop, reshape into rows.
+def _from_perf_record(r: dict) -> dict:
+    """Map a signal_performance.json SignalRecord to the shape _row() + FreeRunTracker expect.
 
-    ``view`` filters to active / stopped / all on the *held-to-stop* status
-    (not the engine's real status). Active rows sort first, then by recency.
+    Performance records don't store tp1/tp2/tp3 price levels (those aren't in
+    SignalRecord), so the TP price columns will show —. The "Reached" column is
+    filled from hit_tp (0=none, 1=TP1, 2=TP2, 3=TP3) which IS recorded.
+
+    The timestamp field in SignalRecord is a float Unix epoch; convert to ISO-8601
+    so _format_relative() and the free-run _dispatch_ms() can parse it.
     """
-    api = request.app.state.engine_api
+    # Prefer dispatch_timestamp as the signal-fired time; fall back to create or generic.
+    ts_raw = (
+        r.get("dispatch_timestamp")
+        or r.get("create_timestamp")
+        or r.get("timestamp")
+    )
+    ts_iso = _epoch_to_iso(ts_raw)
+
+    # outcome_label is the terminal status (PROFIT_LOCKED / INVALIDATED / SL_HIT / EXPIRED).
+    status = (r.get("outcome_label") or "").upper()
+
+    return {
+        "signal_id": r.get("signal_id") or "",
+        "id": r.get("signal_id") or "",
+        "symbol": r.get("symbol") or "",
+        "direction": (r.get("direction") or "").upper(),
+        "side": (r.get("direction") or "").upper(),
+        "entry": r.get("entry"),
+        "entry_price": r.get("entry"),
+        # original_stop_loss not separately stored in perf records; stop_loss is
+        # the price at signal creation (pre-BE shift) for completed signals.
+        "stop_loss": r.get("stop_loss"),
+        "original_stop_loss": r.get("stop_loss"),
+        "sl": r.get("stop_loss"),
+        # TP price levels not in SignalRecord — columns show —.
+        "tp1": None,
+        "tp2": None,
+        "tp3": None,
+        # hit_tp: which TP was reached (0=none,1=TP1,2=TP2,3=TP3); used as
+        # tp_reach fallback in _row() when TP prices are absent.
+        "hit_tp": r.get("hit_tp") or r.get("signal_quality_hit_tp"),
+        "status": status,
+        "pnl_pct": r.get("pnl_pct"),
+        "max_favorable_excursion_pct": r.get("max_favorable_excursion_pct", 0.0),
+        "setup_class": r.get("setup_class") or "UNKNOWN",
+        "confidence": r.get("confidence"),
+        "timestamp": ts_iso,
+        "minutes_ago": None,
+    }
+
+
+async def _build_rows(
+    request: Request, view: str, window: str = "live"
+) -> tuple[list[dict], str | None]:
+    """Fetch signals, replay each held-to-stop, reshape into rows.
+
+    ``window`` controls the data source:
+    * ``live`` — live engine API (up to 500 signals from in-memory snapshot).
+    * ``7d`` / ``30d`` / ``all`` — signal_performance.json on the data volume,
+      filtered to the given window.  Supports thousands of records.
+
+    ``view`` filters to active / stopped / all on the *held-to-stop* status.
+    Active rows sort first, then by recency.
+    """
     tracker = request.app.state.free_run
-    payload = await api.signals(status="all", limit=500)
-
     error: str | None = None
-    if isinstance(payload, dict) and payload.get("error"):
-        error = str(payload.get("error"))
 
-    items = [e for e in _extract_items(payload) if (e.get("signal_id") or e.get("id"))]
+    if window == "live":
+        api = request.app.state.engine_api
+        payload = await api.signals(status="all", limit=500)
+        if isinstance(payload, dict) and payload.get("error"):
+            error = str(payload.get("error"))
+        items = [e for e in _extract_items(payload) if (e.get("signal_id") or e.get("id"))]
+    else:
+        # Data-volume path: signal_performance.json has the full persistent record.
+        vol = request.app.state.data_volume
+        raw = vol.signal_performance()
+        if isinstance(raw, dict) and raw.get("error"):
+            error = str(raw.get("error"))
+            raw = []
+        if not isinstance(raw, list):
+            raw = []
+
+        window_days = _WINDOW_DAYS.get(window)
+        now = datetime.now(timezone.utc)
+        items = []
+        for r in raw:
+            if not isinstance(r, dict):
+                continue
+            if window_days is not None:
+                ts_raw = (
+                    r.get("terminal_outcome_timestamp")
+                    or r.get("dispatch_timestamp")
+                    or r.get("create_timestamp")
+                    or r.get("timestamp")
+                )
+                if ts_raw is not None:
+                    try:
+                        ts = datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
+                        if (now - ts).total_seconds() > window_days * 86400:
+                            continue
+                    except (TypeError, ValueError, OSError):
+                        pass
+            items.append(_from_perf_record(r))
+
     results = await tracker.compute_many(items)
 
     rows = []
@@ -196,17 +328,7 @@ def _summary(rows: list[dict]) -> dict:
 
 
 def _group_giveback(rows: list[dict], key: str) -> list[dict]:
-    """Aggregate give-back over the engine-closed rows, grouped by ``key``.
-
-    Give-back is held-to-stop max profit minus what the engine's real exit
-    realised, so it only exists on rows the engine has actually closed. We sum
-    and average it per group, alongside the average max profit and realised P/L
-    that produced it, then sort by *total* give-back so the cohort leaving the
-    most on the table sits first. A positive total means the held-to-stop run
-    would have shown more than the real exit captured (winners cut); a negative
-    total means the real exit beat holding (e.g. pre-TP banking a move that a
-    pure stop would have surrendered).
-    """
+    """Aggregate give-back over the engine-closed rows, grouped by ``key``."""
     buckets: dict[str, dict] = {}
     for r in rows:
         if r["real_is_active"] or r.get("giveback_pct") is None:
@@ -244,8 +366,12 @@ def _aggregates(rows: list[dict]) -> dict:
 
 
 @router.get("/profit")
-async def profit(request: Request, view: str = Query("all", pattern="^(all|active|closed)$")):
-    rows, error = await _build_rows(request, view)
+async def profit(
+    request: Request,
+    view: str = Query("all", pattern="^(all|active|closed)$"),
+    window: str = Query("live", pattern="^(live|7d|30d|all)$"),
+):
+    rows, error = await _build_rows(request, view, window)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "profit.html",
@@ -255,6 +381,7 @@ async def profit(request: Request, view: str = Query("all", pattern="^(all|activ
             "summary": _summary(rows),
             "aggregates": _aggregates(rows),
             "view": view,
+            "window": window,
             "error": error,
             "active": "profit",
         },
@@ -269,8 +396,12 @@ _EXPORT_COLS = [
 
 
 @router.get("/profit/export.csv")
-async def profit_export(request: Request, view: str = Query("all", pattern="^(all|active|closed)$")):
+async def profit_export(
+    request: Request,
+    view: str = Query("all", pattern="^(all|active|closed)$"),
+    window: str = Query("live", pattern="^(live|7d|30d|all)$"),
+):
     """Download the (filtered) held-to-stop table as CSV — same shape as the page."""
-    rows, _ = await _build_rows(request, view)
+    rows, _ = await _build_rows(request, view, window)
     data = [[r.get(col) for col in _EXPORT_COLS] for r in rows]
-    return csv_response(f"signal_profit_{view}", _EXPORT_COLS, data)
+    return csv_response(f"signal_profit_{window}_{view}", _EXPORT_COLS, data)
