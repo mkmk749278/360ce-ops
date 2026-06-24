@@ -154,7 +154,7 @@ def _row(entry: dict, fr: FreeRunResult) -> dict:
     """Combine an engine signal with its held-to-stop replay into a view row."""
     side = str(entry.get("direction") or entry.get("side") or "").upper()
     entry_px = _f(entry.get("entry") if entry.get("entry") is not None else entry.get("entry_price"))
-    sl_px = _f(entry.get("stop_loss") if entry.get("stop_loss") is not None else entry.get("sl"))
+    sl_px = _f(entry.get("original_stop_loss") or entry.get("stop_loss") or entry.get("sl"))
     tp1 = _f(entry.get("tp1"))
     tp2 = _f(entry.get("tp2"))
     tp3 = _f(entry.get("tp3"))
