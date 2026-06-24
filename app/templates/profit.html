@@ -92,10 +92,13 @@
       <th>Side</th>
       <th>Entry</th>
       <th>SL</th>
+      <th>TP1</th>
+      <th>TP2</th>
       <th>At</th>
       <th>Result (held)</th>
       <th>Max price</th>
       <th>Max profit</th>
+      <th>Reached</th>
       <th>Held status</th>
       <th>Real exit</th>
       <th>Give-back</th>
@@ -110,10 +113,13 @@
       <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
       <td class="mono">{{ px(r.entry) }}</td>
       <td class="mono">{{ px(r.sl) }}</td>
+      <td class="mono muted">{{ px(r.tp1) }}</td>
+      <td class="mono muted">{{ px(r.tp2) }}</td>
       <td class="mono">{{ px(r.current) }}</td>
       <td class="mono {% if r.result_pct is not none and r.result_pct > 0 %}pos{% elif r.result_pct is not none and r.result_pct < 0 %}neg{% endif %}">{{ pct(r.result_pct) }}</td>
       <td class="mono">{{ px(r.max_price) }}</td>
       <td class="mono {% if r.mfe_pct is not none and r.mfe_pct > 0 %}pos{% endif %}">{{ pct(r.mfe_pct) }}</td>
+      <td class="small {% if r.tp_reach %}pos{% else %}muted{% endif %}">{{ r.tp_reach or "—" }}</td>
       <td>
         {% if r.is_active %}<span class="pos">Active{% if r.capped %} <span class="small muted" title="Stop not touched within the replay window">·capped</span>{% endif %}</span>
         {% else %}<span class="muted">Stopped</span>{% endif %}

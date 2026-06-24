@@ -69,11 +69,33 @@ def _format_relative(value: Any) -> str | None:
     return f"{hours // 24}d ago"
 
 
+def _tp_reach(
+    mfe_price: float | None,
+    tp1: float | None,
+    tp2: float | None,
+    tp3: float | None,
+    side: str,
+) -> str | None:
+    """Highest TP level the max-profit price touched, or None if none reached."""
+    if mfe_price is None:
+        return None
+    is_long = side == "LONG"
+    for label, tp in (("TP3", tp3), ("TP2", tp2), ("TP1", tp1)):
+        if tp is None or tp <= 0:
+            continue
+        if (is_long and mfe_price >= tp) or (not is_long and mfe_price <= tp):
+            return label
+    return None
+
+
 def _row(entry: dict, fr: FreeRunResult) -> dict:
     """Combine an engine signal with its held-to-stop replay into a view row."""
     side = str(entry.get("direction") or entry.get("side") or "").upper()
     entry_px = _f(entry.get("entry") if entry.get("entry") is not None else entry.get("entry_price"))
     sl_px = _f(entry.get("stop_loss") if entry.get("stop_loss") is not None else entry.get("sl"))
+    tp1 = _f(entry.get("tp1"))
+    tp2 = _f(entry.get("tp2"))
+    tp3 = _f(entry.get("tp3"))
 
     raw_status = str(entry.get("status") or "").upper()
     real_is_active = raw_status in _ACTIVE_STATUSES or raw_status == ""
@@ -90,11 +112,15 @@ def _row(entry: dict, fr: FreeRunResult) -> dict:
         "side": side,
         "entry": entry_px,
         "sl": sl_px,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": tp3,
         # --- held-to-stop (free run) ---
         "current": fr.current_price,
         "result_pct": fr.result_pct,
         "mfe_pct": fr.mfe_pct,
         "max_price": fr.mfe_price,
+        "tp_reach": _tp_reach(fr.mfe_price, tp1, tp2, tp3, side),
         "is_active": fr.is_active,
         "status": "Active" if fr.is_active else "Stopped",
         "capped": fr.capped,
@@ -236,8 +262,8 @@ async def profit(request: Request, view: str = Query("all", pattern="^(all|activ
 
 
 _EXPORT_COLS = [
-    "id", "symbol", "side", "setup_class", "entry", "sl", "current",
-    "result_pct", "mfe_pct", "max_price", "status", "hold_mins",
+    "id", "symbol", "side", "setup_class", "entry", "sl", "tp1", "tp2", "tp3",
+    "current", "result_pct", "mfe_pct", "max_price", "tp_reach", "status", "hold_mins",
     "real_status", "real_pnl_pct", "giveback_pct", "degraded",
 ]
 
