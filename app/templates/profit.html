@@ -62,6 +62,11 @@
            step="0.1" min="0.1" max="20" style="width:5em"
            onchange="this.form.submit()">
   </label>
+  <label title="Round-trip fee deducted from closed-signal Strategy P/L (maker + taker, default 0.07%)">Fee %
+    <input type="number" name="fee_pct" value="{{ '%g'|format(fee_pct) }}"
+           step="0.01" min="0" max="2" style="width:5em"
+           onchange="this.form.submit()">
+  </label>
   <span class="muted">
     {{ summary.active }} active · {{ summary.closed }} stopped
     {% if summary.best_mfe is not none %}· best max profit {{ pct(summary.best_mfe) }}{% endif %}
@@ -76,9 +81,10 @@
     (no pre-TP banking, no invalidation) under this strategy — how would it compare
     to what the engine's real exits did, on the same signals? Computed from the
     engine's own recorded TP-hits / first-touch / MFE-MAE, so it covers every row
-    (no Binance dependency).{% if ss.approx %} <em>{{ ss.approx }} older row(s) price TP
-    legs from the engine's recorded TP-based PnL (no stored TP price) — marked
-    <span class="muted">≈</span>.</em>{% endif %}</p>
+    (no Binance dependency). Strategy P/L is <strong>net of {{ '%g'|format(fee_pct) }}%
+    round-trip fee</strong> (closed signals only).{% if ss.approx %} <em>{{ ss.approx }}
+    older row(s) price TP legs from the engine's recorded TP-based PnL (no stored TP
+    price) — marked <span class="muted">≈</span>.</em>{% endif %}</p>
   {% if ss.strategy.n %}
   <table class="data-table">
     <thead>
@@ -124,7 +130,7 @@
 {% endif %}
 
 <div class="actions">
-  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}">Download CSV (all rows, current view)</a>
+  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}">Download CSV (all rows, current view)</a>
 </div>
 
 {% if aggregates.n %}
@@ -175,7 +181,7 @@
       <th>Max price</th>
       <th>Max profit</th>
       <th>Reached</th>
-      <th title="{{ strategy_label }} — exit at TP/SL only, no pre-TP/invalidation">Strategy P/L</th>
+      <th title="{{ strategy_label }} — exit at TP/SL only, no pre-TP/invalidation · net of {{ '%g'|format(fee_pct) }}% fee (closed)">Strategy P/L</th>
       <th>Held status</th>
       <th>Real exit</th>
       <th>Give-back</th>
@@ -198,7 +204,7 @@
       <td class="mono {% if r.mfe_pct is not none and r.mfe_pct > 0 %}pos{% endif %}">{{ pct(r.mfe_pct) }}</td>
       <td class="small {% if r.tp_reach %}pos{% else %}muted{% endif %}">{{ r.tp_reach or "—" }}</td>
       <td class="mono {% if r.strategy_pct is not none and r.strategy_pct > 0 %}pos{% elif r.strategy_pct is not none and r.strategy_pct < 0 %}neg{% endif %}"
-          title="{% if r.strategy_labels %}filled: {{ r.strategy_labels }}{% endif %}{% if r.strategy_sl_frac %} · {{ '%.0f'|format(r.strategy_sl_frac * 100) }}% stopped{% endif %}">
+          title="{% if r.strategy_labels %}filled: {{ r.strategy_labels }}{% endif %}{% if r.strategy_pct_gross is not none and r.strategy_pct_gross != r.strategy_pct %} · gross {{ '%+.2f'|format(r.strategy_pct_gross) }}%{% endif %}{% if r.strategy_sl_frac %} · {{ '%.0f'|format(r.strategy_sl_frac * 100) }}% stopped{% endif %}">
         {{ pct(r.strategy_pct) }}{% if r.strategy_approx %} <span class="small muted" title="TP leg priced from engine TP-based PnL (no stored TP price)">≈</span>{% endif %}
       </td>
       <td>
@@ -226,8 +232,8 @@
   </span>
   {% if pg.total_pages > 1 %}
   <span>
-    {% if pg.page > 1 %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&page={{ pg.page - 1 }}">← prev</a>{% endif %}
-    {% if pg.page < pg.total_pages %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&page={{ pg.page + 1 }}">next →</a>{% endif %}
+    {% if pg.page > 1 %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&page={{ pg.page - 1 }}">← prev</a>{% endif %}
+    {% if pg.page < pg.total_pages %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&page={{ pg.page + 1 }}">next →</a>{% endif %}
   </span>
   {% endif %}
 </div>
