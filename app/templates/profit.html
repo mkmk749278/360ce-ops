@@ -15,21 +15,23 @@
 
 {% block content %}
 <h1>Signal Profit Tracker</h1>
-<p class="muted">A parallel "what if we'd held to the stop" view — real trading is
-  unchanged. Every signal is replayed on Binance 1m candles from dispatch, exiting
-  <em>only</em> at its original stop. <strong>Max profit</strong> is the best it ever
-  showed (peak-to-entry); <strong>Result</strong> is the held-to-stop outcome (the SL
-  loss once stopped, else live P/L). <strong>Real exit</strong> is what the engine
-  actually did — the gap between the two is the give-back.</p>
+<p class="muted">Exit-strategy what-if simulator — how would net P/L have looked
+  if every signal closed <em>only</em> at TP or SL, with no pre-TP banking and no
+  invalidation? Select a strategy below (TP1 full, flat %, or scaled partials) and
+  the headline card shows the result vs what the engine's real exits achieved.
+  Computed entirely from the engine's recorded data — no Binance dependency,
+  covers every signal. <strong>Real exit</strong> is what the engine actually did;
+  <strong>Max profit</strong> is the best MFE the signal reached; <strong>Give-back</strong>
+  is how much of that MFE the real exit left on the table.</p>
 
 {% if error %}
 <section class="card neg">Engine API error: {{ error }}</section>
 {% endif %}
 
 {% if summary.degraded %}
-<section class="card neg">⚠ {{ summary.degraded }} row(s) couldn't be replayed from
-  Binance candles (network/policy) — those show the engine's own numbers, not the
-  held-to-stop replay.</section>
+<p class="small muted" style="margin:0 0 .5rem">ℹ {{ summary.degraded }} row(s): "Result (held)" and
+  "Max profit" use engine-recorded values (Binance candles unavailable on this host) —
+  the <strong>Strategy P/L</strong> column is unaffected and covers all signals.</p>
 {% endif %}
 
 <form method="get" action="/profit" class="filters">
