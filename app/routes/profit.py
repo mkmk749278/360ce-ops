@@ -198,6 +198,7 @@ def _row(entry: dict, fr: FreeRunResult) -> dict:
         "real_pnl_pct": real_pnl,
         "giveback_pct": giveback,
         "setup_class": entry.get("setup_class") or "UNKNOWN",
+        "regime": entry.get("entry_regime") or entry.get("regime") or "UNKNOWN",
         "confidence": _f(entry.get("confidence")),
         "minutes_ago": entry.get("minutes_ago"),
         "created_relative": _format_relative(entry.get("timestamp")),
@@ -268,6 +269,7 @@ def _from_perf_record(r: dict) -> dict:
         "first_tp_touch_timestamp": r.get("first_tp_touch_timestamp"),
         "first_sl_touch_timestamp": r.get("first_sl_touch_timestamp"),
         "setup_class": r.get("setup_class") or "UNKNOWN",
+        "entry_regime": r.get("entry_regime") or r.get("regime"),
         "confidence": r.get("confidence"),
         "timestamp": ts_iso,
         "minutes_ago": None,
@@ -426,13 +428,14 @@ def _group_giveback(rows: list[dict], key: str) -> list[dict]:
 
 
 def _aggregates(rows: list[dict]) -> dict:
-    """Give-back rolled up by the engine's real exit type and by setup_class."""
+    """Give-back rolled up by the engine's real exit type, setup_class, and regime."""
     closed = [r for r in rows if not r["real_is_active"] and r.get("giveback_pct") is not None]
     return {
         "n": len(closed),
         "total_giveback": sum(r["giveback_pct"] for r in closed),
         "by_exit": _group_giveback(rows, "real_status"),
         "by_setup": _group_giveback(rows, "setup_class"),
+        "by_regime": _group_giveback(rows, "regime"),
     }
 
 
@@ -563,6 +566,13 @@ def _breakdown_path(rows: list[dict], fee_pct: float) -> list[dict]:
     return result
 
 
+def _breakdown_regime(rows: list[dict], fee_pct: float) -> list[dict]:
+    """Strategy vs real exits broken down by market regime at signal entry."""
+    result = _group_by(rows, lambda r: r.get("regime") or "UNKNOWN", fee_pct)
+    result.sort(key=lambda x: x["strategy"]["n"], reverse=True)
+    return result
+
+
 def _paginate(rows: list[dict], page: int) -> dict:
     """Split rows into the active head (always shown) + one page of closed rows.
 
@@ -629,6 +639,7 @@ async def profit(
             "strategy_summary": _strategy_summary(rows, fee),
             "breakdown_scoreband": _breakdown_scoreband(rows, fee),
             "breakdown_path": _breakdown_path(rows, fee),
+            "breakdown_regime": _breakdown_regime(rows, fee),
             "strategies": [(k, s.label) for k, s in catalog.items()],
             "strategy": strategy,
             "strategy_label": catalog[strategy].label,
@@ -644,7 +655,7 @@ async def profit(
 
 
 _EXPORT_COLS = [
-    "id", "symbol", "side", "setup_class", "entry", "sl", "tp1", "tp2", "tp3",
+    "id", "symbol", "side", "setup_class", "regime", "entry", "sl", "tp1", "tp2", "tp3",
     "current", "result_pct", "mfe_pct", "max_price", "tp_reach", "status", "hold_mins",
     "real_status", "real_pnl_pct", "giveback_pct",
     "strategy_pct", "strategy_pct_gross", "strategy_labels", "strategy_approx", "degraded",

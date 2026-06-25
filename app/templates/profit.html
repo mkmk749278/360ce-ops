@@ -170,6 +170,10 @@
 {{ breakdown_table(breakdown_path, "Signal path") }}
 {% endif %}
 
+{% if breakdown_regime %}
+{{ breakdown_table(breakdown_regime, "Regime") }}
+{% endif %}
+
 {% if window != 'live' %}
 <section class="card small muted">
   <strong>Historical window ({{ window }}):</strong> data from
@@ -213,6 +217,10 @@
   {{ gb_tables(aggregates.by_exit, "Real exit") }}
   <h3 class="small">By setup</h3>
   {{ gb_tables(aggregates.by_setup, "Setup") }}
+  {% if aggregates.by_regime %}
+  <h3 class="small">By regime</h3>
+  {{ gb_tables(aggregates.by_regime, "Regime") }}
+  {% endif %}
 </section>
 {% endif %}
 
