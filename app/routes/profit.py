@@ -56,6 +56,7 @@ from app.data_sources.exit_sim import (
     SignalInputs,
     build_catalog,
     evaluate,
+    evaluate_be,
     get_strategy,
 )
 from app.data_sources.free_run import FreeRunResult
@@ -376,7 +377,12 @@ async def _build_rows(
         # Layer the scaled-exit what-if result onto the row.
         inp = SignalInputs.from_dict(e)
         if inp is not None:
-            ex = evaluate(inp, strategy)
+            if strategy_key == "be_tp1":
+                # BE stop: if MFE >= target_pct and stop subsequently hit without
+                # TP1 filling first, simulate a 0% exit instead of the SL loss.
+                ex = evaluate_be(inp, get_strategy("tp1", target), target)
+            else:
+                ex = evaluate(inp, strategy)
             gross = ex.result_pct
             # Deduct round-trip fee for closed signals (entry + exit both paid).
             # Active signals haven't closed yet — don't pre-charge the exit leg.
@@ -410,12 +416,23 @@ def _summary(rows: list[dict]) -> dict:
     stopped = [r for r in rows if not r["is_active"]]
     mfes = [r["mfe_pct"] for r in rows if r["mfe_pct"] is not None]
     givebacks = [r["giveback_pct"] for r in rows if r["giveback_pct"] is not None]
+    # Signals where the held-to-stop replay shows MFE touched TP1+ but the engine's
+    # real exit was SL_HIT — price moved through TP1 and came all the way back.
+    # In the new TP1/SL-only regime this should be near-zero; a non-zero count may
+    # indicate a TP1 order placement/fill issue or extreme market-reversal events.
+    tp1_miss = sum(
+        1 for r in rows
+        if not r["real_is_active"]
+        and r.get("tp_reach") in ("TP1", "TP2", "TP3")
+        and r.get("real_status") == "SL_HIT"
+    )
     return {
         "active": len(active),
         "closed": len(stopped),
         "best_mfe": max(mfes) if mfes else None,
         "avg_giveback": (sum(givebacks) / len(givebacks)) if givebacks else None,
         "degraded": sum(1 for r in rows if r["degraded"]),
+        "tp1_miss": tp1_miss,
     }
 
 
