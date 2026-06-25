@@ -45,7 +45,9 @@ always shown.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timezone
+from statistics import median as _median
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -114,6 +116,18 @@ def _format_relative(value: Any) -> str | None:
     if hours < 48:
         return f"{hours}h ago"
     return f"{hours // 24}d ago"
+
+
+def _parse_regime(raw: Any) -> str | None:
+    """Strip the pipe-delimited detail suffix from market_phase values.
+
+    market_phase may be stored as "RANGING | ATR%ile=10 | Vol=DISTRIBUTION";
+    keep only the leading token so the regime table stays low-cardinality.
+    Returns None when the value is absent or empty.
+    """
+    if not raw:
+        return None
+    return str(raw).split("|")[0].strip() or None
 
 
 def _tp_reach(
@@ -198,7 +212,9 @@ def _row(entry: dict, fr: FreeRunResult) -> dict:
         "real_pnl_pct": real_pnl,
         "giveback_pct": giveback,
         "setup_class": entry.get("setup_class") or "UNKNOWN",
-        "regime": entry.get("entry_regime") or entry.get("regime") or "UNKNOWN",
+        "regime": _parse_regime(
+            entry.get("market_phase") or entry.get("entry_regime") or entry.get("regime")
+        ) or "UNKNOWN",
         "confidence": _f(entry.get("confidence")),
         "minutes_ago": entry.get("minutes_ago"),
         "created_relative": _format_relative(entry.get("timestamp")),
@@ -269,7 +285,10 @@ def _from_perf_record(r: dict) -> dict:
         "first_tp_touch_timestamp": r.get("first_tp_touch_timestamp"),
         "first_sl_touch_timestamp": r.get("first_sl_touch_timestamp"),
         "setup_class": r.get("setup_class") or "UNKNOWN",
-        "entry_regime": r.get("entry_regime") or r.get("regime"),
+        # market_phase may carry "RANGING | ATR%ile=…" — keep the leading token.
+        "entry_regime": _parse_regime(
+            r.get("market_phase") or r.get("entry_regime") or r.get("regime")
+        ),
         "confidence": r.get("confidence"),
         "timestamp": ts_iso,
         "minutes_ago": None,
@@ -484,25 +503,35 @@ def _strategy_summary(rows: list[dict], fee_pct: float = 0.0) -> dict:
     }
 
 
-# Score bands for the confidence breakdown.  Boundaries chosen so each band
-# represents a meaningful quality tier: sub-threshold, mid, good, high.
-_SCORE_BANDS: list[tuple[float, float, str]] = [
-    (0.0,  0.3,   "< 0.30"),
-    (0.3,  0.5,   "0.30–0.50"),
-    (0.5,  0.7,   "0.50–0.70"),
-    (0.7,  1.001, "≥ 0.70"),
+# Score bands in the same 0–100 scale used by performance.py / raw_edge.py so
+# historical signal_performance.json records (which store confidence as e.g.
+# 72.5) bucket correctly.  Live API signals carry confidence on a 0–1 scale
+# (e.g. 0.725); _conf_band() normalises both by multiplying values ≤ 1 by 100.
+_SCORE_BANDS_100: list[tuple[str, float, float]] = [
+    ("< 65",  0.0,  65.0),
+    ("65–70", 65.0, 70.0),
+    ("70–75", 70.0, 75.0),
+    ("75–80", 75.0, 80.0),
+    ("80+",   80.0, 1e9),
 ]
-_BAND_ORDER = {label: i for i, (_, _, label) in enumerate(_SCORE_BANDS)}
-_BAND_ORDER["unknown"] = len(_SCORE_BANDS)
+_BAND_ORDER = {label: i for i, (label, _, _) in enumerate(_SCORE_BANDS_100)}
+_BAND_ORDER["unknown"] = len(_SCORE_BANDS_100)
 
 
 def _conf_band(conf: float | None) -> str:
     if conf is None:
         return "unknown"
-    for lo, hi, label in _SCORE_BANDS:
-        if lo <= conf < hi:
+    try:
+        c = float(conf)
+    except (TypeError, ValueError):
+        return "unknown"
+    # Normalise 0–1 scale to 0–100 (historical JSON already uses 0–100).
+    if c <= 1.0:
+        c = c * 100.0
+    for label, lo, hi in _SCORE_BANDS_100:
+        if lo <= c < hi:
             return label
-    return _SCORE_BANDS[-1][2]
+    return "unknown"
 
 
 def _stat_block(pcts: list[float]) -> dict:
@@ -573,6 +602,81 @@ def _breakdown_regime(rows: list[dict], fee_pct: float) -> list[dict]:
     return result
 
 
+_MFE_RUNNER_THRESHOLD = 1.0  # % — a signal that cleared 1% MFE is a "runner"
+
+
+def _raw_edge_agg(rows: list[dict]) -> dict:
+    """Raw-edge-style MFE / give-back / capture tables by score band, setup, regime.
+
+    Mirrors the Raw Edge tab's per-cohort analysis but computed directly from the
+    profit-tab rows (which carry mfe_pct from the held-to-stop replay and
+    real_pnl_pct from the engine's actual exit), so it works across all windows
+    including live.  Active signals are excluded — they haven't resolved.
+    """
+    def _make_bucket() -> dict:
+        return {"n": 0, "mfe_list": [], "mfe_sum": 0.0, "realized_sum": 0.0,
+                "giveback_sum": 0.0, "runners": 0}
+
+    def _add(b: dict, mfe: float, realized: float) -> None:
+        b["n"] += 1
+        b["mfe_list"].append(mfe)
+        b["mfe_sum"] += mfe
+        b["realized_sum"] += realized
+        if mfe - realized > 0:
+            b["giveback_sum"] += mfe - realized
+        if mfe >= _MFE_RUNNER_THRESHOLD:
+            b["runners"] += 1
+
+    def _fin(d: dict, order: list[str] | None = None) -> list[dict]:
+        out: list[dict] = []
+        keys = order if order is not None else list(d.keys())
+        for key in keys:
+            b = d.get(key)
+            if not b or b["n"] == 0:
+                continue
+            n = b["n"]
+            mfe_sum = b["mfe_sum"]
+            out.append({
+                "key": key,
+                "n": n,
+                "avg_mfe": mfe_sum / n,
+                "median_mfe": _median(b["mfe_list"]) if b["mfe_list"] else 0.0,
+                "runner_rate": b["runners"] / n,
+                "avg_realized": b["realized_sum"] / n,
+                "giveback_avg": b["giveback_sum"] / n,
+                "capture": (b["realized_sum"] / mfe_sum) if mfe_sum > 0 else None,
+            })
+        if order is None:
+            out.sort(key=lambda r: r["n"], reverse=True)
+        return out
+
+    by_band: dict[str, dict] = defaultdict(_make_bucket)
+    by_setup: dict[str, dict] = defaultdict(_make_bucket)
+    by_regime: dict[str, dict] = defaultdict(_make_bucket)
+
+    for r in rows:
+        if r.get("is_active"):
+            continue
+        mfe = r.get("mfe_pct")
+        realized = r.get("real_pnl_pct")
+        if mfe is None or realized is None:
+            continue
+        mfe = max(0.0, float(mfe))
+
+        _add(by_regime[r.get("regime") or "UNKNOWN"], mfe, float(realized))
+        _add(by_setup[r.get("setup_class") or "UNKNOWN"], mfe, float(realized))
+        band = _conf_band(r.get("confidence"))
+        if band != "unknown":
+            _add(by_band[band], mfe, float(realized))
+
+    band_order = [label for label, _, _ in _SCORE_BANDS_100]
+    return {
+        "by_band": _fin(dict(by_band), band_order),
+        "by_setup": _fin(dict(by_setup)),
+        "by_regime": _fin(dict(by_regime)),
+    }
+
+
 def _paginate(rows: list[dict], page: int) -> dict:
     """Split rows into the active head (always shown) + one page of closed rows.
 
@@ -640,6 +744,8 @@ async def profit(
             "breakdown_scoreband": _breakdown_scoreband(rows, fee),
             "breakdown_path": _breakdown_path(rows, fee),
             "breakdown_regime": _breakdown_regime(rows, fee),
+            "raw_edge_agg": _raw_edge_agg(rows),
+            "runner_threshold": _MFE_RUNNER_THRESHOLD,
             "strategies": [(k, s.label) for k, s in catalog.items()],
             "strategy": strategy,
             "strategy_label": catalog[strategy].label,
