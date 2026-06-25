@@ -102,6 +102,25 @@
 </section>
 
 <section class="card">
+  <h2>Full signal reset</h2>
+  <p class="muted">
+    Clears ALL signals everywhere: active signals shown in the app,
+    signal history feed, performance stats, invalidation records,
+    and paper trade positions for all users. Use after a doctrinal
+    change or to start a fresh test cycle.
+  </p>
+  <p class="muted" style="color:#e44;">
+    ⚠ This cannot be undone. Active signals are cleared from the app
+    immediately (isolated mode: within ≤15s). Paper positions are
+    closed at zero-move fills.
+  </p>
+  <form method="post" action="/control/reset-signals"
+        onsubmit="return confirm('FULL RESET: clear ALL active signals, history, stats, invalidation records, and paper positions for all users? This cannot be undone.');">
+    <button type="submit" class="btn btn-danger">Full signal reset — clear everything</button>
+  </form>
+</section>
+
+<section class="card">
   <h2>Recent control actions</h2>
   {% if audit %}
   <table class="audit">

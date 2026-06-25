@@ -196,3 +196,37 @@ async def control_auto_trade_global(request: Request, enabled: str = Form(...)):
         text = f"Global auto-trade flip failed: {detail}"
     request.session["_control_flash"] = {"ok": ok, "text": text}
     return RedirectResponse("/control", status_code=303)
+
+
+@router.post("/control/reset-signals")
+async def control_reset_signals(request: Request):
+    """Full signal reset — clears active signals, history, stats, invalidation,
+    and paper broker state for all users.  Requires explicit double-confirm in
+    the UI (first form sets confirm=pending, second fires the actual reset)."""
+    api = request.app.state.engine_api
+    settings = request.app.state.settings
+
+    result = await api.reset_signals()
+    ok = not _is_error(result)
+    audit.record(
+        settings.audit_log_path,
+        action="signal_reset_full",
+        params={},
+        result=result if isinstance(result, dict) else {},
+        ok=ok,
+    )
+    if ok:
+        active = result.get("cleared_active_signals", 0) if isinstance(result, dict) else 0
+        history = result.get("cleared_history", 0) if isinstance(result, dict) else 0
+        paper = result.get("paper_positions_closed", 0) if isinstance(result, dict) else 0
+        queued = result.get("engine_reset_queued", False) if isinstance(result, dict) else False
+        queued_note = " (engine reset queued, propagates in ≤15s)" if queued else ""
+        text = (
+            f"Full reset complete{queued_note}: "
+            f"{active} active signals, {history} history, {paper} paper positions cleared."
+        )
+    else:
+        detail = result.get("error") if isinstance(result, dict) else result
+        text = f"Full reset failed: {detail}"
+    request.session["_control_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse("/control", status_code=303)
