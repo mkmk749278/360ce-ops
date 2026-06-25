@@ -34,6 +34,15 @@
   the <strong>Strategy P/L</strong> column is unaffected and covers all signals.</p>
 {% endif %}
 
+{% if summary.tp1_miss %}
+<section class="card" style="border-color:#c0392b;margin-bottom:.75rem">
+  <strong class="neg">{{ summary.tp1_miss }} signal(s): MFE cleared TP1+ but engine exited at SL</strong>
+  <span class="small muted"> — price moved through TP1 then fully reversed to the stop.
+    Under the current TP1/SL-only regime this may indicate a TP1 order was not placed or not filled.
+    Check engine logs for these signals (look for "SL_HIT" rows where the Reached column shows TP1+).</span>
+</section>
+{% endif %}
+
 <form method="get" action="/profit" class="filters">
   <label>Window
     <select name="window" onchange="this.form.submit()">
@@ -82,7 +91,11 @@
     to what the engine's real exits did, on the same signals? Computed from the
     engine's own recorded TP-hits / first-touch / MFE-MAE, so it covers every row
     (no Binance dependency). Strategy P/L is <strong>net of {{ '%g'|format(fee_pct) }}%
-    round-trip fee</strong> (closed signals only).{% if ss.approx %} <em>{{ ss.approx }}
+    round-trip fee</strong> (closed signals only).{% if strategy == 'be_tp1' %}
+    <strong>BE stop:</strong> once MFE hits +{{ '%g'|format(target_pct) }}% the simulated stop moves to
+    entry (break-even). If price then reverses to the original SL without hitting TP1 first, we exit at
+    0% instead of a loss. Signals that never reached +{{ '%g'|format(target_pct) }}% MFE are unchanged.{% endif %}
+    {% if ss.approx %} <em>{{ ss.approx }}
     older row(s) price TP legs from the engine's recorded TP-based PnL (no stored TP
     price) — marked <span class="muted">≈</span>.</em>{% endif %}</p>
   {% if ss.strategy.n %}

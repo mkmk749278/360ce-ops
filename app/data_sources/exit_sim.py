@@ -307,6 +307,7 @@ def build_catalog(target_pct: float = 1.0) -> dict[str, Strategy]:
     tp1, tp2, tp3 = Target(_TP_LEVEL, 1), Target(_TP_LEVEL, 2), Target(_TP_LEVEL, 3)
     strategies = [
         Strategy("tp1", "TP1 full (100% @ TP1)", (Leg(1.0, tp1),)),
+        Strategy("be_tp1", f"BE stop at +{g:g}% → hold to TP1", (Leg(1.0, tp1),)),
         Strategy("flat", f"Pre-TP only +{g:g}% · no invalidation", (Leg(1.0, fixed),)),
         Strategy("tp1_tp2", "50% TP1 · 50% TP2", (Leg(0.5, tp1), Leg(0.5, tp2))),
         Strategy("flat_tp1", f"Pre-TP +{g:g}% · TP1 · no invalidation",
@@ -320,6 +321,45 @@ def build_catalog(target_pct: float = 1.0) -> dict[str, Strategy]:
 def get_strategy(key: str, target_pct: float = 1.0) -> Strategy:
     catalog = build_catalog(target_pct)
     return catalog.get(key) or catalog["tp1"]
+
+
+def evaluate_be(inp: SignalInputs, strategy: Strategy, be_pct: float) -> ExitResult:
+    """Like evaluate() but with a break-even stop once MFE reaches be_pct%.
+
+    If price moved be_pct% in our favour and then hit the original stop (implying
+    it crossed back through entry on the way to the stop), simulate a 0% gross
+    exit — the stop was at break-even, so we scratch instead of losing.
+
+    If TP1 fills before the stop fires (verified by engine first-touch timestamps
+    or hit_tp flag), the BE stop never activates — TP1 takes us out profitably and
+    we fall through to the base strategy result unchanged.
+
+    Signals where BE was not triggered (MFE < be_pct) are evaluated via the base
+    strategy with no modification.
+    """
+    be_triggered = inp.mfe_pct is not None and inp.mfe_pct + 1e-9 >= be_pct
+    if be_triggered and inp.stop_hit():
+        # TP1 hit at or before the stop → TP1 exits the position first; BE irrelevant.
+        tp1_before_sl = (
+            inp.hit_tp >= 1
+            or (
+                inp.first_tp_touch is not None
+                and inp.first_sl_touch is not None
+                and inp.first_tp_touch <= inp.first_sl_touch
+            )
+        )
+        if not tp1_before_sl:
+            # BE fires: price went be_pct% our way then reversed through entry to SL.
+            # Gross return is 0% (entry == exit); fee is deducted by the caller.
+            return ExitResult(
+                result_pct=0.0,
+                filled_labels=["BE"],
+                sl_frac=0.0,
+                open_frac=0.0,
+                approx=False,
+                is_active=False,
+            )
+    return evaluate(inp, strategy)
 
 
 def summarize(results: list[ExitResult]) -> dict[str, Any]:
