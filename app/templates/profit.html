@@ -174,6 +174,55 @@
 {{ breakdown_table(breakdown_regime, "Regime") }}
 {% endif %}
 
+{%- macro edge_table(rows, caption) -%}
+{% if rows %}
+<section class="card">
+  <h2>{{ caption }}</h2>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>{{ caption.split(' ')[-1] | title }}</th>
+        <th>N</th>
+        <th>Avg MFE</th>
+        <th>Med MFE</th>
+        <th title="MFE ≥ {{ runner_threshold }}%">Runners</th>
+        <th>Avg realized</th>
+        <th>Give-back</th>
+        <th title="Realized ÷ MFE — fraction of the favourable move kept">Capture</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td class="small">{{ r.key }}</td>
+        <td class="mono muted">{{ r.n }}</td>
+        <td class="mono {% if r.avg_mfe > 0 %}pos{% endif %}">{{ "%.3f" % r.avg_mfe }}</td>
+        <td class="mono">{{ "%.3f" % r.median_mfe }}</td>
+        <td class="mono">{{ "%.0f%%"|format(r.runner_rate * 100) }}</td>
+        <td class="mono {% if r.avg_realized > 0 %}pos{% elif r.avg_realized < 0 %}neg{% endif %}">{{ "%.3f" % r.avg_realized }}</td>
+        <td class="mono {% if r.giveback_avg > 0.1 %}neg{% endif %}">{{ "%.3f" % r.giveback_avg }}</td>
+        <td class="mono {% if r.capture is not none and r.capture < 0.5 %}neg{% endif %}">
+          {% if r.capture is not none %}{{ "%.0f%%"|format(r.capture * 100) }}{% else %}—{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin-top:.5rem">MFE = held-to-stop max profit; Realized = engine's actual exit P/L;
+    Give-back = MFE − realized per signal; Capture = realized ÷ MFE.
+    Low capture with healthy MFE → exit machinery is the drag, not the entry.</p>
+</section>
+{% endif %}
+{%- endmacro -%}
+
+{% set rea = raw_edge_agg %}
+{% if rea.by_band or rea.by_setup or rea.by_regime %}
+<h2 style="margin:1.5rem 0 .5rem">MFE / Give-back / Capture <span class="muted small">— closed signals, engine real exits</span></h2>
+{{ edge_table(rea.by_band, "By score band") }}
+{{ edge_table(rea.by_setup, "By setup") }}
+{{ edge_table(rea.by_regime, "By regime") }}
+{% endif %}
+
 {% if window != 'live' %}
 <section class="card small muted">
   <strong>Historical window ({{ window }}):</strong> data from
