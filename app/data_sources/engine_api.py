@@ -158,3 +158,8 @@ class EngineApiClient:
     async def set_auto_trade_global(self, enabled: bool) -> Any:
         """Enable/disable global auto-trade. Owner-gated on the engine."""
         return await self._post("/api/auto-trade-global", {"enabled": enabled})
+
+    async def reset_signals(self) -> Any:
+        """Full-signal reset: clears active signals, history, stats, invalidation,
+        and paper broker state for all users.  Owner-gated on the engine."""
+        return await self._post("/api/admin/reset-signals", {})
