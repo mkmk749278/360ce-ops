@@ -380,7 +380,7 @@ async def _build_rows(
             if strategy_key == "be_tp1":
                 # BE stop: if MFE >= target_pct and stop subsequently hit without
                 # TP1 filling first, simulate a 0% exit instead of the SL loss.
-                ex = evaluate_be(inp, get_strategy("tp1", target), target)
+                ex = evaluate_be(inp, get_strategy("tp1", target_pct), target_pct)
             else:
                 ex = evaluate(inp, strategy)
             gross = ex.result_pct
