@@ -619,6 +619,114 @@ def _breakdown_regime(rows: list[dict], fee_pct: float) -> list[dict]:
     return result
 
 
+# ---------------------------------------------------------------------------
+# Combination analyzer — score band × path × regime cross-tab
+#
+# The single-dimension breakdowns above marginalise away interaction: "B-tier
+# is breakeven" and "SR_FLIP is breakeven" can both be true while
+# "B-tier SR_FLIP in TRENDING_DOWN" is strongly +EV. This finds the
+# *combinations* that actually print money so we can tighten generation toward
+# them (and starve the combos that bleed). Closed rows only — active signals
+# haven't resolved. Optional band/path/regime filters narrow the population
+# first; ``min_n`` drops thin, statistically-meaningless cells.
+# ---------------------------------------------------------------------------
+def _combo_options(rows: list[dict]) -> dict:
+    """Distinct band / path / regime values across closed rows — drives the
+    filter dropdowns so they only ever offer values that exist in this view."""
+    bands: set[str] = set()
+    paths: set[str] = set()
+    regimes: set[str] = set()
+    for r in rows:
+        if r["is_active"]:
+            continue
+        bands.add(_conf_band(r.get("confidence")))
+        paths.add(r.get("setup_class") or "UNKNOWN")
+        regimes.add(r.get("regime") or "UNKNOWN")
+    return {
+        "bands": sorted(bands, key=lambda b: _BAND_ORDER.get(b, 99)),
+        "paths": sorted(paths),
+        "regimes": sorted(regimes),
+    }
+
+
+def _combos(
+    rows: list[dict],
+    fee_pct: float,
+    *,
+    band: str | None = None,
+    path: str | None = None,
+    regime: str | None = None,
+    min_n: int = 1,
+) -> list[dict]:
+    """Profit by (score band × path × regime) combination, best total first.
+
+    Each cell carries engine-real and TP1-full-strategy stats (both net of
+    ``fee_pct``) plus MFE / give-back / capture so the owner can see not just
+    *which* combos win but *why* (real edge vs given-back move). Sorted by
+    engine-real total P/L descending — the top rows are where the money is.
+    """
+    buckets: dict[tuple[str, str, str], dict] = {}
+    for r in rows:
+        if r["is_active"]:
+            continue
+        b = _conf_band(r.get("confidence"))
+        p = r.get("setup_class") or "UNKNOWN"
+        g = r.get("regime") or "UNKNOWN"
+        if band and b != band:
+            continue
+        if path and p != path:
+            continue
+        if regime and g != regime:
+            continue
+        bk = buckets.setdefault(
+            (b, p, g), {"real": [], "strat": [], "mfe": [], "gb": []}
+        )
+        if r.get("real_pnl_pct") is not None:
+            bk["real"].append(r["real_pnl_pct"] - fee_pct)
+        if r.get("strategy_pct") is not None:
+            bk["strat"].append(r["strategy_pct"])
+        if r.get("mfe_pct") is not None:
+            bk["mfe"].append(r["mfe_pct"])
+        if r.get("giveback_pct") is not None:
+            bk["gb"].append(r["giveback_pct"])
+
+    out: list[dict] = []
+    for (b, p, g), bk in buckets.items():
+        rstat = _stat_block(bk["real"])
+        if rstat["n"] < max(1, min_n):
+            continue
+        sstat = _stat_block(bk["strat"])
+        edge = (
+            sstat["total"] - rstat["total"]
+            if sstat["total"] is not None and rstat["total"] is not None
+            else None
+        )
+        avg_mfe = (sum(bk["mfe"]) / len(bk["mfe"])) if bk["mfe"] else None
+        avg_gb = (sum(bk["gb"]) / len(bk["gb"])) if bk["gb"] else None
+        capture = (
+            (rstat["avg"] / avg_mfe * 100.0)
+            if avg_mfe not in (None, 0.0) and rstat["avg"] is not None
+            else None
+        )
+        out.append({
+            "band": b,
+            "path": p,
+            "regime": g,
+            "n": rstat["n"],
+            "real": rstat,
+            "strategy": sstat,
+            "edge": edge,
+            "avg_mfe": avg_mfe,
+            "avg_giveback": avg_gb,
+            "capture": capture,
+        })
+    out.sort(
+        key=lambda x: (x["real"]["total"] if x["real"]["total"] is not None else -1e18),
+        reverse=True,
+    )
+    return out
+
+
 _MFE_RUNNER_THRESHOLD = 1.0  # % — a signal that cleared 1% MFE is a "runner"
 
 
@@ -741,6 +849,10 @@ async def profit(
     target_pct: float = Query(1.0),
     fee_pct: float = Query(0.07),
     page: int = Query(1, ge=1),
+    combo_band: str = Query(""),
+    combo_path: str = Query(""),
+    combo_regime: str = Query(""),
+    combo_min_n: int = Query(1, ge=1, le=50),
 ):
     target = _resolve_target_pct(target_pct)
     fee = _resolve_fee_pct(fee_pct)
@@ -749,6 +861,14 @@ async def profit(
         strategy = "tp1"
     rows, error = await _build_rows(request, view, window, strategy, target, fee)
     pagination = _paginate(rows, page)
+    combos = _combos(
+        rows,
+        fee,
+        band=combo_band or None,
+        path=combo_path or None,
+        regime=combo_regime or None,
+        min_n=combo_min_n,
+    )
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "profit.html",
@@ -762,6 +882,14 @@ async def profit(
             "breakdown_path": _breakdown_path(rows, fee),
             "breakdown_regime": _breakdown_regime(rows, fee),
             "raw_edge_agg": _raw_edge_agg(rows),
+            "combos": combos,
+            "combo_options": _combo_options(rows),
+            "combo_filters": {
+                "band": combo_band,
+                "path": combo_path,
+                "regime": combo_regime,
+                "min_n": combo_min_n,
+            },
             "runner_threshold": _MFE_RUNNER_THRESHOLD,
             "strategies": [(k, s.label) for k, s in catalog.items()],
             "strategy": strategy,
