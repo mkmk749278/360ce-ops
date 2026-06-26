@@ -187,6 +187,94 @@
 {{ breakdown_table(breakdown_regime, "Regime") }}
 {% endif %}
 
+{# ---- Combination analyzer: score band × path × regime ------------------ #}
+<section class="card">
+  <h2>Combination analyzer
+    <span class="muted small">score band × path × regime · engine real exits, net of {{ '%g'|format(fee_pct) }}% fee · best total first</span>
+  </h2>
+  <p class="muted small" style="margin:.25rem 0 .6rem">Which <em>combinations</em> actually print money — the single-dimension tables above hide interaction (a breakeven band and a breakeven path can still combine into a strong edge). Filter to isolate a cohort; <strong>min&nbsp;N</strong> drops thin cells that are just noise. Closed signals only.</p>
+
+  <form method="get" action="/profit" class="filters" style="margin-bottom:.6rem">
+    {# preserve the page-level controls so the combo filter doesn't reset them #}
+    <input type="hidden" name="window" value="{{ window }}">
+    <input type="hidden" name="view" value="{{ view }}">
+    <input type="hidden" name="strategy" value="{{ strategy }}">
+    <input type="hidden" name="target_pct" value="{{ '%g'|format(target_pct) }}">
+    <input type="hidden" name="fee_pct" value="{{ '%g'|format(fee_pct) }}">
+    <label>Score band
+      <select name="combo_band" onchange="this.form.submit()">
+        <option value="">all</option>
+        {% for b in combo_options.bands %}
+        <option value="{{ b }}" {% if combo_filters.band == b %}selected{% endif %}>{{ b }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Path
+      <select name="combo_path" onchange="this.form.submit()">
+        <option value="">all</option>
+        {% for p in combo_options.paths %}
+        <option value="{{ p }}" {% if combo_filters.path == p %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Regime
+      <select name="combo_regime" onchange="this.form.submit()">
+        <option value="">all</option>
+        {% for g in combo_options.regimes %}
+        <option value="{{ g }}" {% if combo_filters.regime == g %}selected{% endif %}>{{ g }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label title="Hide combinations with fewer than this many closed signals">Min N
+      <select name="combo_min_n" onchange="this.form.submit()">
+        {% for v in [1, 2, 3, 5, 10] %}
+        <option value="{{ v }}" {% if combo_filters.min_n == v %}selected{% endif %}>{{ v }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+
+  {% if combos %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Band</th><th>Path</th><th>Regime</th>
+        <th class="mono">N</th>
+        <th class="mono" style="border-left:1px solid #333">Real avg</th>
+        <th class="mono">Real total</th>
+        <th class="mono">Win%</th>
+        <th class="mono" style="border-left:1px solid #333">{{ strategy_label }} total</th>
+        <th class="mono">Edge</th>
+        <th class="mono" style="border-left:1px solid #333">Avg MFE</th>
+        <th class="mono">Give-back</th>
+        <th class="mono">Capture</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in combos %}
+      <tr>
+        <td class="small">{{ c.band }}</td>
+        <td class="small">{{ c.path }}</td>
+        <td class="small">{{ c.regime }}</td>
+        <td class="mono muted">{{ c.n }}</td>
+        <td class="mono {% if c.real.avg is not none and c.real.avg > 0 %}pos{% elif c.real.avg is not none and c.real.avg < 0 %}neg{% endif %}" style="border-left:1px solid #333">{{ pct(c.real.avg) }}</td>
+        <td class="mono {% if c.real.total is not none and c.real.total > 0 %}pos{% elif c.real.total is not none and c.real.total < 0 %}neg{% endif %}"><strong>{{ pct(c.real.total) }}</strong></td>
+        <td class="mono muted">{% if c.real.win_rate is not none %}{{ "%.0f"|format(c.real.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="mono {% if c.strategy.total is not none and c.strategy.total > 0 %}pos{% elif c.strategy.total is not none and c.strategy.total < 0 %}neg{% endif %}" style="border-left:1px solid #333">{{ pct(c.strategy.total) }}</td>
+        <td class="mono {% if c.edge is not none and c.edge > 0 %}pos{% elif c.edge is not none and c.edge < 0 %}neg{% endif %}">{{ pct(c.edge) }}</td>
+        <td class="mono muted" style="border-left:1px solid #333">{{ pct(c.avg_mfe) }}</td>
+        <td class="mono muted">{{ pct(c.avg_giveback) }}</td>
+        <td class="mono {% if c.capture is not none and c.capture > 0 %}pos{% elif c.capture is not none and c.capture < 0 %}neg{% endif %}">{% if c.capture is not none %}{{ "%.0f"|format(c.capture) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin-top:.5rem">Real total = engine's actual realized P/L for the cohort (net of fee) — <strong>this is the money number</strong>. Edge = {{ strategy_label }} − real (positive = exit machinery still leaking). Capture = realized ÷ MFE (how much of the favorable move was kept). Sorted by Real total, highest first.</p>
+  {% else %}
+  <p class="muted">No closed combinations match this filter at min N = {{ combo_filters.min_n }}.</p>
+  {% endif %}
+</section>
+
 {%- macro edge_table(rows, caption) -%}
 {% if rows %}
 <section class="card">
