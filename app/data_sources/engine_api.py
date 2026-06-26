@@ -159,6 +159,16 @@ class EngineApiClient:
         """Enable/disable global auto-trade. Owner-gated on the engine."""
         return await self._post("/api/auto-trade-global", {"enabled": enabled})
 
+    async def signal_expiry_state(self) -> Any:
+        """Time-based signal-expiry backstop ``{enabled, initialised}``. When
+        disabled (default), signals run to TP/SL only — no max-hold force-close.
+        The 2h auto-trade reconciler stale-close net is independent."""
+        return await self._get("/api/signal-expiry")
+
+    async def set_signal_expiry(self, enabled: bool) -> Any:
+        """Enable/disable the signal-expiry backstop. Owner-gated on the engine."""
+        return await self._post("/api/signal-expiry", {"enabled": enabled})
+
     async def reset_signals(self) -> Any:
         """Full-signal reset: clears active signals, history, stats, invalidation,
         and paper broker state for all users.  Owner-gated on the engine."""

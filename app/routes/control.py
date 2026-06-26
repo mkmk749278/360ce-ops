@@ -38,6 +38,7 @@ async def _render(request: Request):
     auto = await api.auto_mode()
     ks = await api.kill_switch_state()
     glob = await api.auto_trade_global_state()
+    expiry = await api.signal_expiry_state()
     flash = request.session.pop("_control_flash", None)
 
     return templates.TemplateResponse(
@@ -48,6 +49,7 @@ async def _render(request: Request):
             "auto": auto if isinstance(auto, dict) else {},
             "ks": ks if isinstance(ks, dict) else {},
             "glob": glob if isinstance(glob, dict) else {},
+            "expiry": expiry if isinstance(expiry, dict) else {},
             "audit": audit.tail(settings.audit_log_path, limit=25),
             "flash": flash,
         },
@@ -194,6 +196,35 @@ async def control_auto_trade_global(request: Request, enabled: str = Form(...)):
     else:
         detail = result.get("error") if isinstance(result, dict) else result
         text = f"Global auto-trade flip failed: {detail}"
+    request.session["_control_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse("/control", status_code=303)
+
+
+@router.post("/control/signal-expiry")
+async def control_signal_expiry(request: Request, enabled: str = Form(...)):
+    api = request.app.state.engine_api
+    settings = request.app.state.settings
+    enable = enabled.strip().lower() in ("1", "true", "on", "yes", "enable")
+
+    result = await api.set_signal_expiry(enable)
+    ok = not _is_error(result)
+    audit.record(
+        settings.audit_log_path,
+        action="signal_expiry",
+        params={"enabled": enable},
+        result=result if isinstance(result, dict) else {},
+        ok=ok,
+    )
+    if ok:
+        text = (
+            "Signal expiry ENABLED — signals force-close at max hold time."
+            if enable
+            else "Signal expiry DISABLED — signals now run to TP or SL only "
+            "(2h auto-trade reconciler safety net unaffected)."
+        )
+    else:
+        detail = result.get("error") if isinstance(result, dict) else result
+        text = f"Signal-expiry flip failed: {detail}"
     request.session["_control_flash"] = {"ok": ok, "text": text}
     return RedirectResponse("/control", status_code=303)
 

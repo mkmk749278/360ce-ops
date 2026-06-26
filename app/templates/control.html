@@ -65,6 +65,32 @@
 </section>
 
 <section class="card">
+  <h2>Signal expiry (max-hold)</h2>
+  {% if expiry.get('initialised') is false %}
+    <p class="muted">Engine reports the flag uninitialised — running on the
+      <code>SIGNAL_EXPIRY_ENABLED</code> env boot default
+      (<strong>{{ 'enabled' if expiry.get('enabled') else 'disabled' }}</strong>).</p>
+  {% elif expiry.get('enabled') %}
+    <p class="ks-state ks-on">⏰ ENABLED — signals force-close at the max-hold time.</p>
+    <form method="post" action="/control/signal-expiry"
+          onsubmit="return confirm('DISABLE signal expiry? Signals will run to TP or SL only and never expire mid-move.');">
+      <input type="hidden" name="enabled" value="false">
+      <button type="submit" class="btn btn-go">Disable expiry (run to TP/SL)</button>
+    </form>
+  {% else %}
+    <p class="ks-state ks-off">✓ DISABLED — signals run to TP or SL only.</p>
+    <form method="post" action="/control/signal-expiry"
+          onsubmit="return confirm('ENABLE signal expiry? Signals will force-close at the max-hold time instead of running to TP/SL.');">
+      <input type="hidden" name="enabled" value="true">
+      <button type="submit" class="btn btn-danger">Enable expiry (force-close at max hold)</button>
+    </form>
+  {% endif %}
+  <p class="muted">When disabled (default), the time-based max-hold force-close
+  never fires — trades resolve at TP or SL only. The 2h auto-trade reconciler
+  stale-close safety net is independent and always active.</p>
+</section>
+
+<section class="card">
   <h2>Auto-execution mode</h2>
   {% if auto.get('error') %}
     <p class="muted">Could not read current mode: {{ auto.error }}</p>
