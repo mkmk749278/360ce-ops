@@ -79,7 +79,86 @@ def test_users_lookup_form_redirects_with_phone():
             follow_redirects=False,
         )
         assert r.status_code == 303
-        assert r.headers["location"] == "/control/users?phone=+15551230000"
+        # "+" is percent-encoded — Starlette's query parser decodes a literal
+        # "+" back to a space (form-urlencoded convention), so an unencoded
+        # "+" in the Location header would corrupt the phone on the very
+        # next GET.
+        assert r.headers["location"] == "/control/users?phone=%2B15551230000"
+
+
+def test_users_lookup_raw_digits_normalize_with_selected_country_code():
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/lookup",
+            data={"phone": "9618579123", "country_code": "91"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/control/users?phone=%2B919618579123"
+
+
+def test_users_lookup_raw_digits_default_to_india_when_country_omitted():
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/lookup",
+            data={"phone": "9618579123"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/control/users?phone=%2B919618579123"
+
+
+def test_users_lookup_pasted_plus_number_ignores_country_select():
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/lookup",
+            data={"phone": "+15551230000", "country_code": "91"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] == "/control/users?phone=%2B15551230000"
+
+
+def test_users_lookup_round_trip_calls_engine_with_normalized_e164(monkeypatch):
+    """Reproduces the live bug: typing raw digits (no +) into the lookup
+    form must reach the engine as a proper E.164 number, end to end through
+    the POST -> redirect -> GET round trip — not just at the redirect-URL
+    level."""
+    seen: dict = {}
+
+    async def fake_lookup(self, phone):
+        seen["phone"] = phone
+        return {
+            "user_id": 1,
+            "phone": phone,
+            "tier": "owner",
+            "paid_until": None,
+            "display_name": "Kishore",
+            "onboarded": True,
+        }
+
+    monkeypatch.setattr(EngineApiClient, "user_lookup", fake_lookup)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/lookup",
+            data={"phone": "9618579123", "country_code": "91"},
+        )
+        assert r.status_code == 200
+        assert seen["phone"] == "+919618579123"
+        assert "Kishore" in r.text
+
+
+def test_users_page_blank_shows_india_default_in_country_select():
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/control/users")
+        assert r.status_code == 200
+        assert '<option value="91" selected' in r.text
+        assert "India" in r.text
 
 
 def test_grant_calls_engine_and_audits(monkeypatch):

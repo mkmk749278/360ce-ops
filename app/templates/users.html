@@ -18,10 +18,23 @@
 <section class="card">
   <h2>Look up user</h2>
   <form method="post" action="/control/users/lookup">
-    <input type="text" name="phone" value="{{ phone }}" placeholder="+15551230000"
-           minlength="8" maxlength="18" required>
+    <label>Country
+      <select name="country_code">
+        {% for dial, name in country_codes %}
+        <option value="{{ dial }}" {% if dial == default_country_code %}selected{% endif %}>
+          +{{ dial }} {{ name }}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <input type="text" name="phone" placeholder="9618579123"
+           minlength="6" maxlength="15" required
+           pattern="[0-9+ ()-]*">
     <button type="submit" class="btn btn-plain">Look up</button>
   </form>
+  <p class="muted">
+    Paste a full <code>+</code>-prefixed number to override the country select.
+  </p>
 </section>
 
 {% if phone %}
