@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Pairs · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Pairs</h1>
+<p class="muted">
+  The scanned universe and the live mover-promoted set. Use <strong>Promoting</strong>
+  to confirm the mover-ignition promotions are actually updating —
+  <code>updated&nbsp;at</code> below is the engine's last rebuild.
+</p>
+
+{% if error %}
+<section class="card"><div class="error">Engine error: {{ error }}</div></section>
+{% endif %}
+
+<div class="actions">
+  <a class="btn {% if tab == 'promoting' %}btn-go{% endif %}" href="/pairs?tab=promoting">
+    Promoting ({{ promoting_count }})
+  </a>
+  <a class="btn {% if tab == 'regular' %}btn-go{% endif %}" href="/pairs?tab=regular">
+    Regular ({{ regular_count }})
+  </a>
+  <span class="muted" style="margin-left:auto">
+    updated at {{ updated_at or '—' }}
+  </span>
+</div>
+
+{% if tab == 'promoting' %}
+<section class="card">
+  <h2>Promoting pairs <span class="muted">live mover-promoted — counts down each scan cycle</span></h2>
+  {% if promoting %}
+  <table class="data-table">
+    <thead><tr><th>Symbol</th><th>Cycles left</th><th>24h vol (USD)</th><th>24h Δ%</th></tr></thead>
+    <tbody>
+      {% for p in promoting %}
+      <tr>
+        <td><strong>{{ p.symbol }}</strong></td>
+        <td>{{ p.cycles_left }}</td>
+        <td>{{ '{:,.0f}'.format(p.volume_24h_usd or 0) }}</td>
+        <td>{{ '{:.1f}'.format(p.change_24h_pct or 0) }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="muted">
+    No pairs currently promoted. With ignition enabled this is normal in quiet
+    markets — promotions fire only when a pair is actually moving. If it stays
+    empty across a clearly volatile window, the ignition feed may be stalled.
+  </div>
+  {% endif %}
+</section>
+{% else %}
+<section class="card">
+  <h2>Regular pairs <span class="muted">scanned universe — by tier, then 24h volume</span></h2>
+  {% if regular %}
+  <table class="data-table">
+    <thead><tr><th>Symbol</th><th>Tier</th><th>24h vol (USD)</th><th>24h Δ%</th></tr></thead>
+    <tbody>
+      {% for r in regular %}
+      <tr>
+        <td><strong>{{ r.symbol }}</strong></td>
+        <td>{{ r.tier }}</td>
+        <td>{{ '{:,.0f}'.format(r.volume_24h_usd or 0) }}</td>
+        <td>{{ '{:.1f}'.format(r.change_24h_pct or 0) }}%</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="muted">No pairs in the scanned universe.</div>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

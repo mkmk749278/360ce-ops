@@ -84,6 +84,9 @@ class EngineApiClient:
     async def pulse(self) -> Any:
         return await self._get("/api/pulse")
 
+    async def pairs(self) -> Any:
+        return await self._get("/api/pairs")
+
     async def auto_mode(self) -> Any:
         return await self._get("/api/auto-mode")
 

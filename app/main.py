@@ -33,6 +33,7 @@ from app.routes import (
     data_export,
     diag,
     invalidations,
+    pairs,
     performance,
     positions,
     profit,
@@ -89,6 +90,7 @@ app.include_router(pulse.router)
 app.include_router(truth.router)
 app.include_router(signals.router)
 app.include_router(signal_detail.router)
+app.include_router(pairs.router)
 app.include_router(diag.router)
 app.include_router(invalidations.router)
 app.include_router(performance.router)
