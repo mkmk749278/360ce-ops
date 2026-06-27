@@ -11,8 +11,18 @@ comping a tester or an influencer. Calls the engine's owner-gated
 
 Same POST→redirect→GET + audit-log pattern as the rest of ``control.py``.
 The lookup itself is a read, so it is not audited — only the grant write is.
+
+The engine stores phone numbers as exact-match E.164 (``UserStore.get_by_phone``
+does a plain ``WHERE phone_e164 = ?``, no normalisation) — so the lookup form
+must send a ``+``-prefixed number or every lookup silently 404s, even for a
+real account. The country-code select below (default India, mirrors the
+lumin-app picker) plus ``_to_e164`` close that gap client-side-free, entirely
+in this route.
 """
 from __future__ import annotations
+
+import re
+from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
@@ -23,9 +33,62 @@ router = APIRouter()
 
 _VALID_TIERS = {"free", "assist", "auto"}
 
+# (dial code without "+", display name) — subset of lumin-app's
+# lib/data/country_codes.dart kept in sync by hand; India first since it's
+# the default and the bulk of the current tester base.
+COUNTRY_CODES: list[tuple[str, str]] = [
+    ("91", "India"),
+    ("1", "United States/Canada"),
+    ("44", "United Kingdom"),
+    ("971", "United Arab Emirates"),
+    ("65", "Singapore"),
+    ("61", "Australia"),
+    ("60", "Malaysia"),
+    ("63", "Philippines"),
+    ("62", "Indonesia"),
+    ("92", "Pakistan"),
+    ("880", "Bangladesh"),
+    ("966", "Saudi Arabia"),
+    ("234", "Nigeria"),
+    ("27", "South Africa"),
+    ("49", "Germany"),
+    ("33", "France"),
+    ("81", "Japan"),
+    ("86", "China"),
+    ("52", "Mexico"),
+    ("55", "Brazil"),
+]
+_DEFAULT_COUNTRY_CODE = "91"
+
+
+def _to_e164(country_code: str, raw_phone: str) -> str:
+    """Normalise a lookup-form phone to ``+<dial><digits>``.
+
+    A number already starting with ``+`` (pasted full international
+    format) passes through with only whitespace/punctuation stripped —
+    the country-code select is ignored in that case.
+    """
+    raw_phone = raw_phone.strip()
+    if raw_phone.startswith("+"):
+        return "+" + re.sub(r"\D", "", raw_phone)
+    digits = re.sub(r"\D", "", raw_phone)
+    dial = re.sub(r"\D", "", country_code) or _DEFAULT_COUNTRY_CODE
+    return f"+{dial}{digits}"
+
 
 def _is_error(result: object) -> bool:
     return isinstance(result, dict) and bool(result.get("error"))
+
+
+def _users_redirect(phone: str) -> RedirectResponse:
+    """Build the post-action redirect, percent-encoding ``phone``.
+
+    Starlette's query-string parser decodes a literal ``+`` back to a
+    space (form-urlencoded convention), so an unencoded E.164 phone in
+    the Location header comes back corrupted on the very next GET —
+    every redirect here must percent-encode it.
+    """
+    return RedirectResponse(f"/control/users?phone={quote(phone, safe='')}", status_code=303)
 
 
 @router.get("/control/users")
@@ -55,14 +118,20 @@ async def control_users_page(request: Request, phone: str = ""):
             "lookup": lookup,
             "not_found": not_found,
             "flash": flash,
+            "country_codes": COUNTRY_CODES,
+            "default_country_code": _DEFAULT_COUNTRY_CODE,
         },
     )
 
 
 @router.post("/control/users/lookup")
-async def control_users_lookup(request: Request, phone: str = Form(...)):
-    phone = phone.strip()
-    return RedirectResponse(f"/control/users?phone={phone}", status_code=303)
+async def control_users_lookup(
+    request: Request,
+    phone: str = Form(...),
+    country_code: str = Form(_DEFAULT_COUNTRY_CODE),
+):
+    phone = _to_e164(country_code, phone)
+    return _users_redirect(phone)
 
 
 @router.post("/control/users/grant")
@@ -83,7 +152,7 @@ async def control_users_grant(
             "ok": False,
             "text": f"Rejected — invalid tier {tier!r}.",
         }
-        return RedirectResponse(f"/control/users?phone={phone}", status_code=303)
+        return _users_redirect(phone)
 
     result = await api.grant_tier(
         phone,
@@ -114,4 +183,4 @@ async def control_users_grant(
         detail = result.get("error") if isinstance(result, dict) else result
         text = f"Grant failed: {detail}"
     request.session["_control_flash"] = {"ok": ok, "text": text}
-    return RedirectResponse(f"/control/users?phone={phone}", status_code=303)
+    return _users_redirect(phone)
