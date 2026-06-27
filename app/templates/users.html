@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Users · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>User tier grant</h1>
+<p class="muted">
+  Owner-only comp for testers/influencers — manually set a subscription tier
+  without a Play Billing purchase. Every grant carries an expiry (default 30
+  days); <code>free</code> revokes immediately. Owner-gated end to end and
+  written to the audit log on the Control page.
+</p>
+
+{% if flash %}
+<div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
+  {{ flash.text }}
+</div>
+{% endif %}
+
+<section class="card">
+  <h2>Look up user</h2>
+  <form method="post" action="/control/users/lookup">
+    <input type="text" name="phone" value="{{ phone }}" placeholder="+15551230000"
+           minlength="8" maxlength="18" required>
+    <button type="submit" class="btn btn-plain">Look up</button>
+  </form>
+</section>
+
+{% if phone %}
+  {% if not_found %}
+  <section class="card">
+    <p class="muted">No user found with phone <strong>{{ phone }}</strong>.</p>
+  </section>
+  {% elif lookup %}
+  <section class="card">
+    <h2>{{ lookup.display_name or lookup.phone }}</h2>
+    <p>
+      user_id <strong>{{ lookup.user_id }}</strong> ·
+      tier <strong>{{ lookup.tier|upper }}</strong>
+      {% if lookup.paid_until %}(until {{ lookup.paid_until }}){% endif %} ·
+      {{ 'onboarded' if lookup.onboarded else 'not onboarded' }}
+    </p>
+
+    <form method="post" action="/control/users/grant"
+          onsubmit="return confirm('Grant ' + this.tier.value.toUpperCase() + ' to {{ lookup.phone }} for ' + this.duration_days.value + ' days?');">
+      <input type="hidden" name="phone" value="{{ lookup.phone }}">
+      <label>Tier
+        <select name="tier">
+          <option value="assist">assist</option>
+          <option value="auto">auto</option>
+          <option value="free">free (revoke)</option>
+        </select>
+      </label>
+      <label>Duration (days)
+        <input type="number" name="duration_days" value="30" min="1" max="365">
+      </label>
+      <input type="text" name="reason" maxlength="200" placeholder="Reason (optional, recorded)">
+      <button type="submit" class="btn btn-go">Grant</button>
+    </form>
+    <p class="muted">Duration is ignored when tier is <code>free</code>.</p>
+  </section>
+  {% endif %}
+{% endif %}
+{% endblock %}

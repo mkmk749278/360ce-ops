@@ -37,6 +37,17 @@ class EngineApiClient:
             r = await self.client.get(path, params=params or None)
             r.raise_for_status()
             return r.json()
+        except httpx.HTTPStatusError as exc:
+            detail: Any = None
+            try:
+                detail = exc.response.json().get("detail")
+            except Exception:
+                detail = exc.response.text
+            return {
+                "error": detail or str(exc),
+                "status_code": exc.response.status_code,
+                "endpoint": path,
+            }
         except httpx.HTTPError as exc:
             return {"error": str(exc), "endpoint": path}
 
@@ -173,3 +184,29 @@ class EngineApiClient:
         """Full-signal reset: clears active signals, history, stats, invalidation,
         and paper broker state for all users.  Owner-gated on the engine."""
         return await self._post("/api/admin/reset-signals", {})
+
+    async def user_lookup(self, phone: str) -> Any:
+        """Look up a user's current tier/paid_until/display_name by phone —
+        what the ops UI shows before the owner decides whether/what to
+        grant.  Owner-gated on the engine; a 404 (unknown phone) surfaces
+        as ``{"error": ..., "status_code": 404}`` via ``_get``'s plain
+        ``httpx.HTTPError`` branch."""
+        return await self._get("/api/admin/users/lookup", phone=phone)
+
+    async def grant_tier(
+        self,
+        phone: str,
+        tier: str,
+        duration_days: int | None = None,
+        reason: str | None = None,
+    ) -> Any:
+        """Manually grant (or revoke, ``tier="free"``) a subscription tier —
+        tester/influencer comp, not a Play Billing purchase.  Owner-gated
+        on the engine; every grant carries an expiry (engine defaults
+        ``duration_days`` to 30 when omitted; ignored for ``tier="free"``)."""
+        payload: dict[str, Any] = {"phone": phone, "tier": tier}
+        if duration_days is not None:
+            payload["duration_days"] = duration_days
+        if reason:
+            payload["reason"] = reason
+        return await self._post("/api/admin/grant-tier", payload)
