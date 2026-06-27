@@ -41,6 +41,7 @@ from app.routes import (
     signal_detail,
     signals,
     truth,
+    users,
 )
 
 settings = load_settings()
@@ -95,6 +96,7 @@ app.include_router(raw_edge.router)
 app.include_router(positions.router)
 app.include_router(profit.router)
 app.include_router(control.router)
+app.include_router(users.router)
 app.include_router(alerts.router)
 app.include_router(data_export.router)
 
