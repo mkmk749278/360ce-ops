@@ -70,9 +70,12 @@
     </tbody>
   </table>
   <p class="muted">
-    <strong>Why not firing</strong> = the last outcome of the two mover paths this
-    pair was scanned through (15m pullback/reclaim). <code>mover_run_too_small</code>
-    = stack separation under the gate; <code>no_reclaim</code> / <code>no_pullback_tag</code>
+    <strong>Why not firing</strong> = the last outcome for this pair.
+    <em>Skipped before evaluation:</em> <code>spread_too_wide</code> = mover spread
+    gate (&gt;0.5%); <code>rollout_excluded</code> / <code>channel_skipped</code> =
+    the scalp channel didn't run on it this cycle.
+    <em>Evaluated (15m pullback/reclaim):</em> <code>mover_run_too_small</code> =
+    stack separation under the gate; <code>no_reclaim</code> / <code>no_pullback_tag</code>
     = waiting for the next 15m pullback-and-reclaim; <code>basic_filters_failed</code>
     = spread/volume; <code>quiet_scalp_min_confidence</code> = generated but below the
     65 floor. <code>—</code> = not yet scanned this window.
