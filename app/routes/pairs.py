@@ -36,6 +36,7 @@ async def pairs_page(request: Request, tab: str = "promoting"):
             "regular_count": data.get("regular_count", len(data.get("regular") or [])),
             "promoting_count": data.get("promoting_count", len(data.get("promoting") or [])),
             "updated_at": data.get("updated_at"),
+            "ignition": data.get("ignition") or {},
             "error": error,
         },
     )

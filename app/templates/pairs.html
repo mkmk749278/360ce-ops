@@ -27,6 +27,24 @@
 {% if tab == 'promoting' %}
 <section class="card">
   <h2>Promoting pairs <span class="muted">live mover-promoted — counts down each scan cycle</span></h2>
+
+  {% if ignition %}
+  {% set fed = (ignition.frames_ingested or 0) > 0 and ignition.get('ws_connected', True) %}
+  <div class="flash {% if fed %}flash-ok{% else %}flash-err{% endif %}">
+    Ignition feed:
+    {% if fed %}alive{% else %}STALLED — no frames / WS not connected{% endif %}
+    · enabled {{ ignition.enabled }}
+    · WS {{ 'connected' if ignition.get('ws_connected') else 'down' }} ({{ ignition.get('ws_streams', 0) }})
+    · frames {{ ignition.frames_ingested or 0 }}
+    · tracking {{ ignition.tracked_symbols or 0 }} symbols
+    · ignitions {{ ignition.ignitions_total or 0 }}
+    · last {{ ignition.last_ignition_at or 'never' }}
+  </div>
+  <p class="muted">
+    Empty list + feed <strong>alive</strong> = genuinely quiet (no pair igniting).
+    Empty list + feed <strong>stalled</strong> = the detector is starved — ping CTE.
+  </p>
+  {% endif %}
   {% if promoting %}
   <table class="data-table">
     <thead><tr><th>Symbol</th><th>Cycles left</th><th>24h vol (USD)</th><th>24h Δ%</th></tr></thead>

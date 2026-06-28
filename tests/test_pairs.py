@@ -26,6 +26,11 @@ _PAYLOAD = {
     "regular_count": 1,
     "promoting_count": 1,
     "updated_at": "2026-06-27T09:00:00+00:00",
+    "ignition": {
+        "enabled": True, "tracked_symbols": 180, "frames_ingested": 4200,
+        "ignitions_total": 3, "last_ignition_at": "2026-06-27T08:55:00+00:00",
+        "ws_connected": True, "ws_streams": 1,
+    },
 }
 
 
@@ -48,6 +53,25 @@ def test_pairs_promoting_tab_default(monkeypatch):
         assert "Promoting" in r.text
         assert "ARXUSDT" in r.text                 # promoting row rendered
         assert "2026-06-27T09:00:00+00:00" in r.text  # updated_at visible
+        assert "Ignition feed" in r.text           # health line rendered
+        assert "alive" in r.text                    # frames flowing + WS up
+
+
+def test_pairs_stalled_feed_flagged(monkeypatch):
+    async def fake_pairs(self):
+        return {"regular": [], "promoting": [], "regular_count": 0,
+                "promoting_count": 0, "updated_at": "t",
+                "ignition": {"enabled": True, "tracked_symbols": 0,
+                             "frames_ingested": 0, "ignitions_total": 0,
+                             "last_ignition_at": None, "ws_connected": False,
+                             "ws_streams": 0}}
+
+    monkeypatch.setattr(EngineApiClient, "pairs", fake_pairs)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/pairs")
+        assert r.status_code == 200
+        assert "STALLED" in r.text
 
 
 def test_pairs_regular_tab(monkeypatch):
