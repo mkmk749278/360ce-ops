@@ -21,7 +21,9 @@ _PAYLOAD = {
         {"symbol": "BTCUSDT", "tier": "TIER1", "volume_24h_usd": 5e9, "change_24h_pct": 1.2},
     ],
     "promoting": [
-        {"symbol": "ARXUSDT", "minutes_left": 312.5, "volume_24h_usd": 8e6, "change_24h_pct": 22.0},
+        {"symbol": "ARXUSDT", "minutes_left": 312.5, "volume_24h_usd": 8e6,
+         "change_24h_pct": 22.0, "reject_reason": "no_reclaim",
+         "reject_path": "MOVER_TREND_PULLBACK", "reject_age_sec": 7.0},
     ],
     "regular_count": 1,
     "promoting_count": 1,
@@ -56,6 +58,27 @@ def test_pairs_promoting_tab_default(monkeypatch):
         assert "2026-06-27T09:00:00+00:00" in r.text  # updated_at visible
         assert "Ignition feed" in r.text           # health line rendered
         assert "alive" in r.text                    # frames flowing + WS up
+        assert "no_reclaim" in r.text               # per-pair "why not firing" reason
+        assert "Why not firing" in r.text           # column header rendered
+
+
+def test_pairs_promoting_shows_fired_marker(monkeypatch):
+    payload = dict(_PAYLOAD)
+    payload["promoting"] = [
+        {"symbol": "MUSDT", "minutes_left": 200.0, "volume_24h_usd": 14e6,
+         "change_24h_pct": 19.8, "reject_reason": "fired",
+         "reject_path": "MOVER_AVWAP_SCALP", "reject_age_sec": 2.0},
+    ]
+
+    async def fake_pairs(self):
+        return payload
+
+    monkeypatch.setattr(EngineApiClient, "pairs", fake_pairs)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/pairs")
+        assert r.status_code == 200
+        assert "fired" in r.text                     # a mover that did fire is marked
 
 
 def test_pairs_stalled_feed_flagged(monkeypatch):

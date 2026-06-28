@@ -47,7 +47,7 @@
   {% endif %}
   {% if promoting %}
   <table class="data-table">
-    <thead><tr><th>Symbol</th><th>Held (min left)</th><th>24h vol (USD)</th><th>24h Δ%</th></tr></thead>
+    <thead><tr><th>Symbol</th><th>Held (min left)</th><th>24h vol (USD)</th><th>24h Δ%</th><th>Why not firing</th></tr></thead>
     <tbody>
       {% for p in promoting %}
       <tr>
@@ -55,10 +55,28 @@
         <td>{{ p.minutes_left }}</td>
         <td>{{ '{:,.0f}'.format(p.volume_24h_usd or 0) }}</td>
         <td>{{ '{:.1f}'.format(p.change_24h_pct or 0) }}%</td>
+        <td>
+          {% if p.reject_reason == 'fired' %}
+            <span style="color:#3fb950">✓ fired ({{ p.reject_path|replace('MOVER_','')|replace('_',' ')|lower }})</span>
+          {% elif p.reject_reason %}
+            <code>{{ p.reject_reason }}</code>
+            <span class="muted">· {{ p.reject_path|replace('MOVER_','')|replace('_',' ')|lower }}{% if p.reject_age_sec is not none %} · {{ '{:.0f}'.format(p.reject_age_sec) }}s ago{% endif %}</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  <p class="muted">
+    <strong>Why not firing</strong> = the last outcome of the two mover paths this
+    pair was scanned through (15m pullback/reclaim). <code>mover_run_too_small</code>
+    = stack separation under the gate; <code>no_reclaim</code> / <code>no_pullback_tag</code>
+    = waiting for the next 15m pullback-and-reclaim; <code>basic_filters_failed</code>
+    = spread/volume; <code>quiet_scalp_min_confidence</code> = generated but below the
+    65 floor. <code>—</code> = not yet scanned this window.
+  </p>
   {% else %}
   <div class="muted">
     No pairs currently promoted. With ignition enabled this is normal in quiet
