@@ -21,7 +21,7 @@ _PAYLOAD = {
         {"symbol": "BTCUSDT", "tier": "TIER1", "volume_24h_usd": 5e9, "change_24h_pct": 1.2},
     ],
     "promoting": [
-        {"symbol": "ARXUSDT", "cycles_left": 5, "volume_24h_usd": 8e6, "change_24h_pct": 22.0},
+        {"symbol": "ARXUSDT", "minutes_left": 312.5, "volume_24h_usd": 8e6, "change_24h_pct": 22.0},
     ],
     "regular_count": 1,
     "promoting_count": 1,
@@ -52,6 +52,7 @@ def test_pairs_promoting_tab_default(monkeypatch):
         assert r.status_code == 200
         assert "Promoting" in r.text
         assert "ARXUSDT" in r.text                 # promoting row rendered
+        assert "312.5" in r.text                    # minutes-left hold rendered
         assert "2026-06-27T09:00:00+00:00" in r.text  # updated_at visible
         assert "Ignition feed" in r.text           # health line rendered
         assert "alive" in r.text                    # frames flowing + WS up

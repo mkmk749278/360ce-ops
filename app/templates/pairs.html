@@ -47,12 +47,12 @@
   {% endif %}
   {% if promoting %}
   <table class="data-table">
-    <thead><tr><th>Symbol</th><th>Cycles left</th><th>24h vol (USD)</th><th>24h Δ%</th></tr></thead>
+    <thead><tr><th>Symbol</th><th>Held (min left)</th><th>24h vol (USD)</th><th>24h Δ%</th></tr></thead>
     <tbody>
       {% for p in promoting %}
       <tr>
         <td><strong>{{ p.symbol }}</strong></td>
-        <td>{{ p.cycles_left }}</td>
+        <td>{{ p.minutes_left }}</td>
         <td>{{ '{:,.0f}'.format(p.volume_24h_usd or 0) }}</td>
         <td>{{ '{:.1f}'.format(p.change_24h_pct or 0) }}%</td>
       </tr>
