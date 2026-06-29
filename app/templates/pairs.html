@@ -72,8 +72,12 @@
   <p class="muted">
     <strong>Why not firing</strong> = the last outcome for this pair.
     <em>Skipped before evaluation:</em> <code>spread_too_wide</code> = mover spread
-    gate (&gt;0.5%); <code>rollout_excluded</code> / <code>channel_skipped</code> =
-    the scalp channel didn't run on it this cycle.
+    gate; <code>tier2_scalp_excluded</code> = pair is Tier-2 (scalp channel excludes
+    it); <code>volatile_unsuitable</code> = market state too volatile for scalp;
+    <code>regime_*</code> = regime incompatible with the scalp channel;
+    <code>pair_quality_*</code> = spread/volume quality gate; <code>cooldown</code> /
+    <code>circuit_breaker</code> / <code>active_signal_exists</code> /
+    <code>channel_paused</code> / <code>rollout_excluded</code> = self-explanatory.
     <em>Evaluated (15m pullback/reclaim):</em> <code>mover_run_too_small</code> =
     stack separation under the gate; <code>no_reclaim</code> / <code>no_pullback_tag</code>
     = waiting for the next 15m pullback-and-reclaim; <code>basic_filters_failed</code>
