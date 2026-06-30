@@ -66,6 +66,13 @@
       {% endfor %}
     </select>
   </label>
+  <label title="Directional what-if: replay the book under a directional policy (e.g. shorts only, or excluding the counter-trend long cohorts that carry the bleed). Filters on recorded side/setup only — no BTC dependency.">Direction
+    <select name="direction" onchange="this.form.submit()">
+      {% for key, label in direction_filters %}
+      <option value="{{ key }}" {% if direction == key %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
   <label>Fixed target %
     <input type="number" name="target_pct" value="{{ '%g'|format(target_pct) }}"
            step="0.1" min="0.1" max="20" style="width:5em"
@@ -201,6 +208,7 @@
     <input type="hidden" name="strategy" value="{{ strategy }}">
     <input type="hidden" name="target_pct" value="{{ '%g'|format(target_pct) }}">
     <input type="hidden" name="fee_pct" value="{{ '%g'|format(fee_pct) }}">
+    <input type="hidden" name="direction" value="{{ direction }}">
     <label>Score band
       <select name="combo_band" onchange="this.form.submit()">
         <option value="">all</option>
@@ -334,7 +342,7 @@
 {% endif %}
 
 <div class="actions">
-  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}">Download CSV (all rows, current view)</a>
+  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}">Download CSV (all rows, current view)</a>
 </div>
 
 {% if aggregates.n %}
@@ -440,8 +448,8 @@
   </span>
   {% if pg.total_pages > 1 %}
   <span>
-    {% if pg.page > 1 %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&page={{ pg.page - 1 }}">← prev</a>{% endif %}
-    {% if pg.page < pg.total_pages %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&page={{ pg.page + 1 }}">next →</a>{% endif %}
+    {% if pg.page > 1 %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}&page={{ pg.page - 1 }}">← prev</a>{% endif %}
+    {% if pg.page < pg.total_pages %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}&page={{ pg.page + 1 }}">next →</a>{% endif %}
   </span>
   {% endif %}
 </div>

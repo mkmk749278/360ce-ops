@@ -260,3 +260,50 @@ def test_summary_avg_winrate_total():
     assert s["wins"] == 1 and s["losses"] == 1
     assert abs(s["total_pct"] - 0.0) < 1e-9
     assert abs(s["win_rate"] - 50.0) < 1e-9
+
+
+# --------------------------------------------------------------------------------------
+# Directional what-if filter — pure classification on side + setup_class (no BTC dep).
+# --------------------------------------------------------------------------------------
+from app.data_sources.exit_sim import (  # noqa: E402
+    direction_filters,
+    passes_direction_filter,
+)
+
+
+def test_direction_filters_catalog_has_expected_keys():
+    keys = set(direction_filters())
+    assert keys == {"all", "shorts", "longs", "ex_ct_longs"}
+
+
+def test_direction_all_and_unknown_keep_everything():
+    for key in ("all", "bogus", ""):
+        assert passes_direction_filter("LONG", "SR_FLIP_RETEST", key) is True
+        assert passes_direction_filter("SHORT", "FAILED_AUCTION_RECLAIM", key) is True
+
+
+def test_direction_shorts_only():
+    assert passes_direction_filter("SHORT", "SR_FLIP_RETEST", "shorts") is True
+    assert passes_direction_filter("LONG", "SR_FLIP_RETEST", "shorts") is False
+
+
+def test_direction_longs_only():
+    assert passes_direction_filter("LONG", "VOLUME_SURGE_BREAKOUT", "longs") is True
+    assert passes_direction_filter("SHORT", "VOLUME_SURGE_BREAKOUT", "longs") is False
+
+
+def test_direction_excludes_only_counter_trend_longs():
+    # The three bleeding CT-long cohorts are dropped on the LONG side...
+    for setup in ("SR_FLIP_RETEST", "LIQUIDITY_SWEEP_REVERSAL", "MOVER_TREND_PULLBACK"):
+        assert passes_direction_filter("LONG", setup, "ex_ct_longs") is False
+        # ...but the SAME setups on the SHORT side are kept (shorts work).
+        assert passes_direction_filter("SHORT", setup, "ex_ct_longs") is True
+    # A profitable long path (VSB long) is untouched.
+    assert passes_direction_filter("LONG", "VOLUME_SURGE_BREAKOUT", "ex_ct_longs") is True
+    assert passes_direction_filter("LONG", "FAILED_AUCTION_RECLAIM", "ex_ct_longs") is True
+
+
+def test_direction_filter_case_insensitive_and_none_safe():
+    assert passes_direction_filter("long", "sr_flip_retest", "ex_ct_longs") is False
+    assert passes_direction_filter(None, None, "shorts") is False
+    assert passes_direction_filter(None, None, "all") is True
