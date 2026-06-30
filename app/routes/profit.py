@@ -55,9 +55,11 @@ from fastapi import APIRouter, Query, Request
 from app.data_sources.exit_sim import (
     SignalInputs,
     build_catalog,
+    direction_filters,
     evaluate,
     evaluate_be,
     get_strategy,
+    passes_direction_filter,
 )
 from app.data_sources.free_run import FreeRunResult
 from app.reports import csv_response
@@ -303,6 +305,7 @@ async def _build_rows(
     strategy_key: str = "tp1",
     target_pct: float = 1.0,
     fee_pct: float = 0.07,
+    direction: str = "all",
 ) -> tuple[list[dict], str | None]:
     """Fetch signals, replay each held-to-stop, reshape into rows.
 
@@ -406,6 +409,14 @@ async def _build_rows(
         rows = [r for r in rows if r["is_active"]]
     elif view == "closed":
         rows = [r for r in rows if not r["is_active"]]
+
+    # Directional what-if filter — applied here so every downstream aggregation
+    # (summary, strategy_summary, breakdowns, combos, give-back) sees the same cohort.
+    if direction and direction != "all":
+        rows = [
+            r for r in rows
+            if passes_direction_filter(r.get("side"), r.get("setup_class"), direction)
+        ]
 
     rows.sort(key=lambda r: (0 if r["is_active"] else 1, r.get("minutes_ago") if r.get("minutes_ago") is not None else 10**9))
     return rows, error
@@ -848,6 +859,7 @@ async def profit(
     strategy: str = Query("tp1"),
     target_pct: float = Query(1.0),
     fee_pct: float = Query(0.07),
+    direction: str = Query("all"),
     page: int = Query(1, ge=1),
     combo_band: str = Query(""),
     combo_path: str = Query(""),
@@ -859,7 +871,10 @@ async def profit(
     catalog = build_catalog(target)
     if strategy not in catalog:
         strategy = "tp1"
-    rows, error = await _build_rows(request, view, window, strategy, target, fee)
+    dir_filters = direction_filters()
+    if direction not in dir_filters:
+        direction = "all"
+    rows, error = await _build_rows(request, view, window, strategy, target, fee, direction)
     pagination = _paginate(rows, page)
     combos = _combos(
         rows,
@@ -894,6 +909,9 @@ async def profit(
             "strategies": [(k, s.label) for k, s in catalog.items()],
             "strategy": strategy,
             "strategy_label": catalog[strategy].label,
+            "direction_filters": list(dir_filters.items()),
+            "direction": direction,
+            "direction_label": dir_filters[direction],
             "target_pct": target,
             "fee_pct": fee,
             "pagination": pagination,
@@ -921,12 +939,15 @@ async def profit_export(
     strategy: str = Query("tp1"),
     target_pct: float = Query(1.0),
     fee_pct: float = Query(0.07),
+    direction: str = Query("all"),
 ):
     """Download the full (filtered) table as CSV — every row, not paginated."""
     target = _resolve_target_pct(target_pct)
     fee = _resolve_fee_pct(fee_pct)
     if strategy not in build_catalog(target):
         strategy = "tp1"
-    rows, _ = await _build_rows(request, view, window, strategy, target, fee)
+    if direction not in direction_filters():
+        direction = "all"
+    rows, _ = await _build_rows(request, view, window, strategy, target, fee, direction)
     data = [[r.get(col) for col in _EXPORT_COLS] for r in rows]
-    return csv_response(f"signal_profit_{window}_{view}_{strategy}", _EXPORT_COLS, data)
+    return csv_response(f"signal_profit_{window}_{view}_{strategy}_{direction}", _EXPORT_COLS, data)

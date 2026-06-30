@@ -323,6 +323,47 @@ def get_strategy(key: str, target_pct: float = 1.0) -> Strategy:
     return catalog.get(key) or catalog["tp1"]
 
 
+# --------------------------------------------------------------------------------------
+# Directional what-if filter — orthogonal to the exit strategy. Lets the owner replay
+# the book under a directional policy ("what if we stopped fighting the BTC downtrend")
+# without any Binance/BTC-State dependency: it keys only on the recorded side +
+# setup_class. The live data shows the book's entire loss is the LONG side, concentrated
+# in three counter-trend reversal paths; this surfaces that interactively.
+# --------------------------------------------------------------------------------------
+# The three counter-trend reversal-LONG cohorts that carry the bleed (Session-37 data:
+# SR_FLIP long −21.75%, MOVER_TREND_PULLBACK long −12.78%, LSR long −10.19%).
+_CT_LONG_SETUPS = frozenset(
+    {"SR_FLIP_RETEST", "LIQUIDITY_SWEEP_REVERSAL", "MOVER_TREND_PULLBACK"}
+)
+
+
+def direction_filters() -> dict[str, str]:
+    """Selectable directional what-if filters (key → human label)."""
+    return {
+        "all": "All signals",
+        "shorts": "Shorts only",
+        "longs": "Longs only",
+        "ex_ct_longs": "Exclude counter-trend longs (SR_FLIP / LSR / MOVER)",
+    }
+
+
+def passes_direction_filter(side: Any, setup_class: Any, key: str) -> bool:
+    """True if a signal of this side/setup is kept under the directional filter ``key``.
+
+    Unknown keys fail open (keep everything), matching the rest of the page's
+    "adapt to the data, never crash on shape drift" convention.
+    """
+    s = str(side or "").upper()
+    setup = str(setup_class or "").upper()
+    if key == "shorts":
+        return s == "SHORT"
+    if key == "longs":
+        return s == "LONG"
+    if key == "ex_ct_longs":
+        return not (s == "LONG" and setup in _CT_LONG_SETUPS)
+    return True  # "all" or any unrecognised key
+
+
 def evaluate_be(inp: SignalInputs, strategy: Strategy, be_pct: float) -> ExitResult:
     """Like evaluate() but with a break-even stop once MFE reaches be_pct%.
 
