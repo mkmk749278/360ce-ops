@@ -47,10 +47,21 @@
   <label>Window
     <select name="window" onchange="this.form.submit()">
       <option value="live" {% if window == 'live' %}selected{% endif %}>live (recent ~500)</option>
+      <option value="24h"  {% if window == '24h' %}selected{% endif %}>last 24 hours</option>
+      <option value="3d"   {% if window == '3d' %}selected{% endif %}>last 3 days</option>
       <option value="7d"   {% if window == '7d' %}selected{% endif %}>last 7 days</option>
       <option value="30d"  {% if window == '30d' %}selected{% endif %}>last 30 days</option>
       <option value="all"  {% if window == 'all' %}selected{% endif %}>all time</option>
+      <option value="range" {% if window == 'range' %}selected{% endif %}>custom From → To…</option>
     </select>
+  </label>
+  <label title="Pick a custom UTC date range (inclusive). Selecting a date switches the window to 'custom From → To'.">From
+    <input type="date" name="date_from" value="{{ date_from }}"
+           onchange="this.form.window.value='range'; this.form.submit()">
+  </label>
+  <label title="Pick a custom UTC date range (inclusive). Selecting a date switches the window to 'custom From → To'.">To
+    <input type="date" name="date_to" value="{{ date_to }}"
+           onchange="this.form.window.value='range'; this.form.submit()">
   </label>
   <label>View
     <select name="view" onchange="this.form.submit()">
@@ -204,6 +215,8 @@
   <form method="get" action="/profit" class="filters" style="margin-bottom:.6rem">
     {# preserve the page-level controls so the combo filter doesn't reset them #}
     <input type="hidden" name="window" value="{{ window }}">
+    <input type="hidden" name="date_from" value="{{ date_from }}">
+    <input type="hidden" name="date_to" value="{{ date_to }}">
     <input type="hidden" name="view" value="{{ view }}">
     <input type="hidden" name="strategy" value="{{ strategy }}">
     <input type="hidden" name="target_pct" value="{{ '%g'|format(target_pct) }}">
@@ -342,7 +355,7 @@
 {% endif %}
 
 <div class="actions">
-  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}">Download CSV (all rows, current view)</a>
+  <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}&date_from={{ date_from }}&date_to={{ date_to }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}">Download CSV (all rows, current view)</a>
 </div>
 
 {% if aggregates.n %}
@@ -448,8 +461,8 @@
   </span>
   {% if pg.total_pages > 1 %}
   <span>
-    {% if pg.page > 1 %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}&page={{ pg.page - 1 }}">← prev</a>{% endif %}
-    {% if pg.page < pg.total_pages %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}&page={{ pg.page + 1 }}">next →</a>{% endif %}
+    {% if pg.page > 1 %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&date_from={{ date_from }}&date_to={{ date_to }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}&page={{ pg.page - 1 }}">← prev</a>{% endif %}
+    {% if pg.page < pg.total_pages %}<a class="btn" href="/profit?view={{ view }}&window={{ window }}&date_from={{ date_from }}&date_to={{ date_to }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}&page={{ pg.page + 1 }}">next →</a>{% endif %}
   </span>
   {% endif %}
 </div>

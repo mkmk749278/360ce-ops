@@ -183,6 +183,18 @@ class EngineApiClient:
         """Enable/disable the signal-expiry backstop. Owner-gated on the engine."""
         return await self._post("/api/signal-expiry", {"enabled": enabled})
 
+    async def tunables_state(self) -> Any:
+        """Runtime-tunables snapshot ``{initialised, tunables: [...]}`` — the
+        owner-controlled engine parameters (noise-floor stops, BE ratchet
+        arm/park, cohort-edge gate). Each entry carries label/description/
+        type/min/max/unit/category plus the current effective value."""
+        return await self._get("/api/tunables")
+
+    async def set_tunables(self, values: dict[str, Any]) -> Any:
+        """Update one or more runtime tunables. Owner-gated on the engine;
+        the engine validates types and ranges and persists to Firestore."""
+        return await self._post("/api/tunables", {"values": values})
+
     async def reset_signals(self) -> Any:
         """Full-signal reset: clears active signals, history, stats, invalidation,
         and paper broker state for all users.  Owner-gated on the engine."""
