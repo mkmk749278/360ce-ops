@@ -39,7 +39,20 @@ async def _render(request: Request):
     ks = await api.kill_switch_state()
     glob = await api.auto_trade_global_state()
     expiry = await api.signal_expiry_state()
+    tunables = await api.tunables_state()
     flash = request.session.pop("_control_flash", None)
+
+    # Group tunables by category so the template renders one card per
+    # concern ("Stops & exits", "Signal gating") with per-knob explanations.
+    tunable_groups: dict[str, list] = {}
+    tunables_initialised = False
+    if isinstance(tunables, dict) and not tunables.get("error"):
+        tunables_initialised = bool(tunables.get("initialised"))
+        for entry in tunables.get("tunables") or []:
+            if isinstance(entry, dict):
+                tunable_groups.setdefault(
+                    str(entry.get("category") or "Other"), []
+                ).append(entry)
 
     return templates.TemplateResponse(
         "control.html",
@@ -50,6 +63,8 @@ async def _render(request: Request):
             "ks": ks if isinstance(ks, dict) else {},
             "glob": glob if isinstance(glob, dict) else {},
             "expiry": expiry if isinstance(expiry, dict) else {},
+            "tunable_groups": tunable_groups,
+            "tunables_initialised": tunables_initialised,
             "audit": audit.tail(settings.audit_log_path, limit=25),
             "flash": flash,
         },
@@ -225,6 +240,47 @@ async def control_signal_expiry(request: Request, enabled: str = Form(...)):
     else:
         detail = result.get("error") if isinstance(result, dict) else result
         text = f"Signal-expiry flip failed: {detail}"
+    request.session["_control_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse("/control", status_code=303)
+
+
+@router.post("/control/tunables")
+async def control_tunables(request: Request):
+    """Update one or more engine runtime tunables (noise-floor stops, BE
+    ratchet, cohort-edge gate). Reads the whole form so a single card can
+    submit several knobs at once; checkboxes arrive as on/absent and are
+    normalised against the ``_bool_keys`` companion field the template
+    renders for every boolean tunable."""
+    api = request.app.state.engine_api
+    settings = request.app.state.settings
+
+    form = await request.form()
+    bool_keys = {k for k in str(form.get("_bool_keys", "")).split(",") if k}
+    values: dict[str, object] = {}
+    for key, raw in form.multi_items():
+        if key in ("_bool_keys",):
+            continue
+        if key in bool_keys:
+            continue  # handled below so unchecked boxes become False
+        if str(raw).strip() != "":
+            values[key] = str(raw).strip()
+    for key in bool_keys:
+        values[key] = form.get(key) is not None
+
+    result = await api.set_tunables(values)
+    ok = not _is_error(result)
+    audit.record(
+        settings.audit_log_path,
+        action="tunables_update",
+        params={"values": {k: str(v) for k, v in values.items()}},
+        result={"initialised": result.get("initialised")} if isinstance(result, dict) else {},
+        ok=ok,
+    )
+    if ok:
+        text = f"Engine tunables updated ({len(values)} value(s)) — live within 5 seconds."
+    else:
+        detail = result.get("error") if isinstance(result, dict) else result
+        text = f"Tunables update failed: {detail}"
     request.session["_control_flash"] = {"ok": ok, "text": text}
     return RedirectResponse("/control", status_code=303)
 

@@ -46,7 +46,7 @@ always shown.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from statistics import median as _median
 from typing import Any
 
@@ -70,7 +70,7 @@ router = APIRouter()
 # "Real exit" column — the held-to-stop status comes from the replay).
 _ACTIVE_STATUSES = frozenset({"ACTIVE", "OPEN", "RUNNING"})
 
-_WINDOW_DAYS: dict[str, int | None] = {"7d": 7, "30d": 30, "all": None}
+_WINDOW_DAYS: dict[str, float | None] = {"24h": 1.0, "3d": 3.0, "7d": 7, "30d": 30, "all": None}
 
 # Closed-signal history is paginated; active signals are always shown (pinned)
 # regardless of page, per the owner's "default to last 50 + keep active" ask.
@@ -306,13 +306,19 @@ async def _build_rows(
     target_pct: float = 1.0,
     fee_pct: float = 0.07,
     direction: str = "all",
+    date_from: str = "",
+    date_to: str = "",
 ) -> tuple[list[dict], str | None]:
     """Fetch signals, replay each held-to-stop, reshape into rows.
 
     ``window`` controls the data source:
     * ``live`` — live engine API (up to 500 signals from in-memory snapshot).
-    * ``7d`` / ``30d`` / ``all`` — signal_performance.json on the data volume,
-      filtered to the given window.  Supports thousands of records.
+    * ``24h`` / ``3d`` / ``7d`` / ``30d`` / ``all`` — signal_performance.json
+      on the data volume, filtered to the given window.  Supports thousands
+      of records.
+    * ``range`` — same data-volume source, filtered to the inclusive
+      ``date_from``→``date_to`` UTC day range (ISO ``YYYY-MM-DD``; either
+      bound may be blank for an open end).
 
     ``view`` filters to active / stopped / all on the *held-to-stop* status.
     Active rows sort first, then by recency.
@@ -348,11 +354,27 @@ async def _build_rows(
 
         window_days = _WINDOW_DAYS.get(window)
         now = datetime.now(timezone.utc)
+        # Custom From→To range (inclusive whole UTC days). A malformed or
+        # missing bound leaves that side open rather than erroring.
+        range_start = range_end = None
+        if window == "range":
+            try:
+                if date_from:
+                    range_start = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+            except ValueError:
+                range_start = None
+            try:
+                if date_to:
+                    range_end = datetime.fromisoformat(date_to).replace(
+                        tzinfo=timezone.utc
+                    ) + timedelta(days=1)
+            except ValueError:
+                range_end = None
         items = []
         for r in raw:
             if not isinstance(r, dict):
                 continue
-            if window_days is not None:
+            if window_days is not None or window == "range":
                 ts_raw = (
                     r.get("terminal_outcome_timestamp")
                     or r.get("dispatch_timestamp")
@@ -362,7 +384,11 @@ async def _build_rows(
                 if ts_raw is not None:
                     try:
                         ts = datetime.fromtimestamp(float(ts_raw), tz=timezone.utc)
-                        if (now - ts).total_seconds() > window_days * 86400:
+                        if window_days is not None and (now - ts).total_seconds() > window_days * 86400:
+                            continue
+                        if range_start is not None and ts < range_start:
+                            continue
+                        if range_end is not None and ts >= range_end:
                             continue
                     except (TypeError, ValueError, OSError):
                         pass
@@ -855,7 +881,9 @@ def _resolve_fee_pct(raw: float | None) -> float:
 async def profit(
     request: Request,
     view: str = Query("all", pattern="^(all|active|closed)$"),
-    window: str = Query("live", pattern="^(live|7d|30d|all)$"),
+    window: str = Query("live", pattern="^(live|24h|3d|7d|30d|all|range)$"),
+    date_from: str = Query("", max_length=10),
+    date_to: str = Query("", max_length=10),
     strategy: str = Query("tp1"),
     target_pct: float = Query(1.0),
     fee_pct: float = Query(0.07),
@@ -874,7 +902,9 @@ async def profit(
     dir_filters = direction_filters()
     if direction not in dir_filters:
         direction = "all"
-    rows, error = await _build_rows(request, view, window, strategy, target, fee, direction)
+    rows, error = await _build_rows(
+        request, view, window, strategy, target, fee, direction, date_from, date_to,
+    )
     pagination = _paginate(rows, page)
     combos = _combos(
         rows,
@@ -917,6 +947,8 @@ async def profit(
             "pagination": pagination,
             "view": view,
             "window": window,
+            "date_from": date_from,
+            "date_to": date_to,
             "error": error,
             "active": "profit",
         },
@@ -935,7 +967,9 @@ _EXPORT_COLS = [
 async def profit_export(
     request: Request,
     view: str = Query("all", pattern="^(all|active|closed)$"),
-    window: str = Query("live", pattern="^(live|7d|30d|all)$"),
+    window: str = Query("live", pattern="^(live|24h|3d|7d|30d|all|range)$"),
+    date_from: str = Query("", max_length=10),
+    date_to: str = Query("", max_length=10),
     strategy: str = Query("tp1"),
     target_pct: float = Query(1.0),
     fee_pct: float = Query(0.07),
@@ -948,6 +982,9 @@ async def profit_export(
         strategy = "tp1"
     if direction not in direction_filters():
         direction = "all"
-    rows, _ = await _build_rows(request, view, window, strategy, target, fee, direction)
+    rows, _ = await _build_rows(
+        request, view, window, strategy, target, fee, direction, date_from, date_to,
+    )
     data = [[r.get(col) for col in _EXPORT_COLS] for r in rows]
-    return csv_response(f"signal_profit_{window}_{view}_{strategy}_{direction}", _EXPORT_COLS, data)
+    window_tag = window if window != "range" else f"range_{date_from or 'open'}_{date_to or 'open'}"
+    return csv_response(f"signal_profit_{window_tag}_{view}_{strategy}_{direction}", _EXPORT_COLS, data)

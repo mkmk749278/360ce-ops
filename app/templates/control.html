@@ -91,6 +91,68 @@
 </section>
 
 <section class="card">
+  <h2>Engine tunables <span class="muted">(live — applied within 5s, no redeploy)</span></h2>
+  <p class="muted">
+    The 2026-07-07 exit overhaul ships ACTIVE with every knob controlled from
+    here. These write to the engine's <code>control/runtime_tunables</code>
+    store — the engine picks changes up within 5 seconds, survives restarts,
+    and never needs a <code>.env</code> edit. Defaults were calibrated on the
+    7-day study (52% of stops were shakeouts; 84% of break-even scratches were
+    winners that resumed).
+  </p>
+  {% if not tunables_initialised and not tunable_groups %}
+    <p class="muted">Engine tunables unavailable — the engine reports the
+      store never initialised (no Firestore / GCP creds), so it is running on
+      its env boot defaults.</p>
+  {% else %}
+    {% if not tunables_initialised %}
+      <p class="muted" style="color:#e4a400;">⚠ Engine reports the tunables
+        store uninitialised — values below are the env boot defaults and
+        writes will fail until Firestore is wired.</p>
+    {% endif %}
+    {% for category, entries in tunable_groups.items() %}
+    <form method="post" action="/control/tunables" class="tunable-group"
+          onsubmit="return confirm('Apply these {{ category|lower }} changes to the LIVE engine? They take effect within 5 seconds.');">
+      <h3>{{ category }}</h3>
+      <input type="hidden" name="_bool_keys"
+             value="{{ entries | selectattr('type', 'equalto', 'bool') | map(attribute='key') | join(',') }}">
+      <table class="tunables">
+        <tbody>
+          {% for t in entries %}
+          <tr>
+            <td class="tunable-label">
+              <label for="tun-{{ t.key }}"><strong>{{ t.label }}</strong></label>
+              {% if t.unit %}<span class="muted">({{ t.unit }})</span>{% endif %}
+              <p class="muted tunable-desc">{{ t.description }}</p>
+            </td>
+            <td class="tunable-input">
+              {% if t.type == 'bool' %}
+                <input type="checkbox" id="tun-{{ t.key }}" name="{{ t.key }}"
+                       {% if t.value %}checked{% endif %}>
+                <span class="muted">{{ 'ON' if t.value else 'OFF' }} now</span>
+              {% else %}
+                <input type="number" id="tun-{{ t.key }}" name="{{ t.key }}"
+                       value="{{ t.value }}" step="{{ '1' if t.type == 'int' else '0.05' }}"
+                       {% if t.min is not none %}min="{{ t.min }}"{% endif %}
+                       {% if t.max is not none %}max="{{ t.max }}"{% endif %}>
+                <span class="muted">default {{ t.default }}{% if t.min is not none %},
+                  range {{ t.min }}–{{ t.max }}{% endif %}</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <button type="submit" class="btn btn-plain"
+              {% if not tunables_initialised %}disabled{% endif %}>
+        Apply {{ category|lower }} changes
+      </button>
+    </form>
+    {% endfor %}
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>Auto-execution mode</h2>
   {% if auto.get('error') %}
     <p class="muted">Could not read current mode: {{ auto.error }}</p>
