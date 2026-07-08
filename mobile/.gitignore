@@ -1,0 +1,28 @@
+# Flutter / Dart
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+pubspec.lock
+
+# Generated platform scaffolding — CI regenerates these deterministically via
+# `flutter create` on each build (see .github/workflows/mobile-apk.yml), so we
+# don't commit them. Keeping them out avoids drift and hand-maintained gradle.
+android/
+ios/
+linux/
+macos/
+windows/
+web/
+
+# Secrets / signing — never commit
+key.properties
+*.jks
+*.keystore
+google-services.json
+
+# IDE
+.idea/
+*.iml
+.vscode/

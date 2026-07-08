@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
+from app.app_tokens import AppTokenStore
 from app.auth_mw import AuthRedirectMiddleware
 from app.config import load_settings
 from app.data_sources.agent_alerts import AgentAlertsReader
@@ -28,6 +29,7 @@ from app.data_sources.free_run import FreeRunTracker
 from app.data_sources.monitor_logs import MonitorLogsReader
 from app.routes import (
     alerts,
+    api_v1,
     auth,
     control,
     data_export,
@@ -58,6 +60,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.templates = templates
     app.state.engine_api = EngineApiClient(settings)
+    app.state.app_tokens = AppTokenStore(settings.app_tokens_path)
     app.state.data_volume = DataVolumeReader(settings)
     app.state.monitor_logs = MonitorLogsReader(settings)
     app.state.diag_runner = DiagRunner(settings)
@@ -86,6 +89,7 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 app.include_router(auth.router)
+app.include_router(api_v1.router)
 app.include_router(pulse.router)
 app.include_router(truth.router)
 app.include_router(signals.router)

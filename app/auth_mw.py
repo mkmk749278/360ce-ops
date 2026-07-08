@@ -14,6 +14,11 @@ class AuthRedirectMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if path in PUBLIC_PATHS or path.startswith("/static"):
             return await call_next(request)
+        # /api/v1 is the native app's surface — it authenticates with a Bearer
+        # app-token and returns 401 JSON, so it must bypass the session-cookie
+        # redirect (a 302→/login would break a non-browser client).
+        if path.startswith("/api/v1"):
+            return await call_next(request)
         if not request.session.get("authenticated"):
             return RedirectResponse("/login", status_code=302)
         return await call_next(request)
