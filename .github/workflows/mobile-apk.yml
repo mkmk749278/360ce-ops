@@ -1,0 +1,186 @@
+name: Build Ops APK
+
+# Builds the sideloaded owner-only ops Android app (mobile/). No Play Store,
+# no AAB — a signed APK artifact the owner installs from the run page. Builds
+# debug-signed with zero secrets; switches to the release keystore the moment
+# ANDROID_KEYSTORE_B64 (+ friends) are set as Actions secrets. Mirrors the
+# proven signing flow from mkmk749278/lumin-app build-apk.yml.
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile-apk.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/mobile-apk.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: ops-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build signed ops APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile
+    env:
+      ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Generate platform scaffolding (idempotent)
+        run: |
+          if [ ! -d "android" ]; then
+            echo "First build — generating Android scaffolding"
+            flutter create -t app --org=org.luminapp --platforms=android --project-name=ops360 .
+          else
+            echo "android/ exists — skipping scaffolding"
+          fi
+          # flutter create drops a default widget_test.dart referencing a
+          # non-existent MyApp; our tests live in test/ already.
+          rm -f test/widget_test.dart
+
+      - name: Inject INTERNET permission
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if ! grep -q "android.permission.INTERNET" "$MANIFEST"; then
+            sed -i "s|<application|<uses-permission android:name=\"android.permission.INTERNET\" />\n    <application|" "$MANIFEST"
+            echo "Added INTERNET permission"
+          fi
+          grep INTERNET "$MANIFEST" || (echo "FAIL: missing INTERNET" && exit 1)
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Analyze (non-blocking)
+        continue-on-error: true
+        run: flutter analyze
+
+      - name: Run unit tests
+        run: flutter test --reporter=expanded
+
+      - name: Decode keystore (release signing, only if secret set)
+        if: env.ANDROID_KEYSTORE_B64 != ''
+        id: keystore
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          mkdir -p android/app
+          echo "$ANDROID_KEYSTORE_B64" | base64 -d > android/app/release-keystore.jks
+          echo "storeFile=release-keystore.jks" > android/key.properties
+          echo "storePassword=$ANDROID_KEYSTORE_PASSWORD" >> android/key.properties
+          echo "keyAlias=$ANDROID_KEY_ALIAS" >> android/key.properties
+          echo "keyPassword=$ANDROID_KEY_PASSWORD" >> android/key.properties
+          echo "wired=true" >> "$GITHUB_OUTPUT"
+
+      - name: Patch build.gradle.kts to use release signing config
+        # flutter create signs release with the DEBUG keystore by default; wire
+        # the real release config so a keystore-set build is actually
+        # release-signed (the silent-debug-sign trap Lumin hit on 2026-05-15).
+        if: steps.keystore.outputs.wired == 'true'
+        run: |
+          set -eu
+          if [ ! -f android/app/build.gradle.kts ]; then
+            echo "ERROR: android/app/build.gradle.kts not found"; exit 1
+          fi
+          python3 << 'PYEOF'
+          from pathlib import Path
+          kts = Path('android/app/build.gradle.kts')
+          content = kts.read_text()
+          original = content
+          if 'java.util.Properties' not in content:
+              content = 'import java.util.Properties\nimport java.io.FileInputStream\n\n' + content
+          if 'val keystoreProperties' not in content:
+              loader = (
+                  '\nval keystoreProperties = Properties()\n'
+                  'val keystorePropertiesFile = rootProject.file("key.properties")\n'
+                  'if (keystorePropertiesFile.exists()) {\n'
+                  '    keystoreProperties.load(FileInputStream(keystorePropertiesFile))\n'
+                  '}\n\n'
+              )
+              content = content.replace('android {', loader + 'android {', 1)
+          if 'signingConfigs {' not in content:
+              signing = (
+                  '    signingConfigs {\n'
+                  '        create("release") {\n'
+                  '            if (keystorePropertiesFile.exists()) {\n'
+                  '                keyAlias = keystoreProperties["keyAlias"] as String\n'
+                  '                keyPassword = keystoreProperties["keyPassword"] as String\n'
+                  '                storeFile = file(keystoreProperties["storeFile"] as String)\n'
+                  '                storePassword = keystoreProperties["storePassword"] as String\n'
+                  '            }\n'
+                  '        }\n'
+                  '    }\n\n'
+              )
+              content = content.replace('    buildTypes {', signing + '    buildTypes {', 1)
+          content = content.replace(
+              'signingConfig = signingConfigs.getByName("debug")',
+              'signingConfig = signingConfigs.getByName("release")',
+          )
+          if content != original:
+              kts.write_text(content)
+              print('Patched build.gradle.kts for release signing')
+          else:
+              print('build.gradle.kts already patched (idempotent)')
+          PYEOF
+
+      - name: Build release APK
+        run: |
+          flutter build apk --release \
+            --build-name=${{ github.ref_name }} \
+            --build-number=${{ github.run_number }}
+
+      - name: Verify release signing (only when keystore wired)
+        if: steps.keystore.outputs.wired == 'true'
+        run: |
+          set -eu
+          APK=$(ls build/app/outputs/flutter-apk/*-release.apk 2>/dev/null | head -1)
+          [ -n "$APK" ] || { echo "ERROR: no APK found"; ls -la build/app/outputs/flutter-apk/ || true; exit 1; }
+          CERT_DN=$(apksigner verify --print-certs "$APK" 2>&1 | grep 'Signer #1 certificate DN' || true)
+          echo "$CERT_DN"
+          if echo "$CERT_DN" | grep -q "CN=Android Debug"; then
+            echo "FAIL: APK signed with debug keystore — release patch did not stick."; exit 1
+          fi
+          echo "OK: release-signed."
+
+      - name: Rename APK with run number
+        run: |
+          cd build/app/outputs/flutter-apk
+          mv app-release.apk ops360-${{ github.run_number }}.apk
+          ls -la
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ops360-apk-${{ github.run_number }}
+          path: mobile/build/app/outputs/flutter-apk/ops360-*.apk
+          retention-days: 30

@@ -1,0 +1,29 @@
+name: ops360
+description: 360 CE Ops — owner-only native control + telemetry for the engine.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+  flutter: ">=3.24.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # HTTP to the ops /api/v1 surface.
+  dio: ^5.7.0
+  # App-token + base-URL storage, keyed to the device keystore.
+  flutter_secure_storage: ^9.2.2
+  # Biometric / device-PIN unlock on cold start.
+  local_auth: ^2.3.0
+  # Timestamp / number formatting on the native screens.
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
