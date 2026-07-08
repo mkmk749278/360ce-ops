@@ -129,8 +129,13 @@ Device registration for push:
   audited POSTs (`/api/v1/control/*`: auto-mode, kill-switch, auto-trade-global,
   signal-expiry, tunables), confirm on destructive actions (engage kill switch,
   switch to LIVE). Engine re-read after every write. Retires Telegram for control.
-- **Phase 4 — FCM push.** Device registration, Firebase Admin send, engine alert
-  relay → notifications. Retires Telegram for alerting.
+- **Phase 4 — FCM push. ✅ built** Device registry (`/api/v1/devices`), FCM HTTP v1
+  sender (`app/fcm.py`, google-auth not the heavy firebase-admin), wired into the
+  monitoring agent's `Notifier` as a second sink beside Telegram. App registers
+  its token on login, unregisters on logout, handles background messages. CI
+  wires google-services.json when `GOOGLE_SERVICES_JSON` is set. Disabled-safe:
+  no service account → push off, Telegram/agent unaffected. Retires Telegram for
+  alerting once the Firebase secrets are set.
 - **Phase 5 — Polish.** Offline cache, pull-to-refresh, notification deep-links,
   app icon/splash, revoke-all-devices control.
 

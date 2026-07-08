@@ -46,6 +46,9 @@ class ApiClient {
   Future<dynamic> post(String path, {Object? body}) =>
       _request(() => _dio.post(path, data: body));
 
+  Future<dynamic> delete(String path, {Object? body}) =>
+      _request(() => _dio.delete(path, data: body));
+
   Future<dynamic> _request(Future<Response> Function() run) async {
     late final Response resp;
     try {

@@ -49,10 +49,17 @@ class Notifier:
         bot_token: str,
         chat_id: str,
         healthchecks_url: str = "",
+        fcm: Any = None,
+        device_registry: Any = None,
     ) -> None:
         self._token = bot_token
         self._chat_id = chat_id
         self._hc_url = healthchecks_url
+        # Optional FCM push sink (Phase 4) — the reliable in-region alert path
+        # when Telegram is dead. Both sinks are best-effort; a failure in one
+        # never blocks the other.
+        self._fcm = fcm
+        self._devices = device_registry
         self._client: httpx.AsyncClient | None = None
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -64,14 +71,44 @@ class Notifier:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._fcm is not None:
+            try:
+                await self._fcm.aclose()
+            except Exception:
+                pass
 
     async def send_alert(self, action: AlertAction) -> None:
         text = _format_alert(action)
         await self._send_telegram(text)
+        await self._push(
+            title=f"{_severity_emoji(action.severity)} {action.severity} — "
+            f"{action.result.fingerprint.split(':')[0]}",
+            body=action.result.description,
+            data={"fingerprint": action.result.fingerprint, "kind": "alert"},
+        )
 
     async def send_recovery(self, action: ResolvedAction) -> None:
         text = _format_recovery(action)
         await self._send_telegram(text)
+        await self._push(
+            title=f"✅ Recovered — {action.fingerprint.split(':')[0]}",
+            body="Condition cleared.",
+            data={"fingerprint": action.fingerprint, "kind": "recovery"},
+        )
+
+    async def _push(self, *, title: str, body: str, data: dict[str, str]) -> None:
+        """Best-effort FCM push to every registered device; prune dead tokens."""
+        if self._fcm is None or self._devices is None:
+            return
+        try:
+            tokens = self._devices.all_tokens()
+            if not tokens:
+                return
+            dead = await self._fcm.send(tokens, title=title, body=body, data=data)
+            if dead:
+                self._devices.prune(dead)
+        except Exception as exc:
+            log.warning("FCM push failed: %s", exc)
 
     async def ping_heartbeat(self) -> None:
         if not self._hc_url:

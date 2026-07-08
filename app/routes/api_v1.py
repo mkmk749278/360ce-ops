@@ -238,3 +238,28 @@ async def control_tunables(request: Request, body: TunablesBody) -> dict[str, An
         params={"values": body.values},
         call=lambda: request.app.state.engine_api.set_tunables(body.values),
     )
+
+
+# ---------------------------------------------------------------------------
+# device registry — the app registers its FCM token so the monitoring agent
+# can push alerts to it (Phase 4). The agent (separate process) reads the same
+# registry; sending lives there, not here.
+# ---------------------------------------------------------------------------
+class DeviceBody(BaseModel):
+    fcm_token: str
+    platform: str = "android"
+
+
+@router.post("/devices", dependencies=[Depends(require_app_token)])
+async def register_device(request: Request, body: DeviceBody) -> dict[str, Any]:
+    token = body.fcm_token.strip()
+    if not token:
+        raise HTTPException(status_code=422, detail="fcm_token required")
+    request.app.state.device_registry.register(token, platform=body.platform)
+    return {"ok": True, "devices": request.app.state.device_registry.count()}
+
+
+@router.delete("/devices", dependencies=[Depends(require_app_token)])
+async def unregister_device(request: Request, body: DeviceBody) -> dict[str, Any]:
+    removed = request.app.state.device_registry.unregister(body.fcm_token.strip())
+    return {"ok": True, "removed": removed}
