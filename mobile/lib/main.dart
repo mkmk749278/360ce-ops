@@ -3,6 +3,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'app_keys.dart';
 import 'firebase_options.dart';
 import 'push/push_state.dart';
 
@@ -21,9 +22,29 @@ Future<void> main() async {
   try {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
     FirebaseMessaging.onBackgroundMessage(_firebaseBackgroundHandler);
+    _setupPushHandlers();
     firebaseReady = true;
   } catch (_) {
     firebaseReady = false;
   }
   runApp(const OpsApp());
+}
+
+/// Foreground display + deep-link routing for push. Android doesn't show a
+/// system notification for a foreground message, so we surface a SnackBar; a
+/// tapped notification (background or cold start) asks the shell to open the
+/// Pulse tab (engine state) via [requestedTab].
+void _setupPushHandlers() {
+  FirebaseMessaging.onMessage.listen((message) {
+    final n = message.notification;
+    if (n == null) return;
+    final text = [n.title, n.body].where((s) => s != null && s.isNotEmpty).join(' — ');
+    scaffoldMessengerKey.currentState?.showSnackBar(
+      SnackBar(content: Text(text.isEmpty ? 'New alert' : text)),
+    );
+  });
+  FirebaseMessaging.onMessageOpenedApp.listen((_) => requestedTab.value = 0);
+  FirebaseMessaging.instance.getInitialMessage().then((m) {
+    if (m != null) requestedTab.value = 0;
+  });
 }

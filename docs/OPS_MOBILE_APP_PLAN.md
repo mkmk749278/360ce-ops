@@ -136,8 +136,14 @@ Device registration for push:
   wires google-services.json when `GOOGLE_SERVICES_JSON` is set. Disabled-safe:
   no service account → push off, Telegram/agent unaffected. Retires Telegram for
   alerting once the Firebase secrets are set.
-- **Phase 5 — Polish.** Offline cache, pull-to-refresh, notification deep-links,
-  app icon/splash, revoke-all-devices control.
+- **Phase 5 — Polish. ✅ core done** Notification UX: a foreground FCM message
+  raises a SnackBar (Android shows no tray notification in-foreground), and a
+  tapped notification deep-links to the Pulse (engine-state) tab via global
+  keys. Pull-to-refresh and revoke-all-devices shipped earlier (Phases 2–3).
+  *Deferred:* app icon/splash (needs a brand asset — an owner/design decision,
+  not worth a fabricated placeholder) and an offline read-cache (low value —
+  the read screens already degrade to a retryable error, and control/telemetry
+  is only meaningful live). Both are additive and can land when wanted.
 
 ## Location & CI
 
