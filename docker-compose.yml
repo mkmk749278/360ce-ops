@@ -19,6 +19,12 @@ services:
       # below — NOT the read-only /engine-data mount — so the record of
       # every owner control action survives the ~60s main-push redeploy.
       OPS_AUDIT_LOG: ${OPS_AUDIT_LOG:-/data/ops_audit.jsonl}
+      # App-token + FCM device-token stores (Phase 1/4). On the persistent
+      # `ops-data` volume so logins and push registrations survive redeploys.
+      # The device registry path is SHARED with the monitoring-agent below,
+      # which reads it to send push — both mount `ops-data` at /data.
+      OPS_APP_TOKENS_PATH: ${OPS_APP_TOKENS_PATH:-/data/ops_app_tokens.json}
+      OPS_DEVICE_TOKENS_PATH: ${OPS_DEVICE_TOKENS_PATH:-/data/ops_device_tokens.json}
       # Read-only access to the monitoring agent's alert state so the
       # dashboard's /alerts panel can surface live safety findings.
       AGENT_REDIS_URL: ${AGENT_REDIS_URL:-redis://360ce-ops-redis:6379/0}
@@ -59,9 +65,18 @@ services:
       AGENT_REDIS_STALE_SEC: ${AGENT_REDIS_STALE_SEC:-45}
       AGENT_DEDUP_SEC: ${AGENT_DEDUP_SEC:-1800}
       AGENT_ALERT_EXPIRY_SEC: ${AGENT_ALERT_EXPIRY_SEC:-3600}
+      # FCM push (Phase 4). The agent sends alerts to every device the web
+      # service registered — it reads the SAME device registry on the shared
+      # `ops-data` volume, and sends via this service account. Empty = push
+      # off (Telegram-only), unchanged behaviour.
+      FIREBASE_SERVICE_ACCOUNT: ${FIREBASE_SERVICE_ACCOUNT:-}
+      OPS_DEVICE_TOKENS_PATH: ${OPS_DEVICE_TOKENS_PATH:-/data/ops_device_tokens.json}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - engine-data:/engine-data:ro
+      # Shared with the `ops` service so the agent can read the FCM device
+      # tokens the web app registers. Same named volume, same /data path.
+      - ops-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - 360ce-ops-redis
