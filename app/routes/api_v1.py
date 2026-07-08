@@ -263,3 +263,71 @@ async def register_device(request: Request, body: DeviceBody) -> dict[str, Any]:
 async def unregister_device(request: Request, body: DeviceBody) -> dict[str, Any]:
     removed = request.app.state.device_registry.unregister(body.fcm_token.strip())
     return {"ok": True, "removed": removed}
+
+
+# ---------------------------------------------------------------------------
+# analysis surfaces — JSON siblings of the web Profit / Alerts / Truth /
+# Invalidations pages, reusing the same computations and data sources.
+# ---------------------------------------------------------------------------
+@router.get("/profit", dependencies=[Depends(require_app_token)])
+async def profit(
+    request: Request,
+    window: str = "live",
+    view: str = "all",
+    strategy: str = "tp1",
+    target_pct: float = 1.0,
+    fee_pct: float = 0.07,
+    direction: str = "all",
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Signal-analysis surface: the exit-strategy replay the owner analyses
+    signals from. Reuses the web profit route's row builder + summaries."""
+    from app.routes import profit as p
+
+    target = p._resolve_target_pct(target_pct)
+    fee = p._resolve_fee_pct(fee_pct)
+    rows, error = await p._build_rows(
+        request, view, window, strategy, target, fee, direction, "", ""
+    )
+    return {
+        "summary": p._summary(rows),
+        "aggregates": p._aggregates(rows),
+        "strategy_summary": p._strategy_summary(rows, fee),
+        "breakdown": {
+            "scoreband": p._breakdown_scoreband(rows, fee),
+            "path": p._breakdown_path(rows, fee),
+            "regime": p._breakdown_regime(rows, fee),
+        },
+        "rows": rows[: max(1, min(limit, 500))],
+        "count": len(rows),
+        "window": window,
+        "view": view,
+        "strategy": strategy,
+        "target_pct": target,
+        "fee_pct": fee,
+        "error": error,
+    }
+
+
+@router.get("/alerts", dependencies=[Depends(require_app_token)])
+async def alerts(request: Request) -> Any:
+    return await request.app.state.agent_alerts.active_alerts()
+
+
+@router.get("/truth", dependencies=[Depends(require_app_token)])
+async def truth(request: Request) -> dict[str, Any]:
+    logs = request.app.state.monitor_logs
+    return {
+        "snapshot": await logs.truth_snapshot(),
+        "window": await logs.window_comparison(),
+    }
+
+
+@router.get("/invalidations", dependencies=[Depends(require_app_token)])
+async def invalidations(request: Request) -> Any:
+    return request.app.state.data_volume.invalidation_records()
+
+
+@router.get("/performance", dependencies=[Depends(require_app_token)])
+async def performance(request: Request) -> Any:
+    return request.app.state.data_volume.signal_performance()

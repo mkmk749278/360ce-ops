@@ -308,7 +308,13 @@ class _TunablesCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final list = tunables['tunables'];
     if (list is! List || list.isEmpty) {
-      return JsonCard(tunables, title: 'Tunables');
+      return const Card(
+        margin: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Text('No adjustable settings available right now.'),
+        ),
+      );
     }
     return Card(
       margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),

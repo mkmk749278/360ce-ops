@@ -33,7 +33,15 @@ class _OpsAppState extends State<OpsApp> {
   Future<void> _bootstrap() async {
     final hasToken = await _auth.load();
     if (!mounted) return;
-    setState(() => _stage = hasToken ? _Stage.locked : _Stage.login);
+    if (!hasToken) {
+      setState(() => _stage = _Stage.login);
+      return;
+    }
+    // App-lock is opt-in and only if the device actually has a biometric
+    // enrolled — otherwise go straight in (no forced fingerprint prompt).
+    final lock = await _auth.biometricEnabled() && await _auth.biometricsAvailable();
+    if (!mounted) return;
+    setState(() => _stage = lock ? _Stage.locked : _Stage.home);
   }
 
   @override

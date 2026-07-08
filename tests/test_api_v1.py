@@ -221,3 +221,40 @@ def test_device_register_rejects_empty_token():
                         headers={'Authorization': f'Bearer {tok}'},
                         json={'fcm_token': '   '})
         assert r.status_code == 422
+
+
+# ---- analysis surfaces (Profit / Alerts / Truth / Invalidations) --------
+
+
+def test_analysis_endpoints_require_token():
+    with TestClient(app) as client:
+        for path in ('/api/v1/profit', '/api/v1/alerts', '/api/v1/truth',
+                     '/api/v1/invalidations', '/api/v1/performance'):
+            r = client.get(path, follow_redirects=False)
+            assert r.status_code == 401, path
+
+
+def test_invalidations_and_performance_return_data(monkeypatch):
+    from app.data_sources.data_volume import DataVolumeReader
+    monkeypatch.setattr(DataVolumeReader, 'invalidation_records', lambda self: {'records': []})
+    monkeypatch.setattr(DataVolumeReader, 'signal_performance', lambda self: {'trades': 0})
+    with TestClient(app) as client:
+        tok = _login(client)
+        h = {'Authorization': f'Bearer {tok}'}
+        assert client.get('/api/v1/invalidations', headers=h).json() == {'records': []}
+        assert client.get('/api/v1/performance', headers=h).json() == {'trades': 0}
+
+
+def test_profit_reuses_row_builder(monkeypatch):
+    import app.routes.profit as p
+
+    async def fake_rows(*a, **k):
+        return ([], None)
+
+    monkeypatch.setattr(p, '_build_rows', fake_rows)
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.get('/api/v1/profit', headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 200
+        body = r.json()
+        assert body['count'] == 0 and 'summary' in body and 'breakdown' in body

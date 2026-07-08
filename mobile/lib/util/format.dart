@@ -49,3 +49,35 @@ dynamic firstOf(Map data, List<String> keys) {
   }
   return null;
 }
+
+/// Coerce to num, or null.
+num? asNum(dynamic v) => v is num ? v : (v is String ? num.tryParse(v) : null);
+
+/// Trim float noise for display: whole numbers show plain, fractions round to
+/// [maxFrac] and drop trailing zeros. 0.0040250285000000005 → "0.004025".
+String trimNum(dynamic v, {int maxFrac = 6}) {
+  final n = asNum(v);
+  if (n == null) return asText(v);
+  if (n == n.roundToDouble() && n.abs() < 1e15) return n.toInt().toString();
+  var s = n.toStringAsFixed(maxFrac);
+  if (s.contains('.')) {
+    s = s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  }
+  return s;
+}
+
+/// Money with a fixed 2 decimals and sign, e.g. -12.5 → "-$12.50".
+String money(dynamic v, {String symbol = '\$'}) {
+  final n = asNum(v);
+  if (n == null) return asText(v);
+  return '${n < 0 ? '-' : ''}$symbol${n.abs().toStringAsFixed(2)}';
+}
+
+/// Seconds → "21h 40m" / "12m" / "45s".
+String secondsToDuration(dynamic v) {
+  final n = asNum(v);
+  if (n == null) return '—';
+  final total = n.round();
+  if (total < 60) return '${total}s';
+  return minutesToDuration(total ~/ 60);
+}
