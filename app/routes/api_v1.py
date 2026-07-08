@@ -12,16 +12,20 @@ Auth model (distinct from the web session gate):
   returns **401 JSON** on failure — never the web's 302→/login redirect (which
   is why ``/api/v1`` is exempted from ``AuthRedirectMiddleware``).
 
-Control *writes* are deliberately NOT here yet — they land in Phase 3 on the
-owner-gated, audited control surface. This module is read-only.
+Control *writes* (Phase 3) live under ``/api/v1/control/*``: each requires the
+app-token, calls the engine's owner-gated setter, and appends to the same audit
+log as the web control page. The engine remains the source of truth — the app
+re-reads ``/control/state`` after every write.
 """
 from __future__ import annotations
 
 import hmac
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
+
+from app import audit
 
 router = APIRouter(prefix="/api/v1")
 
@@ -120,3 +124,117 @@ async def control_state(request: Request) -> dict[str, Any]:
         "signal_expiry": await api.signal_expiry_state(),
         "tunables": await api.tunables_state(),
     }
+
+
+# ---------------------------------------------------------------------------
+# control writes — owner-gated (app-token) + audited; engine is source of truth
+# ---------------------------------------------------------------------------
+_VALID_MODES = {"off", "paper", "live", "both"}
+
+
+def _is_error(result: object) -> bool:
+    return isinstance(result, dict) and bool(result.get("error"))
+
+
+async def _audited(
+    request: Request,
+    *,
+    action: str,
+    params: dict[str, Any],
+    call: Callable[[], Any],
+) -> dict[str, Any]:
+    """Run an engine control setter, audit it (best-effort, matching the web
+    control surface), and return a uniform result the app can act on."""
+    settings = request.app.state.settings
+    result = await call()
+    ok = not _is_error(result)
+    audit.record(
+        settings.audit_log_path,
+        action=action,
+        params=params,
+        result=result if isinstance(result, dict) else {},
+        ok=ok,
+        actor="ops-app",
+    )
+    detail = None
+    if not ok:
+        detail = result.get("error") if isinstance(result, dict) else str(result)
+    return {
+        "ok": ok,
+        "action": action,
+        "detail": detail,
+        "result": result if isinstance(result, dict) else None,
+    }
+
+
+class AutoModeBody(BaseModel):
+    mode: str
+
+
+class ToggleBody(BaseModel):
+    enabled: bool
+
+
+class KillSwitchBody(BaseModel):
+    engaged: bool
+    reason: str = ""
+
+
+class TunablesBody(BaseModel):
+    values: dict[str, Any]
+
+
+@router.post("/control/auto-mode", dependencies=[Depends(require_app_token)])
+async def control_auto_mode(request: Request, body: AutoModeBody) -> dict[str, Any]:
+    mode = body.mode.strip().lower()
+    if mode not in _VALID_MODES:
+        raise HTTPException(status_code=422, detail=f"invalid mode {body.mode!r}")
+    return await _audited(
+        request,
+        action="auto_mode",
+        params={"mode": mode},
+        call=lambda: request.app.state.engine_api.set_auto_mode(mode),
+    )
+
+
+@router.post("/control/kill-switch", dependencies=[Depends(require_app_token)])
+async def control_kill_switch(request: Request, body: KillSwitchBody) -> dict[str, Any]:
+    reason = body.reason.strip() or None
+    return await _audited(
+        request,
+        action="kill_switch",
+        params={"engaged": body.engaged, "reason": body.reason.strip()},
+        call=lambda: request.app.state.engine_api.set_kill_switch(body.engaged, reason=reason),
+    )
+
+
+@router.post("/control/auto-trade-global", dependencies=[Depends(require_app_token)])
+async def control_auto_trade_global(request: Request, body: ToggleBody) -> dict[str, Any]:
+    return await _audited(
+        request,
+        action="auto_trade_global",
+        params={"enabled": body.enabled},
+        call=lambda: request.app.state.engine_api.set_auto_trade_global(body.enabled),
+    )
+
+
+@router.post("/control/signal-expiry", dependencies=[Depends(require_app_token)])
+async def control_signal_expiry(request: Request, body: ToggleBody) -> dict[str, Any]:
+    return await _audited(
+        request,
+        action="signal_expiry",
+        params={"enabled": body.enabled},
+        call=lambda: request.app.state.engine_api.set_signal_expiry(body.enabled),
+    )
+
+
+@router.post("/control/tunables", dependencies=[Depends(require_app_token)])
+async def control_tunables(request: Request, body: TunablesBody) -> dict[str, Any]:
+    if not body.values:
+        raise HTTPException(status_code=422, detail="no tunable values provided")
+    return await _audited(
+        request,
+        action="tunables",
+        params={"values": body.values},
+        call=lambda: request.app.state.engine_api.set_tunables(body.values),
+    )

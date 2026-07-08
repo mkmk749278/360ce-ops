@@ -116,16 +116,19 @@ Device registration for push:
 
 ## Phased delivery (each phase = one PR, lands working)
 
-- **Phase 0 — this doc.** Architecture + roadmap.
-- **Phase 1 — Ops backend foundation.** `/api/v1/*` read endpoints + app-token
-  issue/verify/revoke + device registry, all behind the owner gate and audited.
-  Pytest coverage. Independently usable (curl-testable) before any app exists.
-- **Phase 2 — App shell + read screens.** Flutter project under `mobile/`, secure
-  token storage, biometric unlock, Material-3 theme, bottom-nav, and the read
-  screens (Pulse, Signals, Positions, Profit, Performance) wired to Phase 1. CI
-  builds a **signed APK artifact** (mirrors Lumin `build-apk.yml`). A usable app.
-- **Phase 3 — Control parity.** Native control screen → ops owner-gated audited
-  POSTs, with confirm on destructive actions. Retires Telegram for control.
+- **Phase 0 — this doc. ✅ merged (#53)** Architecture + roadmap.
+- **Phase 1 — Ops backend foundation. ✅ merged (#53)** `/api/v1/*` read endpoints
+  + app-token issue/verify/revoke, behind the owner gate and audited. Pytest
+  coverage. (Device registry moved to Phase 4 — storing tokens nothing sends to
+  yet would be a scaffold.) Independently curl-testable before any app exists.
+- **Phase 2 — App shell + read screens. ✅ merged (#53)** Flutter project under
+  `mobile/`, secure token storage, biometric unlock, Material-3, bottom-nav, and
+  the read screens (Pulse, Signals, Positions, Performance, Control-state) wired
+  to Phase 1. CI builds a **signed APK artifact** (mirrors Lumin `build-apk.yml`).
+- **Phase 3 — Control parity. ✅ built** Native control screen → ops owner-gated
+  audited POSTs (`/api/v1/control/*`: auto-mode, kill-switch, auto-trade-global,
+  signal-expiry, tunables), confirm on destructive actions (engage kill switch,
+  switch to LIVE). Engine re-read after every write. Retires Telegram for control.
 - **Phase 4 — FCM push.** Device registration, Firebase Admin send, engine alert
   relay → notifications. Retires Telegram for alerting.
 - **Phase 5 — Polish.** Offline cache, pull-to-refresh, notification deep-links,
