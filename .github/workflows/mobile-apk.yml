@@ -96,8 +96,14 @@ jobs:
         run: |
           set -eu
           GS=android/app/google-services.json
-          API_KEY=$(jq -r '.client[0].api_key[0].current_key // empty' "$GS")
-          APP_ID=$(jq -r '.client[0].client_info.mobilesdk_app_id // empty' "$GS")
+          # A project-level google-services.json can list several apps (e.g.
+          # this project also holds org.luminapp.lumin). Select the client for
+          # THIS app by package name — never .client[0], which may be another app.
+          PKG=org.luminapp.ops360
+          CLIENT=$(jq -c --arg p "$PKG" '.client[] | select(.client_info.android_client_info.package_name==$p)' "$GS")
+          [ -n "$CLIENT" ] || { echo "ERROR: no client for $PKG in google-services.json (found: $(jq -r '.client[].client_info.android_client_info.package_name' "$GS" | tr '\n' ' '))"; exit 1; }
+          API_KEY=$(printf '%s' "$CLIENT" | jq -r '.api_key[0].current_key // empty')
+          APP_ID=$(printf '%s' "$CLIENT" | jq -r '.client_info.mobilesdk_app_id // empty')
           SENDER_ID=$(jq -r '.project_info.project_number // empty' "$GS")
           PROJECT_ID=$(jq -r '.project_info.project_id // empty' "$GS")
           STORAGE_BUCKET=$(jq -r '.project_info.storage_bucket // empty' "$GS")
