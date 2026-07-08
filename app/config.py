@@ -40,6 +40,7 @@ class Settings:
     engine_container_name: str
     diag_timeout_sec: int
     audit_log_path: str
+    app_tokens_path: str
     agent_redis_url: str
     # Free-run ("held to SL") candle replay — Profit tab only.
     binance_futures_rest_base: str
@@ -68,6 +69,9 @@ def load_settings() -> Settings:
         # volume in prod (not the read-only /engine-data mount) so it
         # survives container restarts.
         audit_log_path=_env("OPS_AUDIT_LOG", "/data/ops_audit.jsonl"),
+        # Hashed native-app tokens (see app/app_tokens.py). Same writable
+        # volume as the audit log so owner logins survive a container restart.
+        app_tokens_path=_env("OPS_APP_TOKENS_PATH", "/data/ops_app_tokens.json"),
         # Same Redis the monitoring agent writes alert state to — the web
         # dashboard reads it to render the alerts panel.
         agent_redis_url=_env("AGENT_REDIS_URL", "redis://360ce-ops-redis:6379/0"),
