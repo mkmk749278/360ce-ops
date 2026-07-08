@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_keys.dart';
 import 'auth/auth_service.dart';
 import 'config.dart';
 import 'screens/home_shell.dart';
@@ -39,6 +40,8 @@ class _OpsAppState extends State<OpsApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: Config.appName,
+      navigatorKey: navigatorKey,
+      scaffoldMessengerKey: scaffoldMessengerKey,
       debugShowCheckedModeBanner: false,
       theme: OpsTheme.light(),
       darkTheme: OpsTheme.dark(),

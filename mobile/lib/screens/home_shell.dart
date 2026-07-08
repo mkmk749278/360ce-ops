@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../app_keys.dart';
 import '../auth/auth_service.dart';
 import '../config.dart';
 import '../push/push_service.dart';
@@ -32,6 +33,26 @@ class _HomeShellState extends State<HomeShell> {
     super.initState();
     // Register this device for push alerts (no-op if Firebase isn't wired).
     _push.start();
+    // Honor a deep-link target from a notification tapped before/while the
+    // shell mounted, and any that arrive later.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _applyRequestedTab());
+    requestedTab.addListener(_applyRequestedTab);
+  }
+
+  @override
+  void dispose() {
+    requestedTab.removeListener(_applyRequestedTab);
+    super.dispose();
+  }
+
+  void _applyRequestedTab() {
+    final target = requestedTab.value;
+    if (target == null) return;
+    requestedTab.value = null;
+    if (!mounted) return;
+    if (target >= 0 && target < _titles.length) {
+      setState(() => _index = target);
+    }
   }
 
   @override
