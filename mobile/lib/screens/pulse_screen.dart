@@ -2,10 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../api/api_client.dart';
 import '../util/format.dart';
+import '../util/humanize.dart';
 import '../widgets/async_view.dart';
 import '../widgets/cards.dart';
 
-/// Engine health at a glance: running state, auto-mode, scanner heartbeat.
+/// Engine health at a glance — plain English, no raw data.
 class PulseScreen extends StatelessWidget {
   const PulseScreen({super.key, required this.api, required this.onUnauthorized});
   final ApiClient api;
@@ -17,13 +18,15 @@ class PulseScreen extends StatelessWidget {
       loader: () => api.get('/pulse'),
       onUnauthorized: onUnauthorized,
       builder: (context, data) {
-        final map = data is Map ? data : <String, dynamic>{};
-        final pulse = map['pulse'] is Map ? map['pulse'] as Map : {};
-        final auto = map['auto_mode'] is Map ? map['auto_mode'] as Map : {};
-        final heartbeat = map['heartbeat'];
+        final map = data is Map ? data : const {};
+        final p = map['pulse'] is Map ? map['pulse'] as Map : const {};
 
-        final status = asText(firstOf(pulse, ['status', 'state', 'health'])).toLowerCase();
-        final mode = asText(firstOf(auto, ['mode', 'auto_mode', 'value']));
+        final status = asText(firstOf(p, ['status', 'health', 'state']));
+        final mode = asText(firstOf(p, ['mode']));
+        final pnlUsd = firstOf(p, ['today_pnl_usd']);
+        final pnlPct = firstOf(p, ['today_pnl_pct']);
+        final lossUsed = firstOf(p, ['daily_loss_used_usd']);
+        final lossBudget = firstOf(p, ['daily_loss_budget_usd']);
 
         return ListView(
           physics: const AlwaysScrollableScrollPhysics(),
@@ -31,35 +34,62 @@ class PulseScreen extends StatelessWidget {
           children: [
             InfoCard(
               title: 'Engine',
-              trailing: StatusPill(status.isEmpty ? 'unknown' : status, status: status),
+              trailing: StatusPill(humanize(status), status: status),
               rows: [
-                MapEntry('Auto-mode', StatusPill(mode, status: mode)),
-                MapEntry('Uptime', Text(asText(firstOf(pulse, ['uptime', 'uptime_human', 'started_at'])))),
-                MapEntry('Open positions', Text(asText(firstOf(pulse, ['open_positions', 'positions', 'open'])))),
-                MapEntry('Scan pairs', Text(asText(firstOf(pulse, ['pairs', 'scan_pairs', 'universe'])))),
+                MapEntry('Trading mode', StatusPill(humanize(mode), status: mode)),
+                MapEntry('Market regime', Text(humanize(firstOf(p, ['regime'])))),
+                MapEntry('Open positions', Text(asText(firstOf(p, ['open_positions'])))),
+                MapEntry('Watching', Text('${asText(firstOf(p, ['scanning_pairs']))} pairs')),
+                MapEntry('Running for', Text(secondsToDuration(firstOf(p, ['uptime_seconds'])))),
+              ],
+            ),
+            InfoCard(
+              title: 'Today',
+              rows: [
+                MapEntry(
+                  'Profit / loss',
+                  Text(
+                    pnlUsd == null
+                        ? '—'
+                        : '${money(pnlUsd)}  (${signedPct(asNum(pnlPct))})',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: _pnlColor(context, asNum(pnlUsd)),
+                    ),
+                  ),
+                ),
+                MapEntry(
+                  'Loss budget used',
+                  Text(lossBudget == null
+                      ? '—'
+                      : '${money(lossUsed)} of ${money(lossBudget)}'),
+                ),
+                MapEntry('Signals today', Text(asText(firstOf(p, ['signals_today'])))),
               ],
             ),
             InfoCard(
               title: 'Scanner heartbeat',
               rows: [
-                MapEntry('Age', Text(_heartbeatAge(heartbeat))),
-                MapEntry('State', Text(_heartbeatState(heartbeat))),
+                MapEntry('Status', Text(_heartbeat(map['heartbeat']))),
               ],
             ),
-            JsonCard(map, title: 'Full pulse payload'),
           ],
         );
       },
     );
   }
 
-  String _heartbeatAge(dynamic hb) {
-    if (hb is Map) return asText(firstOf(hb, ['age_sec', 'age', 'heartbeat_age']));
-    return asText(hb);
+  Color? _pnlColor(BuildContext context, num? v) {
+    if (v == null) return null;
+    return v >= 0 ? const Color(0xFF16A34A) : const Color(0xFFDC2626);
   }
 
-  String _heartbeatState(dynamic hb) {
-    if (hb is Map) return asText(firstOf(hb, ['state', 'status', 'fresh']));
-    return '—';
+  String _heartbeat(dynamic hb) {
+    if (hb is Map) {
+      final age = firstOf(hb, ['age_sec', 'age']);
+      if (age != null) return 'Last scan ${secondsToDuration(age)} ago';
+      return asText(firstOf(hb, ['state', 'status']));
+    }
+    return asText(hb);
   }
 }

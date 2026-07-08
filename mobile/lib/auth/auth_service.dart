@@ -21,6 +21,7 @@ class AuthService {
 
   static const _kBaseUrl = 'ops_base_url';
   static const _kToken = 'ops_app_token';
+  static const _kBiometric = 'ops_biometric_enabled';
 
   final FlutterSecureStorage _storage;
   final LocalAuthentication _localAuth;
@@ -82,6 +83,24 @@ class AuthService {
       await client().post('/auth/revoke-all');
     } finally {
       await logout();
+    }
+  }
+
+  /// Whether the owner has opted into app-lock. Default OFF, so a device with
+  /// no enrolled biometric is never forced to authenticate.
+  Future<bool> biometricEnabled() async =>
+      (await _storage.read(key: _kBiometric)) == '1';
+
+  Future<void> setBiometricEnabled(bool value) =>
+      _storage.write(key: _kBiometric, value: value ? '1' : '0');
+
+  /// True only when the device actually has an enrolled biometric to check.
+  Future<bool> biometricsAvailable() async {
+    try {
+      if (!await _localAuth.isDeviceSupported()) return false;
+      return (await _localAuth.getAvailableBiometrics()).isNotEmpty;
+    } on Exception {
+      return false;
     }
   }
 
