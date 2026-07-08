@@ -120,3 +120,68 @@ def test_revoke_all_invalidates_live_token():
         assert client.post("/api/v1/auth/revoke-all", headers=h).status_code == 200
         # Token is dead after the lost-phone switch.
         assert client.get("/api/v1/auth/whoami", headers=h).status_code == 401
+
+
+# ---- /api/v1 control writes (Phase 3) -----------------------------------
+
+
+def test_control_write_requires_token():
+    with TestClient(app) as client:
+        r = client.post('/api/v1/control/auto-mode', json={'mode': 'paper'},
+                        follow_redirects=False)
+        assert r.status_code == 401
+        assert 'location' not in {k.lower() for k in r.headers}
+
+
+def test_control_auto_mode_rejects_invalid_mode():
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.post('/api/v1/control/auto-mode',
+                        headers={'Authorization': f'Bearer {tok}'},
+                        json={'mode': 'nonsense'})
+        assert r.status_code == 422
+
+
+def test_control_auto_mode_calls_engine_setter(monkeypatch):
+    captured = []
+
+    async def fake_set(self, mode):
+        captured.append(mode)
+        return {'ok': True, 'mode': mode}
+
+    monkeypatch.setattr(EngineApiClient, 'set_auto_mode', fake_set)
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.post('/api/v1/control/auto-mode',
+                        headers={'Authorization': f'Bearer {tok}'},
+                        json={'mode': 'PAPER'})
+        assert r.status_code == 200
+        body = r.json()
+        assert body['ok'] is True and body['action'] == 'auto_mode'
+        # Normalized to lowercase before hitting the engine.
+        assert captured == ['paper']
+
+
+def test_control_kill_switch_engage_surfaces_engine_error(monkeypatch):
+    async def fake_ks(self, engaged, reason=None):
+        return {'error': 'engine unreachable'}
+
+    monkeypatch.setattr(EngineApiClient, 'set_kill_switch', fake_ks)
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.post('/api/v1/control/kill-switch',
+                        headers={'Authorization': f'Bearer {tok}'},
+                        json={'engaged': True, 'reason': 'test'})
+        assert r.status_code == 200
+        body = r.json()
+        assert body['ok'] is False
+        assert 'unreachable' in body['detail']
+
+
+def test_control_tunables_rejects_empty(monkeypatch):
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.post('/api/v1/control/tunables',
+                        headers={'Authorization': f'Bearer {tok}'},
+                        json={'values': {}})
+        assert r.status_code == 422
