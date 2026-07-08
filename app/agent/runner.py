@@ -29,6 +29,8 @@ from app.agent.detectors import (
 )
 from app.agent.alert_state import AlertStateStore
 from app.agent.notifier import Notifier
+from app.device_registry import DeviceRegistry
+from app.fcm import FcmSender
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("agent.runner")
@@ -106,6 +108,11 @@ async def run() -> None:
         bot_token=os.getenv("AGENT_TELEGRAM_BOT_TOKEN", ""),
         chat_id=os.getenv("AGENT_TELEGRAM_CHAT_ID", ""),
         healthchecks_url=os.getenv("AGENT_HEALTHCHECKS_URL", ""),
+        # FCM push sink — the in-region-reliable alert path. Reads the same
+        # device registry the web app writes on /api/v1/devices; disabled-safe
+        # when FIREBASE_SERVICE_ACCOUNT is unset.
+        fcm=FcmSender(settings.fcm_service_account),
+        device_registry=DeviceRegistry(settings.device_tokens_path),
     )
 
     api = EngineApiClient(settings)

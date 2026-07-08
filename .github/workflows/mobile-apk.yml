@@ -76,6 +76,57 @@ jobs:
           fi
           grep INTERNET "$MANIFEST" || (echo "FAIL: missing INTERNET" && exit 1)
 
+      - name: Inject google-services.json (Phase 4 push, only if secret set)
+        id: gs_json
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "GOOGLE_SERVICES_JSON not set — building without push (Firebase disabled at runtime)"
+            echo "wired=false" >> "$GITHUB_OUTPUT"
+          else
+            mkdir -p android/app
+            echo "$GOOGLE_SERVICES_JSON" > android/app/google-services.json
+            echo "google-services.json written ($(wc -c < android/app/google-services.json) bytes)"
+            echo "wired=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Substitute firebase_options.dart android block
+        if: steps.gs_json.outputs.wired == 'true'
+        run: |
+          set -eu
+          GS=android/app/google-services.json
+          API_KEY=$(jq -r '.client[0].api_key[0].current_key // empty' "$GS")
+          APP_ID=$(jq -r '.client[0].client_info.mobilesdk_app_id // empty' "$GS")
+          SENDER_ID=$(jq -r '.project_info.project_number // empty' "$GS")
+          PROJECT_ID=$(jq -r '.project_info.project_id // empty' "$GS")
+          STORAGE_BUCKET=$(jq -r '.project_info.storage_bucket // empty' "$GS")
+          for v in "API_KEY=$API_KEY" "APP_ID=$APP_ID" "SENDER_ID=$SENDER_ID" "PROJECT_ID=$PROJECT_ID" "STORAGE_BUCKET=$STORAGE_BUCKET"; do
+            key="${v%%=*}"; val="${v#*=}"
+            [ -n "$val" ] || { echo "ERROR: $key empty in google-services.json"; exit 1; }
+          done
+          sed -i "/^  static const FirebaseOptions android = FirebaseOptions(/,/^  );/ {
+            s|^    apiKey: .*|    apiKey: '$API_KEY',|
+            s|^    appId: .*|    appId: '$APP_ID',|
+            s|^    messagingSenderId: .*|    messagingSenderId: '$SENDER_ID',|
+            s|^    projectId: .*|    projectId: '$PROJECT_ID',|
+            s|^    storageBucket: .*|    storageBucket: '$STORAGE_BUCKET',|
+          }" lib/firebase_options.dart
+          echo "--- firebase_options.dart android block ---"
+          sed -n '/^  static const FirebaseOptions android = FirebaseOptions(/,/^  );/p' lib/firebase_options.dart
+
+      - name: Apply google-services Gradle plugin (Kotlin DSL)
+        if: steps.gs_json.outputs.wired == 'true'
+        run: |
+          set -eu
+          if [ -f android/settings.gradle.kts ] && ! grep -q "com.google.gms.google-services" android/settings.gradle.kts; then
+            sed -i '/^plugins {/a\    id("com.google.gms.google-services") version "4.4.4" apply false' android/settings.gradle.kts
+          fi
+          if [ -f android/app/build.gradle.kts ] && ! grep -q "com.google.gms.google-services" android/app/build.gradle.kts; then
+            sed -i '/^plugins {/a\    id("com.google.gms.google-services")' android/app/build.gradle.kts
+          fi
+          grep -rE "google.?services" android/*.gradle* android/app/*.gradle* 2>/dev/null || echo "(none)"
+
       - name: Get dependencies
         run: flutter pub get
 

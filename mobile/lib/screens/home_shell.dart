@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../auth/auth_service.dart';
 import '../config.dart';
+import '../push/push_service.dart';
+import '../push/push_state.dart';
 import 'control_screen.dart';
 import 'performance_screen.dart';
 import 'positions_screen.dart';
@@ -21,8 +23,16 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int _index = 0;
+  late final PushService _push = PushService(widget.auth, available: firebaseReady);
 
   static const _titles = ['Pulse', 'Signals', 'Positions', 'Perf', 'Control'];
+
+  @override
+  void initState() {
+    super.initState();
+    // Register this device for push alerts (no-op if Firebase isn't wired).
+    _push.start();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -67,6 +77,7 @@ class _HomeShellState extends State<HomeShell> {
 
   Future<void> _onMenu(BuildContext context, String value) async {
     if (value == 'logout') {
+      await _push.unregister();
       await widget.auth.logout();
       widget.onLoggedOut();
       return;
@@ -85,6 +96,7 @@ class _HomeShellState extends State<HomeShell> {
         ),
       );
       if (ok == true) {
+        await _push.unregister();
         await widget.auth.revokeAllDevices();
         widget.onLoggedOut();
       }

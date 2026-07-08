@@ -41,6 +41,8 @@ class Settings:
     diag_timeout_sec: int
     audit_log_path: str
     app_tokens_path: str
+    device_tokens_path: str
+    fcm_service_account: str
     agent_redis_url: str
     # Free-run ("held to SL") candle replay — Profit tab only.
     binance_futures_rest_base: str
@@ -72,6 +74,13 @@ def load_settings() -> Settings:
         # Hashed native-app tokens (see app/app_tokens.py). Same writable
         # volume as the audit log so owner logins survive a container restart.
         app_tokens_path=_env("OPS_APP_TOKENS_PATH", "/data/ops_app_tokens.json"),
+        # Registered FCM device tokens for push (Phase 4). Plaintext addressing
+        # tokens (not secrets) on the writable volume, shared between the web app
+        # (registers) and the monitoring agent (sends).
+        device_tokens_path=_env("OPS_DEVICE_TOKENS_PATH", "/data/ops_device_tokens.json"),
+        # Firebase service-account JSON (as a string) for FCM HTTP v1 send. When
+        # empty, push is disabled and the agent falls back to Telegram only.
+        fcm_service_account=_env("FIREBASE_SERVICE_ACCOUNT", ""),
         # Same Redis the monitoring agent writes alert state to — the web
         # dashboard reads it to render the alerts panel.
         agent_redis_url=_env("AGENT_REDIS_URL", "redis://360ce-ops-redis:6379/0"),

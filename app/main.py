@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.app_tokens import AppTokenStore
 from app.auth_mw import AuthRedirectMiddleware
+from app.device_registry import DeviceRegistry
 from app.config import load_settings
 from app.data_sources.agent_alerts import AgentAlertsReader
 from app.data_sources.binance_klines import BinanceKlinesClient
@@ -61,6 +62,7 @@ async def lifespan(app: FastAPI):
     app.state.templates = templates
     app.state.engine_api = EngineApiClient(settings)
     app.state.app_tokens = AppTokenStore(settings.app_tokens_path)
+    app.state.device_registry = DeviceRegistry(settings.device_tokens_path)
     app.state.data_volume = DataVolumeReader(settings)
     app.state.monitor_logs = MonitorLogsReader(settings)
     app.state.diag_runner = DiagRunner(settings)

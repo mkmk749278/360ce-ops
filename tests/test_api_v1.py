@@ -15,6 +15,9 @@ os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
 os.environ.setdefault(
     "OPS_APP_TOKENS_PATH", os.path.join(tempfile.gettempdir(), "ops_app_tokens_test.json")
 )
+os.environ.setdefault(
+    "OPS_DEVICE_TOKENS_PATH", os.path.join(tempfile.gettempdir(), "ops_device_tokens_test.json")
+)
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -184,4 +187,37 @@ def test_control_tunables_rejects_empty(monkeypatch):
         r = client.post('/api/v1/control/tunables',
                         headers={'Authorization': f'Bearer {tok}'},
                         json={'values': {}})
+        assert r.status_code == 422
+
+
+# ---- /api/v1/devices (Phase 4 push registry) ----------------------------
+
+
+def test_device_register_requires_token():
+    with TestClient(app) as client:
+        r = client.post('/api/v1/devices', json={'fcm_token': 'x'},
+                        follow_redirects=False)
+        assert r.status_code == 401
+
+
+def test_device_register_and_unregister():
+    with TestClient(app) as client:
+        tok = _login(client)
+        h = {'Authorization': f'Bearer {tok}'}
+        reg = client.post('/api/v1/devices', headers=h,
+                          json={'fcm_token': 'fcm-abc', 'platform': 'android'})
+        assert reg.status_code == 200 and reg.json()['ok'] is True
+        # Idempotent re-register.
+        client.post('/api/v1/devices', headers=h, json={'fcm_token': 'fcm-abc'})
+        dele = client.request('DELETE', '/api/v1/devices', headers=h,
+                              json={'fcm_token': 'fcm-abc'})
+        assert dele.status_code == 200 and dele.json()['removed'] is True
+
+
+def test_device_register_rejects_empty_token():
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.post('/api/v1/devices',
+                        headers={'Authorization': f'Bearer {tok}'},
+                        json={'fcm_token': '   '})
         assert r.status_code == 422
