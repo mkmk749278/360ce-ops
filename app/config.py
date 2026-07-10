@@ -33,6 +33,7 @@ def _env_bool(name: str, default: bool) -> bool:
 class Settings:
     session_secret: str
     auth_token: str
+    totp_secret: str
     engine_api_base: str
     engine_data_dir: str
     monitor_logs_base_url: str
@@ -58,6 +59,9 @@ def load_settings() -> Settings:
     return Settings(
         session_secret=_env("OPS_SESSION_SECRET", required=True),
         auth_token=_env("OPS_AUTH_TOKEN", required=True),
+        # TOTP second factor (audit F-08). Base32 secret from
+        # scripts/generate_totp_secret.py; empty = password-only (legacy).
+        totp_secret=_env("OPS_TOTP_SECRET", ""),
         engine_api_base=_env("ENGINE_API_BASE", "https://api.luminapp.org"),
         engine_data_dir=_env("ENGINE_DATA_DIR", "/engine-data"),
         monitor_logs_base_url=_env(
