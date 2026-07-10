@@ -32,6 +32,7 @@ from app.data_sources.monitor_logs import MonitorLogsReader
 from app.routes import (
     alerts,
     api_v1,
+    audit_status,
     auth,
     control,
     data_export,
@@ -111,6 +112,7 @@ app.include_router(control.router)
 app.include_router(users.router)
 app.include_router(alerts.router)
 app.include_router(data_export.router)
+app.include_router(audit_status.router)
 
 
 @app.get("/healthz")

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Audit — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Audit board <span class="muted">— institutional audit 2026-07-10, implementation status</span></h1>
+
+<section class="card">
+  <div class="summary-row">
+    <a class="stat stat-open{% if filter_status == 'open' %} on{% endif %}" href="/audit?status=open">
+      <span class="n">{{ summary.open }}</span> open
+    </a>
+    <a class="stat stat-partial{% if filter_status == 'partial' %} on{% endif %}" href="/audit?status=partial">
+      <span class="n">{{ summary.partial }}</span> partial
+    </a>
+    <a class="stat stat-owner{% if filter_status == 'owner' %} on{% endif %}" href="/audit?status=owner">
+      <span class="n">{{ summary.owner }}</span> owner action
+    </a>
+    <a class="stat stat-done{% if filter_status == 'done' %} on{% endif %}" href="/audit?status=done">
+      <span class="n">{{ summary.done }}</span> done
+    </a>
+    {% if filter_status %}<a class="stat" href="/audit">show all</a>{% endif %}
+  </div>
+  <p class="muted small">Statement of record, updated at session end — full text in
+  <code>docs/INSTITUTIONAL_AUDIT_2026_07_10.md</code> (360-v2). Sorted: needs-attention first.</p>
+</section>
+
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Severity</th>
+      <th>Finding</th>
+      <th>Status</th>
+      <th>Where / what's left</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for f in findings %}
+    <tr>
+      <td class="mono">{{ f.id }}</td>
+      <td><span class="badge sev-{{ f.severity }}">{{ f.severity }}</span></td>
+      <td>{{ f.title }}</td>
+      <td><span class="badge st-{{ f.status }}">{{ {'done':'✅ done','partial':'◐ partial','open':'⛔ open','owner':'👤 owner'}[f.status] }}</span></td>
+      <td class="small">{{ f.note }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2 style="margin-top:1.4rem">Beyond the audit — Session 48 autonomous ops</h2>
+<table class="data-table">
+  <tbody>
+  {% for f in extras %}
+    <tr>
+      <td class="mono">{{ f.id }}</td>
+      <td><span class="badge sev-{{ f.severity }}">{{ f.severity }}</span></td>
+      <td>{{ f.title }}</td>
+      <td><span class="badge st-{{ f.status }}">✅ done</span></td>
+      <td class="small">{{ f.note }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

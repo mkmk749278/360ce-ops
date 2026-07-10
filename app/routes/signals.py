@@ -65,6 +65,33 @@ def _format_relative(ts: datetime | None, now: datetime | None = None) -> str | 
     return f"{days}d ago"
 
 
+# Status names that mean "position still working" across engine builds —
+# used only when a payload predates the engine ``is_open`` stamp.
+_OPEN_STATUSES = {
+    "ACTIVE",
+    "TP1_HIT",
+    "TP2_HIT",
+    "TP3_HIT",
+    "PRE_TP",
+    "BE_ARMED",
+    "RUNNER",
+}
+
+
+def _status_class(status: str, is_open: bool) -> str:
+    """CSS badge class for a signal status — colour over reading."""
+    s = (status or "").upper()
+    if s.startswith("SL") or "STOP" in s:
+        return "st-sl"
+    if "EXPIRED" in s:
+        return "st-expired"
+    if s.startswith("TP") or "TP" in s:
+        return "st-tp"
+    if is_open or s == "ACTIVE":
+        return "st-active"
+    return "st-closed"
+
+
 def _normalize_signal(entry: dict) -> dict:
     """Common shape across the live API and the monitor JSON dumps.
 
@@ -78,6 +105,20 @@ def _normalize_signal(entry: dict) -> dict:
     ``created_at_raw`` retains the original value for hover / tooltip use;
     ``created_at_relative`` is the operator-facing short form.
     """
+    status = (
+        entry.get("status")
+        or entry.get("terminal_status")
+        or entry.get("outcome_label")
+        or ""
+    )
+    # Open/closed truth: prefer the engine's own ``is_open`` stamp (Session
+    # 46 made it the display truth in the app); fall back to a status-name
+    # heuristic for older monitor dumps that predate the stamp.
+    if "is_open" in entry:
+        is_open = bool(entry.get("is_open"))
+    else:
+        is_open = status.upper() in _OPEN_STATUSES
+
     raw_ts = (
         entry.get("timestamp")
         or entry.get("dispatch_timestamp")
@@ -98,7 +139,9 @@ def _normalize_signal(entry: dict) -> dict:
         "side": entry.get("side") or entry.get("direction", ""),
         "setup_class": entry.get("setup_class") or entry.get("setupClass", ""),
         "confidence": entry.get("confidence"),
-        "status": entry.get("status") or entry.get("terminal_status") or entry.get("outcome_label") or "",
+        "status": status,
+        "is_open": is_open,
+        "status_class": _status_class(status, is_open),
         "regime": entry.get("entry_regime") or entry.get("regime", ""),
         "pnl_pct": entry.get("pnl_pct") if entry.get("pnl_pct") is not None else entry.get("pnlPct"),
         "entry": entry.get("entry") or entry.get("entry_price"),
@@ -164,8 +207,17 @@ async def _build_rows(
         seen_ids.add(norm["id"])
         rows.append(norm)
 
-    rows.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    # Open positions first (they're what the operator acts on), newest first
+    # inside each group — same ordering truth-fix the app got in Session 46.
+    rows.sort(
+        key=lambda r: (0 if r.get("is_open") else 1, -(_sort_ts(r))),
+    )
     return rows
+
+
+def _sort_ts(row: dict[str, Any]) -> float:
+    parsed = _parse_iso_timestamp(row.get("created_at_raw"))
+    return parsed.timestamp() if parsed is not None else 0.0
 
 
 @router.get("/signals")

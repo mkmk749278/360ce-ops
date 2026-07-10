@@ -1,14 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Data Export · 360 CE Ops{% endblock %}
+{% block title %}Data · 360 CE Ops{% endblock %}
 {% block content %}
-<h1>Data Export</h1>
+<h1>Data downloads</h1>
 <p class="muted">
-  Raw engine <code>/engine-data</code> artifacts, downloaded as timestamped JSON.
-  Read-only. <code>signal_history.json</code> carries each signal's
-  <code>component_scores</code> (the 7 scoring dimensions) + outcome — the
-  source for offline score calibration.
+  Raw engine <code>/engine-data</code> artifacts. Read-only. Curated exports
+  first (re-serialized, parse-checked); below them every file on the volume
+  for direct download — no SSH needed.
 </p>
-<table>
+
+<h2>Curated exports</h2>
+<table class="data-table">
   <thead>
     <tr><th>Artifact</th><th>Records</th><th>Notes</th><th></th></tr>
   </thead>
@@ -17,7 +18,7 @@
     <tr>
       <td><strong>{{ r.label }}</strong><br><code>{{ r.key }}.json</code></td>
       <td>
-        {% if r.error %}<span class="err">{{ r.error }}</span>
+        {% if r.error %}<span class="badge st-sl">{{ r.error }}</span>
         {% elif r.count is not none %}{{ r.count }}
         {% else %}&mdash;{% endif %}
       </td>
@@ -31,4 +32,25 @@
     {% endfor %}
   </tbody>
 </table>
+
+<h2 style="margin-top:1.4rem">All files on the volume <span class="muted">— {{ files | length }} file(s), newest write first; write recency doubles as a liveness readout</span></h2>
+{% if files %}
+<table class="data-table">
+  <thead>
+    <tr><th>File</th><th>Size</th><th>Last write</th><th></th></tr>
+  </thead>
+  <tbody>
+    {% for f in files %}
+    <tr>
+      <td class="mono">{{ f.rel_path }}</td>
+      <td class="mono" data-sort="{{ f.size_bytes }}">{{ f.size_h }}</td>
+      <td class="mono {{ f.age_class }}" data-sort="{{ f.mtime }}">{{ f.age_h }}</td>
+      <td><a class="btn" href="/data/raw/{{ f.rel_path }}">Download</a></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<section class="card"><div class="muted">Volume empty or not mounted (dev without <code>ENGINE_DATA_DIR</code>).</div></section>
+{% endif %}
 {% endblock %}

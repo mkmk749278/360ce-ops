@@ -60,3 +60,35 @@ def test_reset_then_live_repopulates_clean():
     req, _ = _req(live, hist)
     rows = asyncio.run(_build_rows(req, None, None))
     assert {r["id"] for r in rows} == {"NEW0", "NEW1", "NEW2"}
+
+
+def test_open_positions_sort_first_then_newest():
+    # 2026-07-10 ops upgrade: the operator acts on OPEN rows — they lead,
+    # newest first inside each group, regardless of raw timestamps.
+    live = [
+        {"signal_id": "CLOSED_NEW", "symbol": "A", "status": "SL_HIT",
+         "timestamp": "2026-07-10T10:00:00+00:00", "is_open": False},
+        {"signal_id": "OPEN_OLD", "symbol": "B", "status": "TP1_HIT",
+         "timestamp": "2026-07-09T10:00:00+00:00", "is_open": True},
+        {"signal_id": "OPEN_NEW", "symbol": "C", "status": "ACTIVE",
+         "timestamp": "2026-07-10T09:00:00+00:00", "is_open": True},
+    ]
+    req, _ = _req(live, [])
+    rows = asyncio.run(_build_rows(req, None, None))
+    assert [r["id"] for r in rows] == ["OPEN_NEW", "OPEN_OLD", "CLOSED_NEW"]
+
+
+def test_status_heuristic_when_no_is_open_stamp():
+    # Pre-stamp monitor dumps: ACTIVE/TP-runner statuses count as open.
+    live = [
+        {"signal_id": "S_SL", "symbol": "A", "status": "SL_HIT",
+         "timestamp": "2026-07-10T10:00:00+00:00"},
+        {"signal_id": "S_TP1", "symbol": "B", "status": "TP1_HIT",
+         "timestamp": "2026-07-09T10:00:00+00:00"},
+    ]
+    req, _ = _req(live, [])
+    rows = asyncio.run(_build_rows(req, None, None))
+    assert [r["id"] for r in rows] == ["S_TP1", "S_SL"]
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["S_TP1"]["status_class"] == "st-tp"
+    assert by_id["S_SL"]["status_class"] == "st-sl"
