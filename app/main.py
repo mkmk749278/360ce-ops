@@ -19,6 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.app_tokens import AppTokenStore
 from app.auth_mw import AuthRedirectMiddleware
+from app.totp import TotpGate
 from app.device_registry import DeviceRegistry
 from app.config import load_settings
 from app.data_sources.agent_alerts import AgentAlertsReader
@@ -60,6 +61,9 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.templates = templates
+    # TOTP second factor on both login paths (audit F-08). Enabled when
+    # OPS_TOTP_SECRET is set; otherwise password-only as before.
+    app.state.totp_gate = TotpGate(settings.totp_secret)
     app.state.engine_api = EngineApiClient(settings)
     app.state.app_tokens = AppTokenStore(settings.app_tokens_path)
     app.state.device_registry = DeviceRegistry(settings.device_tokens_path)

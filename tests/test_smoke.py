@@ -36,7 +36,9 @@ def test_login_rejects_wrong_password():
     with TestClient(app) as client:
         r = client.post("/login", data={"password": "wrong"}, follow_redirects=False)
         assert r.status_code == 401
-        assert "Invalid password" in r.text
+        # Generic on purpose (F-08): the message must not reveal which
+        # factor (password vs TOTP) failed.
+        assert "Invalid credentials" in r.text
 
 
 def test_login_accepts_correct_password_and_redirects():

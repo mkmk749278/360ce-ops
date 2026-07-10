@@ -47,14 +47,25 @@ async def require_app_token(
 class LoginBody(BaseModel):
     password: str
     label: str = "ops-app"
+    # TOTP second factor (audit F-08) — required when OPS_TOTP_SECRET is
+    # set; ignored (may stay empty) when the gate is disabled.
+    totp: str = ""
 
 
 @router.post("/auth/login")
 async def login(request: Request, body: LoginBody) -> dict[str, Any]:
-    """Exchange the ops password for an app-token. Public (no token required)."""
+    """Exchange the ops password (+ TOTP when enabled) for an app-token.
+
+    Public (no token required). Both factors are always evaluated and the
+    failure detail is identical either way, so a probing client can't tell
+    which factor failed.
+    """
     settings = request.app.state.settings
-    if not hmac.compare_digest(body.password, settings.auth_token):
-        raise HTTPException(status_code=401, detail="invalid password")
+    gate = request.app.state.totp_gate
+    password_ok = hmac.compare_digest(body.password, settings.auth_token)
+    totp_ok = gate.verify(body.totp)
+    if not (password_ok and totp_ok):
+        raise HTTPException(status_code=401, detail="invalid credentials")
     token = request.app.state.app_tokens.issue(label=body.label)
     return {"token": token, "token_type": "bearer"}
 

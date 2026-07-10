@@ -21,7 +21,7 @@ For every change, ask: **"how does this make signals more profitable for paid su
 Diagnostic dashboard **and the engine control plane** (promoted 2026-06-20). Diagnostic-first, but no longer read-only: Telegram is banned in-region, so the owner's manual control of the engine (auto-mode flips, kill switch, and — over time — manual close / per-user settings) now lives here. Monitoring of signals/positions/PnL stays primarily in the Lumin app; **ops owns control**.
 
 Control doctrine (non-negotiable for every write surface):
-- **Owner-gated end to end.** Writes call the engine's owner-gated endpoints; the dashboard's static Bearer token is owner-tier on the engine. Everything stays behind the single-password auth gate.
+- **Owner-gated end to end.** Writes call the engine's owner-gated endpoints; the dashboard's static Bearer token is owner-tier on the engine. Everything stays behind the auth gate (password + TOTP when enrolled).
 - **Audited.** Every control action is appended to the audit log (`app/audit.py` → `OPS_AUDIT_LOG`). Audit writes are best-effort and never block the action — being able to hit the kill switch matters more than logging it.
 - **PRG + confirm.** Control routes use POST→redirect→GET so a refresh can't re-fire an action; destructive actions (engage kill switch, switch to LIVE) require an explicit confirm.
 - **The engine is the source of truth.** Ops never holds control state locally; it reads it back from the engine after every write.
@@ -45,7 +45,7 @@ Every change ships via PR. Fresh topic branch off `main`. Design-summary in the 
 - FastAPI async everywhere — no blocking HTTP in routes.
 - HTMX partials are routes prefixed `/_partial/...` returning HTML fragments.
 - Templates extend `base.html`; `login.html` is the one exception (standalone).
-- Owner-only auth — single password gate via `OPS_AUTH_TOKEN`.
+- Owner-only auth — password gate via `OPS_AUTH_TOKEN` + optional TOTP second factor via `OPS_TOTP_SECRET` (enroll with `python scripts/generate_totp_secret.py`; audit F-08).
 - Templates render unknown payload shapes via `tojson(indent=2)` rather than crashing on shape drift — the engine REST surface is the source of truth, this dashboard adapts to it.
 
 ## Hard limits

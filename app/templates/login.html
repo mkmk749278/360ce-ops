@@ -14,6 +14,12 @@
       <label>Password
         <input type="password" name="password" autofocus required>
       </label>
+      {% if totp_enabled %}
+      <label>Authenticator code
+        <input type="text" name="totp" inputmode="numeric" autocomplete="one-time-code"
+               pattern="[0-9]{6}" maxlength="6" placeholder="123456" required>
+      </label>
+      {% endif %}
       <button type="submit">Sign in</button>
     </form>
   </main>
