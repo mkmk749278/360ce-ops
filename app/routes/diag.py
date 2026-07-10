@@ -37,3 +37,27 @@ async def diag_geometry_post(
             "active": "diag",
         },
     )
+
+
+@router.post("/diag/paper")
+async def diag_paper_post(
+    request: Request,
+    hours: int = Form(30),
+):
+    """Paper-health evidence dump (engine scripts/diag_paper_health.py) —
+    joins the paper cohort, per-user books, and recent signals to show which
+    gate is eating paper opens.  Added for the 2026-07-10 frozen-paper-book
+    investigation; read-only on the engine side."""
+    hours = max(1, min(hours, 720))
+    runner = request.app.state.diag_runner
+    result = await runner.run("diag_paper_health", ["--hours", str(hours)])
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        "diag.html",
+        {
+            "request": request,
+            "result": result,
+            "params": {"hours": hours},
+            "active": "diag",
+        },
+    )
