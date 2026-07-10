@@ -6,6 +6,7 @@
   <title>{% block title %}360 CE Ops{% endblock %}</title>
   <link rel="stylesheet" href="/static/style.css">
   <script src="https://unpkg.com/htmx.org@1.9.10" defer></script>
+  <script src="/static/sort.js" defer></script>
 </head>
 <body>
   <header>
@@ -25,6 +26,7 @@
       <a href="/performance" class="{% if active=='performance' %}on{% endif %}">Performance</a>
       <a href="/raw-edge" class="{% if active=='raw_edge' %}on{% endif %}">Raw Edge</a>
       <a href="/data" class="{% if active=='data' %}on{% endif %}">Data</a>
+      <a href="/audit" class="{% if active=='audit' %}on{% endif %}">Audit</a>
     </nav>
     <div class="user"><a href="/logout">Logout</a></div>
   </header>

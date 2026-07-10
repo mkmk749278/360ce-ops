@@ -41,12 +41,12 @@
   <tbody>
   {% for r in rows %}
     <tr>
-      <td class="mono small">{% if r.created_at_relative %}<span title="{{ r.created_at_absolute or r.created_at_raw or '' }}">{{ r.created_at_relative }}</span>{% else %}{{ r.created_at_absolute or r.created_at or "—" }}{% endif %}</td>
+      <td class="mono small" data-sort="{{ r.created_at_raw or '' }}">{% if r.created_at_relative %}<span title="{{ r.created_at_absolute or r.created_at_raw or '' }}">{{ r.created_at_relative }}</span>{% else %}{{ r.created_at_absolute or r.created_at or "—" }}{% endif %}</td>
       <td>{{ r.symbol }}</td>
       <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
       <td>{{ r.setup_class }}</td>
       <td>{{ r.confidence if r.confidence is not none else "—" }}</td>
-      <td>{{ r.status }}</td>
+      <td data-sort="{{ r.status }}"><span class="badge {{ r.status_class }}">{{ r.status or "—" }}</span></td>
       <td>{{ r.regime }}</td>
       <td class="{% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">{{ r.pnl_pct if r.pnl_pct is not none else "—" }}</td>
       <td><a href="/signals/{{ r.id }}">→</a></td>
