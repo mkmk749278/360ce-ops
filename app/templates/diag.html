@@ -13,6 +13,17 @@
   <button type="submit">Run</button>
 </form>
 
+<h1>Diag — paper book health</h1>
+<p class="muted">Runs <code>docker exec engine python /app/scripts/diag_paper_health.py</code> —
+who is in the paper cohort, what their books last did, and a per-signal
+eligibility verdict for the window. Use when paper trades stop appearing.</p>
+<form method="post" action="/diag/paper" class="filters">
+  <label>Window (hours)
+    <input type="number" name="hours" min="1" max="720" value="{{ params.hours or 30 }}">
+  </label>
+  <button type="submit">Run</button>
+</form>
+
 {% if result %}
   <section class="card">
     <h2>Result <span class="muted">rc={{ result.returncode }}</span></h2>

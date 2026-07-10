@@ -25,7 +25,7 @@ _UNSAFE_CHARS = set(";&|`$<>(){}[]\n\r\"'\\")
 
 
 class DiagRunner:
-    _ALLOWED_SCRIPTS = {"diag_geometry_vs_reality"}
+    _ALLOWED_SCRIPTS = {"diag_geometry_vs_reality", "diag_paper_health"}
 
     def __init__(self, settings: Settings) -> None:
         self._container = settings.engine_container_name
