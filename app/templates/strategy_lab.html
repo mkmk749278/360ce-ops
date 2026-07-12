@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Strategy Lab — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Strategy Lab <span class="muted">— every strategy measured per market context, real data</span></h1>
+
+<div hx-get="/_partial/strategy_lab" hx-trigger="every 60s" hx-swap="innerHTML">
+  {% include "_strategy_lab_tables.html" %}
+</div>
+{% endblock %}

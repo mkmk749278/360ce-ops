@@ -1,0 +1,165 @@
+<section class="card">
+  <h2>Current market context</h2>
+  {% if context.error %}
+    <p class="muted">Context vector unavailable: <code>{{ context.error }}</code> —
+    populates once the engine's audit loop publishes <code>market_context.json</code>.</p>
+  {% else %}
+    <div class="summary-row">
+      <span class="stat"><span class="n">{{ context.session }}</span> session{% if context.is_weekend %} (weekend){% endif %}</span>
+      <span class="stat"><span class="n">{{ context.phase }}</span> phase</span>
+      <span class="stat"><span class="n">{{ context.volatility }}</span> volatility</span>
+      <span class="stat"><span class="n">{{ context.funding }}</span> funding</span>
+      <span class="stat"><span class="n">{{ context.rotation }}</span> rotation</span>
+    </div>
+    <p class="muted small">
+      Context key <code>{{ context.context_key }}</code> ·
+      published {{ context.generated_at_iso or "?" }}
+      {% if context.age_sec is not none %}({{ context.age_sec }}s ago){% endif %}
+      {% if context.stale %}<span class="badge sev-high">STALE</span>{% endif %}
+    </p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Allocator — what it would do now <span class="muted small">(recommendation only; consumes nothing)</span></h2>
+  {% if allocations.error %}
+    <p class="muted">No allocator output yet: <code>{{ allocations.error }}</code></p>
+  {% else %}
+    <p class="small">Mode <span class="badge st-partial">{{ allocations.mode }}</span>
+      · context <code>{{ allocations.context_key }}</code>
+      · cells measured in this context: {{ allocations.cells_in_context }}
+      · unallocated (flat): {{ allocations.unallocated_weight }}
+      · caps: ≤{{ allocations.limits.max_concurrent_strategies }} strategies,
+        ≤{{ allocations.limits.max_strategy_weight }} weight each
+      {% if allocations.stale %}<span class="badge sev-high">STALE</span>{% endif %}
+    </p>
+    {% if allocations.activate %}
+    <table class="data-table">
+      <thead><tr><th>Would activate</th><th>Weight</th><th>Edge (R)</th><th>n</th><th>Why</th></tr></thead>
+      <tbody>
+      {% for r in allocations.activate %}
+        <tr>
+          <td class="mono">{{ r.strategy }}</td>
+          <td>{{ r.weight }}</td>
+          <td>{{ "%+.3f"|format(r.edge_r) if r.edge_r is not none else "—" }}</td>
+          <td>{{ r.n }}</td>
+          <td class="small">{{ r.reason }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted small">Nothing to activate — no strategy has a measured POSITIVE/STRONG edge
+    in the current context yet (a cold matrix recommends nothing rather than guessing).</p>
+    {% endif %}
+    {% if allocations.demote %}
+    <p class="small">Would demote:
+      {% for r in allocations.demote %}
+        <span class="badge sev-high mono">{{ r.strategy }}</span>
+      {% endfor %}
+    </p>
+    {% endif %}
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Strategy × Context edge matrix</h2>
+  {% if matrix_rows %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Strategy</th><th>Context</th><th>n</th>
+        <th>emit/supp/shadow</th><th>Win%</th><th>Avg R</th>
+        <th>Edge (Wilson R)</th><th>Verdict</th><th>Fit</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in matrix_rows %}
+      <tr>
+        <td class="mono">{{ r.strategy }}</td>
+        <td class="mono small">{{ r.context_key }}</td>
+        <td>{{ r.n }}</td>
+        <td class="small">{{ r.n_emitted }}/{{ r.n_suppressed }}/{{ r.n_shadow }}</td>
+        <td>{{ "%.0f"|format(r.win_rate * 100) }}%</td>
+        <td>{{ "%+.2f"|format(r.avg_r) }}</td>
+        <td>{{ "%+.3f"|format(r.edge_r) if r.edge_r is not none else "—" }}</td>
+        <td><span class="badge {% if r.verdict == 'STRONG' %}st-done{% elif r.verdict == 'POSITIVE' %}st-partial{% elif r.verdict == 'NEGATIVE' %}sev-high{% else %}st-open{% endif %}">{{ r.verdict }}</span></td>
+        <td>
+          {% if r.aligned is true %}<span class="badge st-done">in design ctx</span>
+          {% elif r.aligned is false %}<span class="badge sev-med">outside design ctx</span>
+          {% else %}<span class="muted small">—</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Matrix is cold — cells appear as suppressed/shadow candidates classify
+  (~1h forward windows) and emitted signals resolve. Real data only; nothing is fabricated.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Per-strategy rollup</h2>
+  {% if per_strategy %}
+  <table class="data-table">
+    <thead>
+      <tr><th>Strategy</th><th>n</th><th>emit/supp/shadow</th><th>Cells</th><th>Win%</th><th>Avg R</th><th>Best context</th></tr>
+    </thead>
+    <tbody>
+    {% for a in per_strategy %}
+      <tr>
+        <td class="mono">{{ a.strategy }}</td>
+        <td>{{ a.n }}</td>
+        <td class="small">{{ a.n_emitted }}/{{ a.n_suppressed }}/{{ a.n_shadow }}</td>
+        <td>{{ a.cells }}</td>
+        <td>{{ "%.0f"|format(a.win_rate * 100) }}%</td>
+        <td>{{ "%+.2f"|format(a.avg_r) }}</td>
+        <td class="mono small">{% if a.best_cell %}{{ a.best_cell.context_key }} ({{ "%+.2f"|format(a.best_cell.edge_r) }}R){% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No strategy outcomes recorded yet.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Suppression gate audit <span class="muted small">(would the blocked candidates have won?)</span></h2>
+  {% if gates.by_gate %}
+  <table class="data-table">
+    <thead>
+      <tr><th>Gate</th><th>n</th><th>WOULD_WIN%</th><th>Saved R</th><th>Missed R</th><th>EV/suppression (R)</th><th>Verdict</th></tr>
+    </thead>
+    <tbody>
+    {% for gate, g in gates.by_gate.items() | sort %}
+      <tr>
+        <td class="mono">{{ gate }}</td>
+        <td>{{ g.n }}</td>
+        <td>{{ "%.1f"|format(g.would_win_pct) }}%</td>
+        <td>{{ "%.1f"|format(g.saved_r) }}</td>
+        <td>{{ "%.1f"|format(g.missed_r) }}</td>
+        <td>{{ "%+.2f"|format(g.ev_per_suppression_r) }}</td>
+        <td><span class="badge {% if g.verdict == 'KEEP' %}st-done{% elif g.verdict == 'DROP' %}sev-high{% elif g.verdict == 'TUNE' %}sev-med{% else %}st-open{% endif %}">{{ g.verdict }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">{{ gates.classified }} classified · {{ gates.pending }} pending (awaiting forward window)</p>
+  {% else %}
+  <p class="muted">No classified suppressed candidates yet ({{ gates.pending }} pending).
+  Candidates classify after their validity window of real candles accumulates.</p>
+  {% endif %}
+</section>
+
+<p class="muted small">
+  Thresholds mirrored from engine <code>STRATEGY_EDGE_*</code> / <code>SUPPRESSION_AUDIT_*</code>:
+  edge sample floor {{ thresholds.edge_min_samples }} ·
+  STRONG ≥ {{ thresholds.edge_strong_r }}R · POSITIVE ≥ {{ thresholds.edge_positive_r }}R ·
+  NEGATIVE ≤ {{ thresholds.edge_negative_r }}R ·
+  gate KEEP ≥ +{{ thresholds.keep_ev_r }}R · DROP ≤ {{ thresholds.drop_ev_r }}R
+  over ≥ {{ thresholds.suppression_min_sample }} suppressions.
+  Sources: <em>emit</em> = realised trades · <em>supp</em> = gate-blocked counterfactuals ·
+  <em>shadow</em> = shadow-only units (no live path).
+</p>

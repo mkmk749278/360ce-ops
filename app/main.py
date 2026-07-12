@@ -46,6 +46,7 @@ from app.routes import (
     raw_edge,
     signal_detail,
     signals,
+    strategy_lab,
     truth,
     users,
 )
@@ -106,6 +107,7 @@ app.include_router(diag.router)
 app.include_router(invalidations.router)
 app.include_router(performance.router)
 app.include_router(raw_edge.router)
+app.include_router(strategy_lab.router)
 app.include_router(positions.router)
 app.include_router(profit.router)
 app.include_router(control.router)

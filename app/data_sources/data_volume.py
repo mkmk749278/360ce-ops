@@ -35,6 +35,20 @@ class DataVolumeReader:
     def signal_history(self) -> Any:
         return self._load("signal_history.json")
 
+    # -- Strategy Lab artifacts (autonomous-portfolio measurement layer) --
+
+    def market_context(self) -> Any:
+        return self._load("market_context.json")
+
+    def suppressed_candidates(self) -> Any:
+        return self._load("suppressed_candidates.json")
+
+    def strategy_edge(self) -> Any:
+        return self._load("strategy_edge_store.json")
+
+    def strategy_allocations(self) -> Any:
+        return self._load("strategy_allocations.json")
+
     # ------------------------------------------------------------------
     # Raw-file surface (2026-07-10 ops upgrade): the curated exports above
     # re-serialize parsed JSON; these expose the volume's actual files so
