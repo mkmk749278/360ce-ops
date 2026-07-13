@@ -159,10 +159,90 @@ def _alignment(strategy: str, context_key: str, affinity: Optional[dict]) -> Opt
     return True
 
 
+# Stop-geometry A/B arm suffixes (engine: src/geometry_ab.py).  Rows named
+# X@FIXED / X@ATR are counterfactual stop-geometry measurement arms, not
+# strategies — they get their own A/B card and stay out of the strategy rollup.
+GEOMETRY_SUFFIXES = ("@FIXED", "@ATR")
+
+
+def _is_geometry_variant(strategy: str) -> bool:
+    return any(str(strategy or "").endswith(s) for s in GEOMETRY_SUFFIXES)
+
+
+def _base_strategy(strategy: str) -> str:
+    s = str(strategy or "")
+    for sfx in GEOMETRY_SUFFIXES:
+        if s.endswith(sfx):
+            return s[: -len(sfx)]
+    return s
+
+
+def reduce_geometry_ab(rows: list[dict], min_sample: int = EDGE_MIN_SAMPLES) -> list[dict]:
+    """Per-strategy fixed-vs-ATR stop rollup (port of engine summarize_geometry_ab).
+
+    Pools each arm's matrix cells across contexts (sample-weighted); a leader
+    is named only when BOTH arms clear ``min_sample`` — one thin arm means the
+    A/B is still MEASURING.  Sorted by |ΔR| so the biggest effects lead.
+    """
+    pooled: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        strategy = str(row.get("strategy", ""))
+        if not _is_geometry_variant(strategy):
+            continue
+        arm = "atr" if strategy.endswith("@ATR") else "fixed"
+        n = int(row.get("n", 0) or 0)
+        if n <= 0:
+            continue
+        agg = pooled.setdefault(_base_strategy(strategy), {}).setdefault(
+            arm, {"n": 0, "wins": 0.0, "r_sum": 0.0, "cells": 0}
+        )
+        agg["n"] += n
+        agg["wins"] += float(row.get("win_rate", 0.0) or 0.0) * n
+        agg["r_sum"] += float(row.get("avg_r", 0.0) or 0.0) * n
+        agg["cells"] += 1
+    out: list[dict] = []
+    for base, arms in pooled.items():
+        def _arm(name: str) -> dict:
+            a = arms.get(name, {"n": 0, "wins": 0.0, "r_sum": 0.0, "cells": 0})
+            n = a["n"]
+            return {
+                "n": n,
+                "cells": a["cells"],
+                "win_rate": (a["wins"] / n) if n else 0.0,
+                "avg_r": (a["r_sum"] / n) if n else 0.0,
+            }
+        fixed = _arm("fixed")
+        atr = _arm("atr")
+        measured = fixed["n"] >= min_sample and atr["n"] >= min_sample
+        delta = atr["avg_r"] - fixed["avg_r"]
+        out.append({
+            "strategy": base,
+            "fixed": fixed,
+            "atr": atr,
+            "delta_r": delta if measured else None,
+            "leader": (
+                ("ATR" if delta > 0 else "FIXED" if delta < 0 else "TIE")
+                if measured
+                else "MEASURING"
+            ),
+        })
+    out.sort(
+        key=lambda r: abs(r["delta_r"]) if r["delta_r"] is not None else -1.0,
+        reverse=True,
+    )
+    return out
+
+
 def reduce_per_strategy(rows: list[dict]) -> list[dict]:
-    """Aggregate matrix cells per strategy (sample-weighted)."""
+    """Aggregate matrix cells per strategy (sample-weighted).
+
+    Geometry A/B arms are excluded — they'd double-count their candidates
+    against the real strategy rows; they roll up in ``reduce_geometry_ab``.
+    """
     agg: dict[str, dict] = {}
     for row in rows:
+        if _is_geometry_variant(row.get("strategy", "")):
+            continue
         a = agg.setdefault(row["strategy"], {
             "strategy": row["strategy"],
             "n": 0, "n_emitted": 0, "n_suppressed": 0, "n_shadow": 0,
@@ -283,6 +363,7 @@ def _build_view(vol) -> dict:
         "context": reduce_context_card(mc_raw),
         "matrix_rows": matrix_rows,
         "per_strategy": reduce_per_strategy(matrix_rows),
+        "geometry": reduce_geometry_ab(matrix_rows),
         "gates": reduce_gate_metrics(vol.suppressed_candidates()),
         "allocations": reduce_allocations(vol.strategy_allocations()),
         "thresholds": {
