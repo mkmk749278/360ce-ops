@@ -21,6 +21,7 @@ from app.routes.strategy_lab import (  # noqa: E402
     reduce_context_card,
     reduce_edge_matrix,
     reduce_gate_metrics,
+    reduce_geometry_ab,
     reduce_per_strategy,
 )
 
@@ -121,6 +122,43 @@ class TestPerStrategy:
         assert abs(a["win_rate"] - 0.5) < 1e-9
         assert a["best_cell"] is not None
 
+    def test_geometry_variants_excluded_from_rollup(self):
+        raw = {
+            f"A|{CTX}": _edge_records(20, won=True, r=1.0),
+            f"A@FIXED|{CTX}": _edge_records(20, won=False),
+            f"A@ATR|{CTX}": _edge_records(20, won=True, r=1.0),
+        }
+        agg = reduce_per_strategy(reduce_edge_matrix(raw))
+        assert [a["strategy"] for a in agg] == ["A"]
+        assert agg[0]["n"] == 20  # arms not double-counted
+
+
+class TestGeometryAb:
+    def test_pools_arms_and_names_leader(self):
+        raw = {
+            f"A@FIXED|{CTX}": _edge_records(10, won=False),
+            "A@FIXED|ASIA/RANGE/NORMAL/BTC_NEUTRAL": _edge_records(10, won=False),
+            f"A@ATR|{CTX}": _edge_records(10, won=True, r=1.0),
+            "A@ATR|ASIA/RANGE/NORMAL/BTC_NEUTRAL": _edge_records(10, won=True, r=1.0),
+            # Thin ATR arm → MEASURING.
+            f"B@FIXED|{CTX}": _edge_records(20, won=True, r=0.5),
+            f"B@ATR|{CTX}": _edge_records(3, won=True, r=2.0),
+            # Non-variant rows ignored here.
+            f"A|{CTX}": _edge_records(20, won=True, r=1.0),
+        }
+        rows = reduce_geometry_ab(reduce_edge_matrix(raw))
+        by_name = {r["strategy"]: r for r in rows}
+        a = by_name["A"]
+        assert a["fixed"]["n"] == 20 and a["atr"]["n"] == 20
+        assert a["delta_r"] is not None and a["delta_r"] > 0
+        assert a["leader"] == "ATR"
+        b = by_name["B"]
+        assert b["leader"] == "MEASURING" and b["delta_r"] is None
+        assert rows[0]["strategy"] == "A"  # measured A/B ranks first
+
+    def test_empty(self):
+        assert reduce_geometry_ab([]) == []
+
 
 class TestGateMetrics:
     def test_keep_and_drop_verdicts(self):
@@ -181,6 +219,8 @@ class TestStrategyLabRoutes:
         })
         monkeypatch.setattr(DataVolumeReader, "strategy_edge", lambda self: {
             f"BREAKOUT_RETEST|{CTX}": _edge_records(20, won=True, r=1.5),
+            f"BREAKOUT_RETEST@FIXED|{CTX}": _edge_records(20, won=False),
+            f"BREAKOUT_RETEST@ATR|{CTX}": _edge_records(20, won=True, r=1.0),
         })
         monkeypatch.setattr(DataVolumeReader, "suppressed_candidates", lambda self: [
             _suppressed("WOULD_LOSE") for _ in range(25)
@@ -211,6 +251,8 @@ class TestStrategyLabRoutes:
             assert "KEEP" in r.text
             assert "RECOMMENDATION_ONLY" in r.text
             assert "in design ctx" in r.text
+            assert "Stop-geometry A/B" in r.text
+            assert ">ATR</span>" in r.text  # leader badge from the A/B fixture
 
     def test_partial_returns_fragment(self, monkeypatch):
         self._stub_volume(monkeypatch)
@@ -233,3 +275,4 @@ class TestStrategyLabRoutes:
             r = client.get("/strategy-lab")
             assert r.status_code == 200
             assert "Matrix is cold" in r.text
+            assert "No geometry pairs measured yet" in r.text

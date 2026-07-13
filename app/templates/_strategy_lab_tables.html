@@ -126,6 +126,41 @@
 </section>
 
 <section class="card">
+  <h2>Stop-geometry A/B <span class="muted small">(fixed-% vs ATR/structure stops — observe-only, nothing live changes)</span></h2>
+  {% if geometry %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Strategy</th><th>n fixed</th><th>Win% / R fixed</th>
+        <th>n ATR</th><th>Win% / R ATR</th><th>ΔR (ATR−fixed)</th><th>Leader</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for g in geometry %}
+      <tr>
+        <td class="mono">{{ g.strategy }}</td>
+        <td>{{ g.fixed.n }}</td>
+        <td>{{ "%.0f"|format(g.fixed.win_rate * 100) }}% / {{ "%+.2f"|format(g.fixed.avg_r) }}R</td>
+        <td>{{ g.atr.n }}</td>
+        <td>{{ "%.0f"|format(g.atr.win_rate * 100) }}% / {{ "%+.2f"|format(g.atr.avg_r) }}R</td>
+        <td>{{ "%+.2f"|format(g.delta_r) if g.delta_r is not none else "—" }}</td>
+        <td><span class="badge {% if g.leader == 'ATR' %}st-done{% elif g.leader == 'FIXED' %}st-partial{% else %}st-open{% endif %}">{{ g.leader }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Every post-scoring candidate (emitted and suppressed) is stamped as a
+  counterfactual pair — its live fixed-% stop vs an ATR/structure stop placed beyond the
+  liquidity pool — and both arms are forward-measured identically. R-units normalise per-arm
+  risk, so constant-dollar-risk sizing is inherent. Applying a winning geometry live is a
+  separate dark-first, owner-signed change.</p>
+  {% else %}
+  <p class="muted">No geometry pairs measured yet — pairs stamp at every post-scoring
+  emission/suppression and classify after ~1h forward windows of real candles.</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>Suppression gate audit <span class="muted small">(would the blocked candidates have won?)</span></h2>
   {% if gates.by_gate %}
   <table class="data-table">
