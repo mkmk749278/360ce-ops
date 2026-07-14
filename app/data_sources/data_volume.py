@@ -49,6 +49,13 @@ class DataVolumeReader:
     def strategy_allocations(self) -> Any:
         return self._load("strategy_allocations.json")
 
+    def feature_liveness(self) -> Any:
+        """The engine's feature-liveness manifest (2026-07-14 incident
+        response): per-feature output-vs-upstream verdicts, sustained-streak
+        alerts, and fail-open exception counters, republished every 5-min
+        audit cycle."""
+        return self._load("feature_liveness.json")
+
     # ------------------------------------------------------------------
     # Raw-file surface (2026-07-10 ops upgrade): the curated exports above
     # re-serialize parsed JSON; these expose the volume's actual files so

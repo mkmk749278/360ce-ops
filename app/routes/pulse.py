@@ -13,6 +13,7 @@ async def pulse(request: Request):
     pulse_data = await api.pulse()
     auto = await api.auto_mode()
     heartbeat = await logs.heartbeat()
+    liveness = request.app.state.data_volume.feature_liveness()
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "pulse.html",
@@ -21,6 +22,7 @@ async def pulse(request: Request):
             "pulse": pulse_data,
             "auto_mode": auto,
             "heartbeat": heartbeat,
+            "liveness": liveness,
             "active": "pulse",
         },
     )

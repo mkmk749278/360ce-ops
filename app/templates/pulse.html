@@ -6,6 +6,54 @@
 {% include "_pulse_card.html" %}
 
 <section class="card">
+  <h2>Feature liveness <span class="muted">engine-data / feature_liveness.json — 5-min cycle</span></h2>
+  {% if liveness is mapping and liveness.error %}
+    <div class="muted small">{{ liveness.error }} (pre-rollout build or feature_liveness_enabled off)</div>
+  {% elif liveness is mapping and liveness.features %}
+    {% set alerts = liveness.alerts or [] %}
+    {% if alerts %}
+      {% for a in alerts %}
+        <div class="error">⚠ {{ a.feature }} — {{ a.detail }} (sustained {{ a.streak }} cycles)</div>
+      {% endfor %}
+    {% else %}
+      <div class="small" style="color: var(--pos);">All probed features producing data at their expected rates{% if liveness.boot_grace_active %} · boot grace active{% endif %}</div>
+    {% endif %}
+    <table class="small">
+      <thead><tr><th>Feature</th><th>Status</th><th>Detail</th><th>Streak</th></tr></thead>
+      <tbody>
+        {% for name, f in liveness.features | dictsort %}
+        <tr>
+          <td class="mono">{{ name }}</td>
+          <td><span class="badge {% if f.status == 'ok' %}st-active{% elif f.status == 'violating' %}st-open{% else %}st-expired{% endif %}">{{ f.status }}</span></td>
+          <td class="muted">{{ f.detail }}</td>
+          <td>{{ f.streak }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if liveness.fail_open %}
+      <h3>Fail-open exception counters</h3>
+      <table class="small">
+        <thead><tr><th>Site</th><th>Count</th><th>Last error</th></tr></thead>
+        <tbody>
+          {% for site, entry in liveness.fail_open | dictsort %}
+          <tr>
+            <td class="mono">{{ site }}</td>
+            <td>{{ entry.count }}</td>
+            <td class="muted mono">{{ entry.last_error }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="muted small">Fail-open exception counters: none recorded</div>
+    {% endif %}
+  {% else %}
+    <pre class="mono small">{{ liveness | tojson(indent=2) }}</pre>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>Heartbeat <span class="muted">monitor-logs / heartbeat.txt</span></h2>
   <pre class="mono small">{{ heartbeat }}</pre>
 </section>
