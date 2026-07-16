@@ -79,9 +79,13 @@ def _patch_reads(monkeypatch, *, mode="paper"):
     async def fake_glob(self):
         return {"enabled": True, "initialised": True}
 
+    async def fake_billing(self):
+        return {"enabled": True, "configured": True, "initialised": True}
+
     monkeypatch.setattr(EngineApiClient, "auto_mode", fake_auto_mode)
     monkeypatch.setattr(EngineApiClient, "kill_switch_state", fake_ks)
     monkeypatch.setattr(EngineApiClient, "auto_trade_global_state", fake_glob)
+    monkeypatch.setattr(EngineApiClient, "billing_enabled_state", fake_billing)
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
 
 
@@ -264,4 +268,45 @@ def test_auto_trade_global_flip_calls_engine_and_audits(monkeypatch):
         assert r.status_code == 200
         assert calls["enabled"] is False
         assert recorded[0]["action"] == "auto_trade_global"
+        assert "DISABLED" in r.text
+
+
+def test_billing_flip_calls_engine_and_audits(monkeypatch):
+    calls: dict = {}
+
+    async def fake_set_billing(self, enabled):
+        calls["enabled"] = enabled
+        return {"enabled": enabled, "configured": True, "initialised": True}
+
+    async def fake_billing(self):
+        return {
+            "enabled": calls.get("enabled", True),
+            "configured": True,
+            "initialised": True,
+        }
+
+    async def fake_auto_mode(self):
+        return {"mode": "off"}
+
+    async def fake_ks(self):
+        return {"engaged": False, "initialised": True}
+
+    recorded: list = []
+    monkeypatch.setattr(EngineApiClient, "set_billing_enabled", fake_set_billing)
+    monkeypatch.setattr(EngineApiClient, "billing_enabled_state", fake_billing)
+    monkeypatch.setattr(EngineApiClient, "auto_mode", fake_auto_mode)
+    monkeypatch.setattr(EngineApiClient, "kill_switch_state", fake_ks)
+    monkeypatch.setattr(EngineApiClient, "auto_trade_global_state", _fake_glob)
+    monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
+    monkeypatch.setattr(
+        control_route.audit, "record",
+        lambda *a, **k: recorded.append(k),
+    )
+
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post("/control/billing", data={"enabled": "false"})
+        assert r.status_code == 200
+        assert calls["enabled"] is False
+        assert recorded[0]["action"] == "play_billing"
         assert "DISABLED" in r.text

@@ -91,6 +91,37 @@
 </section>
 
 <section class="card">
+  <h2>Play billing (subscription paywall)</h2>
+  {% if billing.get('configured') is false %}
+    <p class="ks-state ks-off">✗ NOT CONFIGURED — the engine has no Play package
+      / service account, so billing endpoints 503 regardless of this switch.
+      Complete the setup runbook first.</p>
+  {% elif billing.get('initialised') is false %}
+    <p class="muted">Engine reports the flag uninitialised — running on the
+      <code>GOOGLE_PLAY_BILLING_ENABLED</code> env boot default
+      (<strong>{{ 'enabled' if billing.get('enabled') else 'disabled' }}</strong>).</p>
+  {% elif billing.get('enabled') %}
+    <p class="ks-state ks-on">💳 ENABLED — subscription purchases are live.</p>
+    <form method="post" action="/control/billing"
+          onsubmit="return confirm('DISABLE Play billing? New purchases and RTDN processing stop. Existing subscribers keep their tier until it expires.');">
+      <input type="hidden" name="enabled" value="false">
+      <button type="submit" class="btn btn-danger">Disable billing (stop new purchases)</button>
+    </form>
+  {% else %}
+    <p class="ks-state ks-off">✓ DISABLED — new purchases blocked.</p>
+    <form method="post" action="/control/billing"
+          onsubmit="return confirm('ENABLE Play billing? Subscription purchases will be verified and granted live.');">
+      <input type="hidden" name="enabled" value="true">
+      <button type="submit" class="btn btn-go">Enable billing (go live)</button>
+    </form>
+  {% endif %}
+  <p class="muted">Master switch for the two-tier auto-trade paywall (Assist /
+  Auto). Disabling stops NEW purchases and RTDN processing; it does not revoke
+  existing subscribers — their tier expires naturally at <code>paid_until</code>.
+  The paywall is trade automation only; signals and levels are always free.</p>
+</section>
+
+<section class="card">
   <h2>Engine tunables <span class="muted">(live — applied within 5s, no redeploy)</span></h2>
   <p class="muted">
     The 2026-07-07 exit overhaul ships ACTIVE with every knob controlled from

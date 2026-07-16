@@ -39,6 +39,7 @@ async def _render(request: Request):
     ks = await api.kill_switch_state()
     glob = await api.auto_trade_global_state()
     expiry = await api.signal_expiry_state()
+    billing = await api.billing_enabled_state()
     tunables = await api.tunables_state()
     flash = request.session.pop("_control_flash", None)
 
@@ -63,6 +64,7 @@ async def _render(request: Request):
             "ks": ks if isinstance(ks, dict) else {},
             "glob": glob if isinstance(glob, dict) else {},
             "expiry": expiry if isinstance(expiry, dict) else {},
+            "billing": billing if isinstance(billing, dict) else {},
             "tunable_groups": tunable_groups,
             "tunables_initialised": tunables_initialised,
             "audit": audit.tail(settings.audit_log_path, limit=25),
@@ -240,6 +242,38 @@ async def control_signal_expiry(request: Request, enabled: str = Form(...)):
     else:
         detail = result.get("error") if isinstance(result, dict) else result
         text = f"Signal-expiry flip failed: {detail}"
+    request.session["_control_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse("/control", status_code=303)
+
+
+@router.post("/control/billing")
+async def control_billing(request: Request, enabled: str = Form(...)):
+    """Turn the Google Play subscription paywall on/off engine-wide. Owner-gated
+    on the engine; disabling stops NEW purchases + RTDN processing (existing
+    subscribers keep their tier until it expires naturally)."""
+    api = request.app.state.engine_api
+    settings = request.app.state.settings
+    enable = enabled.strip().lower() in ("1", "true", "on", "yes", "enable")
+
+    result = await api.set_billing_enabled(enable)
+    ok = not _is_error(result)
+    audit.record(
+        settings.audit_log_path,
+        action="play_billing",
+        params={"enabled": enable},
+        result=result if isinstance(result, dict) else {},
+        ok=ok,
+    )
+    if ok:
+        text = (
+            "Play billing ENABLED — subscription purchases are live."
+            if enable
+            else "Play billing DISABLED — new purchases blocked (existing "
+            "subscribers keep their tier until it expires)."
+        )
+    else:
+        detail = result.get("error") if isinstance(result, dict) else result
+        text = f"Play-billing flip failed: {detail}"
     request.session["_control_flash"] = {"ok": ok, "text": text}
     return RedirectResponse("/control", status_code=303)
 

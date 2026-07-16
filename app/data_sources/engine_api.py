@@ -183,6 +183,19 @@ class EngineApiClient:
         """Enable/disable the signal-expiry backstop. Owner-gated on the engine."""
         return await self._post("/api/signal-expiry", {"enabled": enabled})
 
+    async def billing_enabled_state(self) -> Any:
+        """Google Play subscription paywall master switch ``{enabled,
+        configured, initialised}``.  When disabled the engine's verify + RTDN
+        endpoints 503; existing tiers are untouched (they expire naturally).
+        ``configured`` False = no package / service account, so billing 503s
+        regardless of ``enabled``."""
+        return await self._get("/api/billing/play/enabled")
+
+    async def set_billing_enabled(self, enabled: bool) -> Any:
+        """Turn the Play billing paywall on/off engine-wide. Owner-gated on the
+        engine."""
+        return await self._post("/api/billing/play/enabled", {"enabled": enabled})
+
     async def tunables_state(self) -> Any:
         """Runtime-tunables snapshot ``{initialised, tunables: [...]}`` — the
         owner-controlled engine parameters (noise-floor stops, BE ratchet
