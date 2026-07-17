@@ -35,13 +35,26 @@ jobs:
           cache: pip
 
       - name: Install deps
-        run: pip install -r requirements.txt -r requirements-dev.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt pytest-cov
 
       - name: Byte-compile (syntax check, whole app)
         run: python -m compileall -q app
 
+      # Coverage is measured and REPORTED, not gated (2026-07-17): the
+      # per-module table in the job summary keeps untested modules visible
+      # at review time without turning a coverage dip into a red build.
       - name: Run tests
         env:
           OPS_SESSION_SECRET: test-secret
           OPS_AUTH_TOKEN: test-token
-        run: pytest -q
+        run: pytest -q --cov=app --cov-report=term
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f .coverage ]; then
+            echo '## Test coverage' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            python -m coverage report --sort=cover --skip-covered >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
