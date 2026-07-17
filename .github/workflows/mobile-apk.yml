@@ -140,8 +140,33 @@ jobs:
         continue-on-error: true
         run: flutter analyze
 
+      # --coverage writes coverage/lcov.info; the summary step turns it into
+      # a per-file table in the job summary so untested screens stay visible.
+      # Reported, not gated (2026-07-17) — a dip never blocks the APK build.
       - name: Run unit tests
-        run: flutter test --reporter=expanded
+        run: flutter test --reporter=expanded --coverage
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f coverage/lcov.info ]; then
+            echo '## Test coverage (mobile)' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            awk -F'[:,]' '
+              /^SF:/ { file=$2 }
+              /^LF:/ { lf=$2 }
+              /^LH:/ { lh=$2 }
+              /^end_of_record/ {
+                total_lf+=lf; total_lh+=lh;
+                pct = (lf>0) ? 100*lh/lf : 0;
+                printf "%6.1f%%  %s\n", pct, file;
+              }
+              END {
+                if (total_lf>0) printf "%6.1f%%  TOTAL\n", 100*total_lh/total_lf;
+              }
+            ' coverage/lcov.info | sort -n >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Decode keystore (release signing, only if secret set)
         if: env.ANDROID_KEYSTORE_B64 != ''
