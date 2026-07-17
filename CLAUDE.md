@@ -4,7 +4,7 @@ Guidance for Claude Code sessions working in this repository.
 
 ## Companion repo
 
-This dashboard is a read-only consumer of `mkmk749278/360-v2` (the engine). Before working here, read in order:
+This dashboard is a consumer of — and the control plane for — `mkmk749278/360-v2` (the engine). Before working here, read in order:
 
 1. `OWNER_BRIEF.md` in 360-v2 — operating contract, role boundaries, business rules
 2. `ACTIVE_CONTEXT.md` in 360-v2 — current engine state, open queue
@@ -19,6 +19,12 @@ For every change, ask: **"how does this make signals more profitable for paid su
 ## Scope of this repo
 
 Diagnostic dashboard **and the engine control plane** (promoted 2026-06-20). Diagnostic-first, but no longer read-only: Telegram is banned in-region, so the owner's manual control of the engine (auto-mode flips, kill switch, and — over time — manual close / per-user settings) now lives here. Monitoring of signals/positions/PnL stays primarily in the Lumin app; **ops owns control**.
+
+Three deliverables live in this repo:
+
+- **The web dashboard + control plane** (`app/`) — FastAPI + HTMX, deployed at `ops.luminapp.org`.
+- **The 24/7 monitoring agent** (`app/agent/`) — a separate container (`python -m app.agent.runner`, 60s poll cycle) running the Tier-0 safety detectors (naked position, signing-service down, engine/Redis stale, …). Alert state is a Redis-backed dedup/escalation FSM (`alert:state:{fingerprint}`, in-memory fallback); it pages via FCM push (Telegram notifier retained in code) and pings a healthchecks.io heartbeat after each clean cycle. The web app's `/alerts` page reads the same Redis state.
+- **The native ops mobile app** (`mobile/`) — owner-only Flutter Android app over the ops `/api/v1` JSON surface (see `mobile/README.md` and `docs/OPS_MOBILE_APP_PLAN.md`). Its CI (`.github/workflows/mobile-apk.yml`) generates the Android scaffolding with `flutter create`, so `mobile/android/` is not committed.
 
 Control doctrine (non-negotiable for every write surface):
 - **Owner-gated end to end.** Writes call the engine's owner-gated endpoints; the dashboard's static Bearer token is owner-tier on the engine. Everything stays behind the auth gate (password + TOTP when enrolled).
@@ -38,6 +44,10 @@ Every change ships via PR. Fresh topic branch off `main`. Design-summary in the 
 | Engine `data/*.json` mounted at `/engine-data` (read-only) | `app/data_sources/data_volume.py` |
 | `monitor-logs` branch artifacts (TTL cached) | `app/data_sources/monitor_logs.py` |
 | `docker exec engine python /app/scripts/diag_*` | `app/data_sources/diag_runner.py` |
+| Monitoring agent's active-alert Redis state | `app/data_sources/agent_alerts.py` |
+| Binance Futures public 1m klines (no key, read-only) | `app/data_sources/binance_klines.py` |
+| "Held to stop" free-run replay (Profit tab) | `app/data_sources/free_run.py` |
+| Scaled-exit what-if simulator (Profit tab) | `app/data_sources/exit_sim.py` |
 
 ## Conventions
 
@@ -46,7 +56,10 @@ Every change ships via PR. Fresh topic branch off `main`. Design-summary in the 
 - HTMX partials are routes prefixed `/_partial/...` returning HTML fragments.
 - Templates extend `base.html`; `login.html` is the one exception (standalone).
 - Owner-only auth — password gate via `OPS_AUTH_TOKEN` + optional TOTP second factor via `OPS_TOTP_SECRET` (enroll with `python scripts/generate_totp_secret.py`; audit F-08).
-- Templates render unknown payload shapes via `tojson(indent=2)` rather than crashing on shape drift — the engine REST surface is the source of truth, this dashboard adapts to it.
+- Templates render unknown payload shapes via `tojson(indent=2)` rather than crashing on shape drift — the engine REST surface is the source of truth, this dashboard adapts to it. (The mobile app's screens follow the same rule: pull fields defensively, fall back to a raw-JSON card.)
+- The `/api/v1` JSON surface (for the native app) authenticates with **ops-issued app-tokens** (`app/app_tokens.py`, stored hashed; `revoke-all` is the lost-phone switch). The engine's owner-tier Bearer must **never** ship inside the APK.
+- Push alerts go through `app/fcm.py` (FCM HTTP v1 via `httpx` + `google-auth` — deliberately no `firebase-admin`) to tokens in `app/device_registry.py` (plain-file registry shared across the web and agent containers; read fresh, mutate under a lock). The whole push path is disabled-safe: no `FIREBASE_SERVICE_ACCOUNT`, no-op.
+- Agent detectors are pure functions — all inputs arrive as parameters, no hidden I/O — so their tests pass plain dicts without live network or Docker.
 
 ## Hard limits
 
@@ -64,6 +77,14 @@ OPS_SESSION_SECRET=dev OPS_AUTH_TOKEN=dev uvicorn app.main:app --reload
 # Tests
 pytest -q
 
-# Docker build + run
+# Docker build + run (web app + monitoring-agent + redis)
 docker compose up --build
+
+# Monitoring agent locally
+python -m app.agent.runner
+
+# Native ops app (mobile/)
+cd mobile && flutter pub get && flutter test
+flutter run                                                  # against ops.luminapp.org
+flutter run --dart-define=OPS_BASE_URL=http://10.0.2.2:8000  # against local ops
 ```
