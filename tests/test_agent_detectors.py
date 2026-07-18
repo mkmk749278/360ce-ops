@@ -88,6 +88,24 @@ class TestNakedPositionDetector:
                   "minutes_open": 2, "entry": 65000.0, "stop_loss": 0.0}]
         assert len(d.check(items)) == 1
 
+    def test_no_trigger_for_user_owned_stopless(self):
+        # Manual trade builder: a user_owned position may be intentionally
+        # stop-less (the user owns the exit). Must NOT page.
+        d = NakedPositionDetector(grace_sec=90)
+        items = [{"status": "ACTIVE", "symbol": "BTCUSDT", "signal_id": "s1",
+                  "minutes_open": 5, "entry": 65000.0, "stop_loss": 0.0,
+                  "protection_mode": "user_owned"}]
+        assert d.check(items) == []
+
+    def test_managed_stopless_still_triggers(self):
+        # A managed (auto-dispatched) position without a stop is still the
+        # naked-position invariant violation — must page.
+        d = NakedPositionDetector(grace_sec=90)
+        items = [{"status": "ACTIVE", "symbol": "BTCUSDT", "signal_id": "s1",
+                  "minutes_open": 5, "entry": 65000.0, "stop_loss": 0.0,
+                  "protection_mode": "managed"}]
+        assert len(d.check(items)) == 1
+
 
 # ---------------------------------------------------------------------------
 # D2 — BackgroundTaskDetector

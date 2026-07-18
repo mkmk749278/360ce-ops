@@ -59,6 +59,15 @@ class NakedPositionDetector:
             minutes_open: int = item.get("minutes_open") or 0
             if minutes_open * 60 <= self._grace:
                 continue
+            # Manual trade builder (2026-07-18): a ``user_owned`` position is a
+            # user-directed manual take and may be intentionally stop-less —
+            # the user owns the exit. The naked-position invariant applies only
+            # to engine-``managed`` (auto-dispatched) positions, so never page
+            # a user_owned one. ``protection_mode`` is published by the engine
+            # diag; absent (older engine) → treat as ``managed`` (current
+            # behaviour), so this is safe forward-compat.
+            if (item.get("protection_mode") or "managed") == "user_owned":
+                continue
             sl: float = item.get("stop_loss") or 0.0
             if sl > 0.0:
                 continue
