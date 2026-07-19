@@ -988,3 +988,31 @@ async def profit_export(
     data = [[r.get(col) for col in _EXPORT_COLS] for r in rows]
     window_tag = window if window != "range" else f"range_{date_from or 'open'}_{date_to or 'open'}"
     return csv_response(f"signal_profit_{window_tag}_{view}_{strategy}_{direction}", _EXPORT_COLS, data)
+
+
+@router.get("/profit/export.json")
+async def profit_export_json(
+    request: Request,
+    view: str = Query("all", pattern="^(all|active|closed)$"),
+    window: str = Query("live", pattern="^(live|24h|3d|7d|30d|all|range)$"),
+    date_from: str = Query("", max_length=10),
+    date_to: str = Query("", max_length=10),
+    strategy: str = Query("tp1"),
+    target_pct: float = Query(1.0),
+    fee_pct: float = Query(0.07),
+    direction: str = Query("all"),
+):
+    """Full (filtered) held-to-stop replay rows as JSON — every field per signal."""
+    from app.reports import json_response
+
+    target = _resolve_target_pct(target_pct)
+    fee = _resolve_fee_pct(fee_pct)
+    if strategy not in build_catalog(target):
+        strategy = "tp1"
+    if direction not in direction_filters():
+        direction = "all"
+    rows, _ = await _build_rows(
+        request, view, window, strategy, target, fee, direction, date_from, date_to,
+    )
+    window_tag = window if window != "range" else f"range_{date_from or 'open'}_{date_to or 'open'}"
+    return json_response(f"signal_profit_{window_tag}_{view}_{strategy}_{direction}", rows)

@@ -2,32 +2,146 @@
 {% block title %}Truth — 360 CE Ops{% endblock %}
 {% block content %}
 <h1>Runtime Truth Report</h1>
-<div class="actions">
-  <a href="/truth/raw.md" class="btn" target="_blank">Raw markdown</a>
-  <a href="/truth/raw.json" class="btn" target="_blank">Raw JSON</a>
+<p class="muted small">Engine self-diagnosis from the monitor-logs branch. The
+operator-critical sections are rendered below; everything else is one click away
+in its raw block. Counters are cumulative over the report's lookback window.</p>
+
+<div class="export-row">
+  <span class="lbl">Download:</span>
+  <a href="/truth/raw.json" class="btn" target="_blank">JSON</a>
+  <a href="/truth/raw.md" class="btn" target="_blank">Markdown</a>
 </div>
 
-{% if snapshot is mapping and snapshot.error %}
-  <section class="card"><div class="error">snapshot: {{ snapshot.error }}</div></section>
-{% elif snapshot is mapping %}
-  {% for section_key, section_value in snapshot.items() %}
-    <section class="card">
-      <h2>{{ section_key | replace("_", " ") | title }}</h2>
-      <pre class="mono small">{{ section_value | tojson(indent=2) }}</pre>
-    </section>
-  {% endfor %}
+{% if shaped.top_error %}
+  <section class="card"><div class="error">Truth snapshot unavailable: {{ shaped.top_error }}</div></section>
 {% else %}
+
+  {# ── Executive summary ── #}
+  {% if shaped.exec %}
   <section class="card">
-    <pre class="mono small">{{ snapshot | tojson(indent=2) }}</pre>
+    <h2>Executive summary</h2>
+    <div class="headline-cards">
+      <div class="hc">
+        <div class="k">Overall health</div>
+        <div class="v">
+          {% set h = shaped.exec.overall_health | default('?') | string %}
+          <span class="badge {% if h in ['healthy','ok'] %}badge-ok{% elif h in ['degraded','warn','warning'] %}badge-warn{% else %}badge-bad{% endif %}">{{ h }}</span>
+        </div>
+      </div>
+      {% if shaped.exec.recommended_next_investigation_target %}
+      <div class="hc">
+        <div class="k">Next investigation</div>
+        <div class="v" style="font-size:1.05rem">{{ shaped.exec.recommended_next_investigation_target }}</div>
+      </div>
+      {% endif %}
+    </div>
+    {% if shaped.exec.top_anomalies %}
+      <p><strong>Top anomalies:</strong>
+        {% for a in shaped.exec.top_anomalies %}<span class="badge badge-warn">{{ a }}</span> {% endfor %}
+      </p>
+    {% endif %}
+    {% if shaped.exec.top_promising_paths %}
+      <p><strong>Promising paths:</strong>
+        {% for a in shaped.exec.top_promising_paths %}<span class="badge badge-ok">{{ a }}</span> {% endfor %}
+      </p>
+    {% else %}
+      <p class="muted small">No promising paths flagged this window.</p>
+    {% endif %}
   </section>
+  {% endif %}
+
+  {# ── Feature liveness ── #}
+  {% if shaped.liveness %}
+  <section class="card">
+    <h2>Feature liveness
+      {% if shaped.liveness_bad %}<span class="badge badge-bad">{{ shaped.liveness_bad }} unhealthy</span>
+      {% else %}<span class="badge badge-ok">all green</span>{% endif %}
+    </h2>
+    <table class="data">
+      <thead><tr><th>Feature</th><th>Status</th><th>Detail</th><th>Streak</th></tr></thead>
+      <tbody>
+        {% for r in shaped.liveness %}
+        <tr>
+          <td class="mono">{{ r.name }}</td>
+          <td>
+            {% set s = r.status | lower %}
+            <span class="badge {% if s in ['ok','healthy'] %}badge-ok{% elif s in ['disabled','warmup'] %}badge-muted{% elif s in ['warn','warning','degraded'] %}badge-warn{% else %}badge-bad{% endif %}">{{ r.status }}</span>
+          </td>
+          <td class="small">{{ r.detail }}</td>
+          <td class="mono">{{ r.streak if r.streak is not none else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {# ── Confidence-gate decisions ── #}
+  {% if shaped.gate_rows %}
+  <section class="card">
+    <h2>Confidence-gate decisions</h2>
+    <p class="muted small">Per setup: how many post-scoring candidates cleared the
+      floor (kept) vs were filtered, and by which reason. Low pass % with a big
+      total = the floor is where that path's signals die.</p>
+    <table class="data sortable">
+      <thead><tr><th>Setup</th><th class="num">Total</th><th class="num">Kept</th><th class="num">Filtered</th><th class="num">Pass %</th><th>Filter reasons</th></tr></thead>
+      <tbody>
+        {% for r in shaped.gate_rows %}
+        <tr>
+          <td class="mono">{{ r.setup }}</td>
+          <td class="num">{{ r.total }}</td>
+          <td class="num pos">{{ r.kept }}</td>
+          <td class="num {% if r.filtered_total %}neg{% endif %}">{{ r.filtered_total }}</td>
+          <td class="num">
+            <span class="badge {% if r.pass_pct >= 50 %}badge-ok{% elif r.pass_pct >= 15 %}badge-warn{% else %}badge-bad{% endif %}">{{ '%.0f' % r.pass_pct }}%</span>
+          </td>
+          <td class="small">
+            {% for reason, n in r.filtered.items() %}<span class="muted">{{ reason }}</span>&nbsp;<strong>{{ n }}</strong>{% if not loop.last %} · {% endif %}{% endfor %}
+            {% if not r.filtered %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+
+  {# ── Runtime health / operator focus (compact) ── #}
+  {% if shaped.health %}
+  <details class="raw-section">
+    <summary>Runtime health</summary>
+    <pre class="mono small">{{ shaped.health | tojson(indent=2) }}</pre>
+  </details>
+  {% endif %}
+  {% if shaped.focus %}
+  <section class="card">
+    <h2>Recommended operator focus</h2>
+    <pre class="mono small">{{ shaped.focus | tojson(indent=2) }}</pre>
+  </section>
+  {% endif %}
+
+  {# ── Everything else: collapsed raw sections with an index ── #}
+  {% if shaped.raw_sections %}
+  <h2>All report sections</h2>
+  <div class="section-index">
+    {% for s in shaped.raw_sections %}<a href="#sec-{{ s.key }}">{{ s.title }}</a>{% endfor %}
+  </div>
+  {% for s in shaped.raw_sections %}
+  <details class="raw-section" id="sec-{{ s.key }}">
+    <summary>{{ s.title }}</summary>
+    <pre class="mono small">{{ s.value | tojson(indent=2) }}</pre>
+  </details>
+  {% endfor %}
+  {% endif %}
+
 {% endif %}
 
-<section class="card">
-  <h2>Window-over-window comparison</h2>
+<details class="raw-section">
+  <summary>Window-over-window comparison</summary>
   {% if comparison is mapping and comparison.error %}
-    <div class="error">{{ comparison.error }}</div>
+    <div class="error" style="padding:0.7rem">{{ comparison.error }}</div>
   {% else %}
     <pre class="mono small">{{ comparison | tojson(indent=2) }}</pre>
   {% endif %}
-</section>
+</details>
 {% endblock %}

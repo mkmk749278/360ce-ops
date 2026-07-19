@@ -3,6 +3,12 @@
 {% block content %}
 <h1>Strategy Lab <span class="muted">— every strategy measured per market context, real data</span></h1>
 
+<div class="export-row">
+  <span class="lbl">Download:</span>
+  <a class="btn" href="/strategy-lab/export.csv">Edge matrix CSV</a>
+  <a class="btn" href="/strategy-lab/export.json">Full view JSON</a>
+</div>
+
 <div hx-get="/_partial/strategy_lab" hx-trigger="every 60s" hx-swap="innerHTML">
   {% include "_strategy_lab_tables.html" %}
 </div>

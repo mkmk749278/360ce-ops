@@ -250,3 +250,13 @@ async def performance_export(request: Request, window: str = "all", view: str = 
         for r in table
     ]
     return csv_response(f"performance_{label}_{_window}", header, rows)
+
+
+@router.get("/performance/export.json")
+async def performance_export_json(request: Request, window: str = "all"):
+    """Full per-symbol/setup/regime/score-band aggregation as JSON (all breakdowns)."""
+    from app.reports import json_response
+
+    _window, days = _resolve_window(window)
+    agg = _aggregate(request.app.state.data_volume.signal_performance(), days)
+    return json_response(f"performance_{_window}", agg)

@@ -113,7 +113,7 @@ async def control_users_page(request: Request, phone: str = ""):
         "users.html",
         {
             "request": request,
-            "active": "control",
+            "active": "users",
             "phone": phone,
             "lookup": lookup,
             "not_found": not_found,

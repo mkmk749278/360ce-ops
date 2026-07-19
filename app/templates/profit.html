@@ -356,6 +356,7 @@
 
 <div class="actions">
   <a class="btn" href="/profit/export.csv?view={{ view }}&window={{ window }}&date_from={{ date_from }}&date_to={{ date_to }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}">Download CSV (all rows, current view)</a>
+  <a class="btn" href="/profit/export.json?view={{ view }}&window={{ window }}&date_from={{ date_from }}&date_to={{ date_to }}&strategy={{ strategy }}&target_pct={{ '%g'|format(target_pct) }}&fee_pct={{ '%g'|format(fee_pct) }}&direction={{ direction }}">Download JSON (all rows, current view)</a>
 </div>
 
 {% if aggregates.n %}

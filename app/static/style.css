@@ -273,3 +273,43 @@ table.tunables td { padding: 0.45rem 0.6rem; border-bottom: 1px solid var(--bord
 .data-table th.sortable::after { content: " ↕"; opacity: 0.35; font-size: 0.75em; }
 .data-table th.sort-asc::after  { content: " ▲"; opacity: 1; color: var(--accent); }
 .data-table th.sort-desc::after { content: " ▼"; opacity: 1; color: var(--accent); }
+
+/* Secondary sub-navigation (grouped IA, base.html) — the tabs within a group */
+.subnav {
+  display: flex;
+  gap: 1.1rem;
+  flex-wrap: wrap;
+  padding: 0.55rem 1rem;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.subnav a { color: var(--fg-dim); font-weight: 500; font-size: 0.92rem; }
+.subnav a.on { color: var(--fg); border-bottom: 2px solid var(--accent); padding-bottom: 2px; }
+@media (max-width: 720px) {
+  .subnav { overflow-x: auto; flex-wrap: nowrap; }
+  .subnav a { white-space: nowrap; }
+}
+
+/* Download control row (CSV + JSON on every data view) */
+.export-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin: 0.3rem 0 0.9rem; }
+.export-row .lbl { color: var(--fg-dim); font-size: 0.85rem; margin-right: 0.2rem; }
+
+/* Truth report — readable cards */
+.badge { display: inline-block; padding: 0.05rem 0.5rem; border-radius: 0.8rem; font-size: 0.78rem; font-weight: 600; }
+.badge-ok { background: rgba(63,185,80,0.18); color: var(--pos); }
+.badge-bad { background: rgba(248,81,73,0.18); color: var(--neg); }
+.badge-warn { background: rgba(210,153,34,0.20); color: var(--warn, #d29922); }
+.badge-muted { background: var(--bg-elev); color: var(--fg-dim); }
+details.raw-section { margin: 0.4rem 0; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev); }
+details.raw-section > summary { cursor: pointer; padding: 0.5rem 0.8rem; font-weight: 600; color: var(--fg-dim); }
+details.raw-section[open] > summary { color: var(--fg); border-bottom: 1px solid var(--border); }
+details.raw-section pre { margin: 0; padding: 0.7rem 0.9rem; }
+.section-index { display: flex; gap: 0.5rem 1rem; flex-wrap: wrap; margin: 0.5rem 0 1rem; font-size: 0.88rem; }
+.section-index a { color: var(--fg-dim); }
+.headline-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0.8rem; margin-bottom: 1rem; }
+.headline-cards .hc { background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem 1rem; }
+.headline-cards .hc .k { color: var(--fg-dim); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.03em; }
+.headline-cards .hc .v { font-size: 1.35rem; font-weight: 700; margin-top: 0.2rem; }
