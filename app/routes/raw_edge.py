@@ -303,3 +303,13 @@ async def raw_edge_export(request: Request, window: str = "all", view: str = "se
         for r in table
     ]
     return csv_response(f"raw_edge_{label}_{_window}", header, rows)
+
+
+@router.get("/raw-edge/export.json")
+async def raw_edge_export_json(request: Request, window: str = "all"):
+    """Full raw-edge (MFE / capture / exit-machinery) aggregation as JSON."""
+    from app.reports import json_response
+
+    _window, days = _resolve_window(window)
+    agg = _aggregate(request.app.state.data_volume.signal_performance(), days)
+    return json_response(f"raw_edge_{_window}", agg)

@@ -40,7 +40,7 @@ def test_data_page_lists_artifacts_with_counts(monkeypatch):
         _login(client)
         r = client.get("/data")
         assert r.status_code == 200
-        assert "Data downloads" in r.text
+        assert "Data" in r.text and "Analysis views" in r.text
         assert "signal_history.json" in r.text
         # record count surfaced for the loaded artifact
         assert ">2<" in r.text or "2" in r.text

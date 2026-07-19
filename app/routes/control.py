@@ -351,3 +351,48 @@ async def control_reset_signals(request: Request):
         text = f"Full reset failed: {detail}"
     request.session["_control_flash"] = {"ok": ok, "text": text}
     return RedirectResponse("/control", status_code=303)
+
+
+@router.post("/control/close-signal")
+async def control_close_signal(
+    request: Request,
+    signal_id: str = Form(...),
+    redirect_to: str = Form("/signals"),
+):
+    """Force-close ONE stuck OPEN signal (the "Close" button on the Signals
+    feed). Owner-gated + audited; PRG back to the referring page."""
+    api = request.app.state.engine_api
+    settings = request.app.state.settings
+    signal_id = (signal_id or "").strip()
+    # Only ever redirect to an in-app path (no open-redirect).
+    dest = redirect_to if redirect_to.startswith("/") else "/signals"
+
+    if not signal_id:
+        request.session["_control_flash"] = {"ok": False, "text": "No signal id supplied."}
+        return RedirectResponse(dest, status_code=303)
+
+    result = await api.close_signal(signal_id)
+    ok = not _is_error(result)
+    audit.record(
+        settings.audit_log_path,
+        action="close_signal",
+        params={"signal_id": signal_id},
+        result=result if isinstance(result, dict) else {},
+        ok=ok,
+    )
+    if ok and isinstance(result, dict):
+        if result.get("closed") is True:
+            pnl = result.get("pnl_pct")
+            pnl_s = f" at {pnl:+.2f}%" if isinstance(pnl, (int, float)) else ""
+            text = f"Closed {signal_id}{pnl_s}."
+        elif result.get("closed") is None:
+            text = f"Close queued for {signal_id} — refresh shortly to confirm."
+        else:
+            text = f"{signal_id} was already closed / not in the active book."
+    elif ok:
+        text = f"Close requested for {signal_id}."
+    else:
+        detail = result.get("error") if isinstance(result, dict) else result
+        text = f"Close failed for {signal_id}: {detail}"
+    request.session["_control_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse(dest, status_code=303)

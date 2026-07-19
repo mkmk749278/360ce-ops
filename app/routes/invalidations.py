@@ -171,3 +171,12 @@ async def invalidations_export(request: Request, view: str = "family"):
         for r in table
     ]
     return csv_response(f"invalidations_{label}", header, rows)
+
+
+@router.get("/invalidations/export.json")
+async def invalidations_export_json(request: Request):
+    """Full PROTECTIVE/PREMATURE/NEUTRAL classification aggregation as JSON."""
+    from app.reports import json_response
+
+    agg = _classify(request.app.state.data_volume.invalidation_records())
+    return json_response("invalidations", agg)

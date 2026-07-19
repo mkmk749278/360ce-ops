@@ -9,28 +9,55 @@
   <script src="/static/sort.js" defer></script>
 </head>
 <body>
+  {#- Grouped information architecture: 6 top-level groups, each with sub-tabs.
+      Every URL is unchanged (old bookmarks still work) — the "merge" is
+      presentational: overlapping views are grouped under one primary tab with a
+      secondary sub-nav.  `active` (set by each route) picks both the group and
+      the sub-tab. -#}
+  {%- set NAV = [
+      ('overview', 'Overview', [('/', 'Pulse', 'pulse')]),
+      ('signals', 'Signals', [
+          ('/signals', 'Feed', 'signals'),
+          ('/positions', 'Positions', 'positions'),
+          ('/pairs', 'Pairs', 'pairs')]),
+      ('performance', 'Performance', [
+          ('/profit', 'Held-to-stop', 'profit'),
+          ('/performance', 'Rolling stats', 'performance'),
+          ('/raw-edge', 'Entry edge', 'raw_edge'),
+          ('/invalidations', 'Invalidations', 'invalidations')]),
+      ('autonomy', 'Autonomy', [('/strategy-lab', 'Strategy Lab', 'strategy_lab')]),
+      ('control', 'Control', [
+          ('/control', 'Engine', 'control'),
+          ('/control/users', 'Users', 'users')]),
+      ('diagnostics', 'Diagnostics', [
+          ('/truth', 'Truth report', 'truth'),
+          ('/alerts', 'Alerts', 'alerts'),
+          ('/diag/geometry', 'Diag runner', 'diag'),
+          ('/audit', 'Audit board', 'audit'),
+          ('/data', 'Data & export', 'data')]),
+  ] %}
+  {%- set ns = namespace(group=None, subs=[]) %}
+  {%- for gkey, glabel, subs in NAV %}
+    {%- for surl, slabel, stok in subs %}
+      {%- if stok == active %}{% set ns.group = gkey %}{% set ns.subs = subs %}{% endif %}
+    {%- endfor %}
+  {%- endfor %}
   <header>
     <div class="logo"><a href="/">360 CE Ops</a></div>
     <nav>
-      <a href="/" class="{% if active=='pulse' %}on{% endif %}">Pulse</a>
-      <a href="/truth" class="{% if active=='truth' %}on{% endif %}">Truth</a>
-      <a href="/signals" class="{% if active=='signals' %}on{% endif %}">Signals</a>
-      <a href="/pairs" class="{% if active=='pairs' %}on{% endif %}">Pairs</a>
-      <a href="/profit" class="{% if active=='profit' %}on{% endif %}">Profit</a>
-      <a href="/positions" class="{% if active=='positions' %}on{% endif %}">Positions</a>
-      <a href="/control" class="{% if active=='control' %}on{% endif %}">Control</a>
-      <a href="/control/users" class="{% if active=='control' %}on{% endif %}">Users</a>
-      <a href="/alerts" class="{% if active=='alerts' %}on{% endif %}">Alerts</a>
-      <a href="/diag/geometry" class="{% if active=='diag' %}on{% endif %}">Diag</a>
-      <a href="/invalidations" class="{% if active=='invalidations' %}on{% endif %}">Invalidations</a>
-      <a href="/performance" class="{% if active=='performance' %}on{% endif %}">Performance</a>
-      <a href="/raw-edge" class="{% if active=='raw_edge' %}on{% endif %}">Raw Edge</a>
-      <a href="/strategy-lab" class="{% if active=='strategy_lab' %}on{% endif %}">Strategy Lab</a>
-      <a href="/data" class="{% if active=='data' %}on{% endif %}">Data</a>
-      <a href="/audit" class="{% if active=='audit' %}on{% endif %}">Audit</a>
+      {%- for gkey, glabel, subs in NAV %}
+        <a href="{{ subs[0][0] }}" class="{% if ns.group==gkey %}on{% endif %}">{{ glabel }}</a>
+      {%- endfor %}
     </nav>
     <div class="user"><a href="/logout">Logout</a></div>
   </header>
+  {%- if ns.subs and ns.subs|length > 1 %}
+  <div class="subnav">
+    {%- for surl, slabel, stok in ns.subs %}
+      <a href="{{ surl }}" class="{% if stok==active %}on{% endif %}">{{ slabel }}</a>
+    {%- endfor %}
+  </div>
+  {%- endif %}
   <main>
     {% block content %}{% endblock %}
   </main>

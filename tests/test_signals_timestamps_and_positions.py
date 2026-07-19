@@ -275,9 +275,12 @@ def test_positions_route_renders_empty_state(monkeypatch):
 
 
 def test_positions_link_in_nav():
-    """Adding the route also means the nav link must be reachable."""
+    """Adding the route also means the nav link must be reachable.
+
+    Grouped IA (2026-07-19): Positions is a sub-tab under the Signals group, so
+    its link renders in the secondary nav on any page in that group.
+    """
     with TestClient(app) as client:
         _login(client)
-        r = client.get("/")
-        # Nav appears on every authenticated page
+        r = client.get("/signals")
         assert 'href="/positions"' in r.text

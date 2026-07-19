@@ -392,3 +392,27 @@ async def strategy_lab_partial(request: Request):
     ctx = _build_view(request.app.state.data_volume)
     ctx.update({"request": request})
     return templates.TemplateResponse("_strategy_lab_tables.html", ctx)
+
+
+_MATRIX_COLS = [
+    "strategy", "context_key", "n", "n_emitted", "n_suppressed", "n_shadow",
+    "win_rate", "avg_r", "avg_pnl_pct", "edge_r", "verdict", "aligned",
+]
+
+
+@router.get("/strategy-lab/export.csv")
+async def strategy_lab_export_csv(request: Request):
+    """The Strategy×Context edge matrix as a flat CSV — one row per cell."""
+    from app.reports import csv_response
+
+    rows = _build_view(request.app.state.data_volume).get("matrix_rows", [])
+    data = [[r.get(c) for c in _MATRIX_COLS] for r in rows]
+    return csv_response("strategy_lab_matrix", _MATRIX_COLS, data)
+
+
+@router.get("/strategy-lab/export.json")
+async def strategy_lab_export_json(request: Request):
+    """The full Strategy Lab view (matrix + per-strategy + gates + allocator) as JSON."""
+    from app.reports import json_response
+
+    return json_response("strategy_lab", _build_view(request.app.state.data_volume))

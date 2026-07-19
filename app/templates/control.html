@@ -14,6 +14,31 @@
 </div>
 {% endif %}
 
+{# ── At-a-glance status strip ── #}
+<div class="ctl-summary">
+  <div class="ctl-stat">
+    <div class="k">Kill switch</div>
+    <div class="v">{% if ks.get('engaged') %}<span class="badge badge-bad">Engaged</span>{% else %}<span class="badge badge-ok">Clear</span>{% endif %}</div>
+  </div>
+  <div class="ctl-stat">
+    <div class="k">Auto-execution</div>
+    <div class="v"><span class="badge {% if auto.get('mode')=='live' %}badge-bad{% elif auto.get('mode')=='paper' %}badge-warn{% else %}badge-muted{% endif %}">{{ (auto.get('mode') or 'unknown')|upper }}</span></div>
+  </div>
+  <div class="ctl-stat">
+    <div class="k">Global auto-trade</div>
+    <div class="v">{% if glob.get('enabled') %}<span class="badge badge-ok">Enabled</span>{% else %}<span class="badge badge-muted">Disabled</span>{% endif %}</div>
+  </div>
+  <div class="ctl-stat">
+    <div class="k">Signal expiry</div>
+    <div class="v">{% if expiry.get('enabled') %}<span class="badge badge-warn">On</span>{% else %}<span class="badge badge-muted">Off</span>{% endif %}</div>
+  </div>
+  <div class="ctl-stat">
+    <div class="k">Play billing</div>
+    <div class="v">{% if billing.get('configured') is false %}<span class="badge badge-muted">N/A</span>{% elif billing.get('enabled') %}<span class="badge badge-ok">Live</span>{% else %}<span class="badge badge-muted">Off</span>{% endif %}</div>
+  </div>
+</div>
+
+<div class="ctl-grid">
 <section class="card">
   <h2>Global kill switch</h2>
   {% if ks.get('initialised') is false %}
@@ -120,6 +145,7 @@
   existing subscribers — their tier expires naturally at <code>paid_until</code>.
   The paywall is trade automation only; signals and levels are always free.</p>
 </section>
+</div><!-- /.ctl-grid -->
 
 <section class="card">
   <h2>Engine tunables <span class="muted">(live — applied within 5s, no redeploy)</span></h2>

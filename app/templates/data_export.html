@@ -1,14 +1,57 @@
 {% extends "base.html" %}
 {% block title %}Data · 360 CE Ops{% endblock %}
 {% block content %}
-<h1>Data downloads</h1>
+<h1>Data &amp; export</h1>
 <p class="muted">
-  Raw engine <code>/engine-data</code> artifacts. Read-only. Curated exports
-  first (re-serialized, parse-checked); below them every file on the volume
-  for direct download — no SSH needed.
+  One place to pull any analysis surface. <strong>Analysis views</strong> give
+  the reduced tables each tab shows (CSV for spreadsheets, JSON full-fidelity
+  for parsing); <strong>curated engine artifacts</strong> and the <strong>raw
+  volume</strong> below give the underlying <code>/engine-data</code> JSON.
 </p>
 
-<h2>Curated exports</h2>
+<h2>Analysis views <span class="muted">— the same data each tab renders, downloadable</span></h2>
+<table class="data-table">
+  <thead><tr><th>View</th><th>What it is</th><th>Download</th></tr></thead>
+  <tbody>
+    <tr>
+      <td><strong>Strategy Lab</strong></td>
+      <td class="muted">Strategy×Context edge matrix, per-strategy rollup, gate audit, allocator.</td>
+      <td><a class="btn" href="/strategy-lab/export.csv">Matrix CSV</a> <a class="btn" href="/strategy-lab/export.json">Full JSON</a></td>
+    </tr>
+    <tr>
+      <td><strong>Profit (held-to-stop)</strong></td>
+      <td class="muted">Every signal replayed exit-only-at-stop: max profit, give-back, capture.</td>
+      <td><a class="btn" href="/profit/export.csv">CSV</a> <a class="btn" href="/profit/export.json">JSON</a></td>
+    </tr>
+    <tr>
+      <td><strong>Performance</strong></td>
+      <td class="muted">Realized rolling stats by symbol / setup / regime / score-band.</td>
+      <td><a class="btn" href="/performance/export.csv?view=setup">CSV</a> <a class="btn" href="/performance/export.json">JSON</a></td>
+    </tr>
+    <tr>
+      <td><strong>Entry edge (raw)</strong></td>
+      <td class="muted">MFE / capture / exit-machinery effect, entry edge isolated.</td>
+      <td><a class="btn" href="/raw-edge/export.csv?view=setup">CSV</a> <a class="btn" href="/raw-edge/export.json">JSON</a></td>
+    </tr>
+    <tr>
+      <td><strong>Invalidations</strong></td>
+      <td class="muted">PROTECTIVE / PREMATURE / NEUTRAL kill classification by path.</td>
+      <td><a class="btn" href="/invalidations/export.csv?view=family">CSV</a> <a class="btn" href="/invalidations/export.json">JSON</a></td>
+    </tr>
+    <tr>
+      <td><strong>Signals</strong></td>
+      <td class="muted">The live signal feed (filterable), one row per signal.</td>
+      <td><a class="btn" href="/signals/export.csv">CSV</a></td>
+    </tr>
+    <tr>
+      <td><strong>Truth report</strong></td>
+      <td class="muted">Full engine self-diagnosis snapshot.</td>
+      <td><a class="btn" href="/truth/raw.json" target="_blank">JSON</a> <a class="btn" href="/truth/raw.md" target="_blank">Markdown</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2 style="margin-top:1.4rem">Curated engine artifacts</h2>
 <table class="data-table">
   <thead>
     <tr><th>Artifact</th><th>Records</th><th>Notes</th><th></th></tr>
