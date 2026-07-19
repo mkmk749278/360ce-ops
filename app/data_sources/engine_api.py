@@ -213,6 +213,14 @@ class EngineApiClient:
         and paper broker state for all users.  Owner-gated on the engine."""
         return await self._post("/api/admin/reset-signals", {})
 
+    async def close_signal(self, signal_id: str) -> Any:
+        """Force-close ONE stuck OPEN signal via the engine's expiry-close path.
+        Owner-gated on the engine; idempotent (a signal already gone is not an
+        error)."""
+        return await self._post(
+            "/api/admin/close-signal", {"signal_id": signal_id}
+        )
+
     async def user_lookup(self, phone: str) -> Any:
         """Look up a user's current tier/paid_until/display_name by phone —
         what the ops UI shows before the owner decides whether/what to

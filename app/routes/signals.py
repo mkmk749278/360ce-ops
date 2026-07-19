@@ -241,6 +241,7 @@ async def signals(
             "statuses": statuses,
             "filter_status": status,
             "filter_setup": setup_class,
+            "flash": request.session.pop("_control_flash", None),
             "active": "signals",
         },
     )

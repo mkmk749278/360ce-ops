@@ -2,6 +2,9 @@
 {% block title %}Signals — 360 CE Ops{% endblock %}
 {% block content %}
 <h1>Signals</h1>
+{% if flash %}
+<div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">{{ flash.text }}</div>
+{% endif %}
 <form method="get" action="/signals" class="filters">
   <label>Status
     <select name="status">
@@ -35,7 +38,7 @@
       <th>Status</th>
       <th>Regime</th>
       <th>PnL %</th>
-      <th></th>
+      <th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -49,7 +52,17 @@
       <td data-sort="{{ r.status }}"><span class="badge {{ r.status_class }}">{{ r.status or "—" }}</span></td>
       <td>{{ r.regime }}</td>
       <td class="{% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">{{ r.pnl_pct if r.pnl_pct is not none else "—" }}</td>
-      <td><a href="/signals/{{ r.id }}">→</a></td>
+      <td style="white-space:nowrap">
+        <a class="btn btn-sm" href="/signals/{{ r.id }}">Details</a>
+        {% if r.status == 'ACTIVE' %}
+        <form method="post" action="/control/close-signal" style="display:inline;margin-left:0.3rem"
+              onsubmit="return confirm('Force-close {{ r.symbol }} ({{ r.id }})? It closes at the current mark and drops from the active book.');">
+          <input type="hidden" name="signal_id" value="{{ r.id }}">
+          <input type="hidden" name="redirect_to" value="/signals">
+          <button type="submit" class="btn btn-sm btn-danger">Close</button>
+        </form>
+        {% endif %}
+      </td>
     </tr>
   {% endfor %}
   </tbody>
