@@ -258,3 +258,90 @@ def test_profit_reuses_row_builder(monkeypatch):
         assert r.status_code == 200
         body = r.json()
         assert body['count'] == 0 and 'summary' in body and 'breakdown' in body
+
+
+# ---- analysis-bundle (the mediator surface) -----------------------------
+
+
+def test_analysis_bundle_requires_token():
+    with TestClient(app) as client:
+        r = client.get('/api/v1/analysis-bundle', follow_redirects=False)
+        assert r.status_code == 401
+
+
+def test_analysis_bundle_composes_all_sections(monkeypatch):
+    """With a token the bundle returns every section. Profit is stubbed to the
+    empty row builder; every other source runs against the (empty) test data
+    volume and must still populate its key rather than 500 the request."""
+    import app.routes.profit as p
+
+    async def fake_rows(*a, **k):
+        return ([], None)
+
+    monkeypatch.setattr(p, '_build_rows', fake_rows)
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.get('/api/v1/analysis-bundle', headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        for key in ('generated_at', 'params', 'note', 'strategy_lab', 'profit',
+                    'performance', 'invalidations', 'tunables', 'truth', 'alerts'):
+            assert key in body, key
+        assert body['profit']['count'] == 0
+        assert set(body['truth'].keys()) == {'snapshot', 'window'}
+        assert body['params']['window'] == 'all'
+
+
+def test_analysis_bundle_section_isolation(monkeypatch):
+    """A source that raises degrades to an {"error": …} marker for its section
+    only — the rest of the bundle is unaffected and the call is still 200."""
+    import app.routes.profit as p
+    from app.data_sources.engine_api import EngineApiClient
+
+    async def fake_rows(*a, **k):
+        return ([], None)
+
+    async def boom(self, *a, **k):
+        raise RuntimeError("tunables source down")
+
+    monkeypatch.setattr(p, '_build_rows', fake_rows)
+    monkeypatch.setattr(EngineApiClient, 'tunables_state', boom)
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.get('/api/v1/analysis-bundle', headers={'Authorization': f'Bearer {tok}'})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert isinstance(body['tunables'], dict)
+        assert 'tunables source down' in body['tunables'].get('error', '')
+        # a sibling section is unaffected
+        assert body['profit']['count'] == 0
+
+
+def test_analysis_bundle_row_cap_is_bounded(monkeypatch):
+    """The profit row list is capped so a large data volume can't blow up the
+    payload, even when the caller asks for more."""
+    import app.routes.profit as p
+
+    async def many_rows(*a, **k):
+        return ([{"i": i} for i in range(5000)], None)
+
+    monkeypatch.setattr(p, '_build_rows', many_rows)
+    # Isolate the row-cap logic from the summary reducers (which expect the
+    # full row shape the real builder produces, not our minimal stubs).
+    monkeypatch.setattr(p, '_summary', lambda rows: {})
+    monkeypatch.setattr(p, '_aggregates', lambda rows: {})
+    monkeypatch.setattr(p, '_strategy_summary', lambda rows, fee: {})
+    monkeypatch.setattr(p, '_breakdown_scoreband', lambda rows, fee: [])
+    monkeypatch.setattr(p, '_breakdown_path', lambda rows, fee: [])
+    monkeypatch.setattr(p, '_breakdown_regime', lambda rows, fee: [])
+    with TestClient(app) as client:
+        tok = _login(client)
+        r = client.get(
+            '/api/v1/analysis-bundle?limit=999999',
+            headers={'Authorization': f'Bearer {tok}'},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body['profit']['count'] == 5000  # true total preserved
+        assert len(body['profit']['rows']) == 1000  # but rows capped at 1000
+        assert body['params']['row_cap'] == 1000

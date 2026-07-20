@@ -20,6 +20,7 @@ re-reads ``/control/state`` after every write.
 from __future__ import annotations
 
 import hmac
+import time
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -342,3 +343,117 @@ async def invalidations(request: Request) -> Any:
 @router.get("/performance", dependencies=[Depends(require_app_token)])
 async def performance(request: Request) -> Any:
     return request.app.state.data_volume.signal_performance()
+
+
+# ---------------------------------------------------------------------------
+# analysis-bundle — the "mediator" surface: one call returns everything a
+# signal-analysis session needs (owner ask, 2026-07-20). It is the live/on-demand
+# sibling of the engine's secretless monitor-logs dead-drop: the git drop covers
+# the strategy matrix / performance / suppression verdicts without a token, and
+# this endpoint adds what only ops can compute — the profit held-to-stop
+# exit-replay — plus live tunables, in a single token-gated pull.
+#
+# Every section is isolated: a failing data source yields {"error": …} for that
+# key instead of 500-ing the whole bundle, matching the dashboard's
+# adapt-to-shape-drift convention. Bounded by construction (row/record caps) so
+# the payload can't blow up on a large data volume.
+# ---------------------------------------------------------------------------
+async def _section(factory: Callable[[], Any]) -> Any:
+    """Call ``factory`` (sync or async), awaiting if needed, and convert any
+    failure into an ``{"error": …}`` marker so one broken source can't sink the
+    whole bundle. Takes a callable (not a value) so a synchronous source that
+    raises is caught here rather than at the call site."""
+    import inspect
+
+    try:
+        result = factory()
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+    except Exception as exc:  # noqa: BLE001 — deliberately fail-soft per section
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@router.get("/analysis-bundle", dependencies=[Depends(require_app_token)])
+async def analysis_bundle(
+    request: Request,
+    window: str = "all",
+    profit_strategy: str = "tp1",
+    target_pct: float = 1.0,
+    fee_pct: float = 0.07,
+    direction: str = "all",
+    profit_view: str = "all",
+    limit: int = 200,
+    invalidation_limit: int = 200,
+) -> dict[str, Any]:
+    from app.routes import performance as perf_mod
+    from app.routes import profit as profit_mod
+    from app.routes import strategy_lab as lab_mod
+
+    state = request.app.state
+    vol = state.data_volume
+    api = state.engine_api
+    logs = state.monitor_logs
+    row_cap = max(1, min(limit, 1000))
+
+    async def _profit() -> Any:
+        target = profit_mod._resolve_target_pct(target_pct)
+        fee = profit_mod._resolve_fee_pct(fee_pct)
+        rows, error = await profit_mod._build_rows(
+            request, profit_view, window, profit_strategy, target, fee, direction, "", ""
+        )
+        return {
+            "summary": profit_mod._summary(rows),
+            "aggregates": profit_mod._aggregates(rows),
+            "strategy_summary": profit_mod._strategy_summary(rows, fee),
+            "breakdown": {
+                "scoreband": profit_mod._breakdown_scoreband(rows, fee),
+                "path": profit_mod._breakdown_path(rows, fee),
+                "regime": profit_mod._breakdown_regime(rows, fee),
+            },
+            "rows": rows[:row_cap],
+            "count": len(rows),
+            "target_pct": target,
+            "fee_pct": fee,
+            "error": error,
+        }
+
+    def _performance() -> Any:
+        _norm, days = perf_mod._resolve_window(window)
+        return perf_mod._aggregate(vol.signal_performance(), days)
+
+    def _invalidations() -> Any:
+        records = vol.invalidation_records()
+        if isinstance(records, list):
+            return {"count": len(records), "records": records[: max(1, invalidation_limit)]}
+        return records
+
+    bundle = {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "params": {
+            "window": window,
+            "profit_strategy": profit_strategy,
+            "target_pct": target_pct,
+            "fee_pct": fee_pct,
+            "direction": direction,
+            "profit_view": profit_view,
+            "row_cap": row_cap,
+        },
+        "note": (
+            "Live/on-demand analysis bundle. The strategy_lab / performance / "
+            "suppression data is also published secretless on the engine's "
+            "monitor-logs branch (analysis/); profit exit-replay + live tunables "
+            "are ops-only and live here."
+        ),
+        "strategy_lab": await _section(lambda: lab_mod._build_view(vol)),
+        "profit": await _section(_profit),
+        "performance": await _section(_performance),
+        "invalidations": await _section(_invalidations),
+        "tunables": await _section(api.tunables_state),
+        "truth": {
+            "snapshot": await _section(logs.truth_snapshot),
+            "window": await _section(logs.window_comparison),
+        },
+        "alerts": await _section(state.agent_alerts.active_alerts),
+    }
+    return bundle
