@@ -221,6 +221,22 @@ class EngineApiClient:
             "/api/admin/close-signal", {"signal_id": signal_id}
         )
 
+    async def referral_commissions(self, status: str | None = None) -> Any:
+        """Referral commission ledger (Phase 2, 2026-07-21) — the rows the
+        owner pays out manually.  Owner-gated on the engine."""
+        params: dict[str, Any] = {}
+        if status:
+            params["status"] = status
+        return await self._get("/api/referral/admin/commissions", **params)
+
+    async def mark_referral_commissions_paid(self, commission_ids: list[int]) -> Any:
+        """Flip settled commission rows accrued → paid after a manual
+        payout.  Owner-gated on the engine."""
+        return await self._post(
+            "/api/referral/admin/commissions/mark-paid",
+            {"commission_ids": commission_ids},
+        )
+
     async def user_lookup(self, phone: str) -> Any:
         """Look up a user's current tier/paid_until/display_name by phone —
         what the ops UI shows before the owner decides whether/what to

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Referrals · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Referral commissions</h1>
+<p class="muted">
+  50% of each verified paid billing period of a referred user (first 3
+  periods) accrues to the referrer. Payouts are manual: pay the referrer
+  directly (their phone is the payout identity), tick the settled rows,
+  and mark them paid — audited, engine is the ledger of record.
+</p>
+
+{% if flash %}
+<div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
+  {{ flash.text }}
+</div>
+{% endif %}
+
+{% if error %}
+<section class="card">
+  <p class="muted">Engine read failed: {{ error }}</p>
+</section>
+{% else %}
+
+<section class="card">
+  <h2>Totals</h2>
+  {% if totals %}
+  <table>
+    <thead>
+      <tr><th>Currency</th><th>Awaiting payout</th><th>Paid out</th></tr>
+    </thead>
+    <tbody>
+      {% for t in totals %}
+      <tr>
+        <td>{{ t.currency }}</td>
+        <td><strong>{{ '%.2f'|format(t.accrued) }}</strong></td>
+        <td>{{ '%.2f'|format(t.paid) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No commissions yet.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Ledger</h2>
+  <p>
+    {% for tok, label in [('', 'All'), ('accrued', 'Awaiting payout'), ('paid', 'Paid')] %}
+    <a href="/control/referrals{% if tok %}?status={{ tok }}{% endif %}"
+       class="btn btn-plain {% if status == tok %}on{% endif %}">{{ label }}</a>
+    {% endfor %}
+  </p>
+  {% if items %}
+  <form method="post" action="/control/referrals/mark-paid"
+        onsubmit="return confirm('Mark the selected commission rows as PAID? Only do this after the payout has actually been sent.');">
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          <th>id</th>
+          <th>Referrer</th>
+          <th>Referee</th>
+          <th>Product</th>
+          <th>Amount</th>
+          <th>Status</th>
+          <th>Accrued at</th>
+          <th>Paid at</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in items %}
+        <tr>
+          <td>
+            {% if row.status == 'accrued' %}
+            <input type="checkbox" name="commission_ids" value="{{ row.commission_id }}">
+            {% endif %}
+          </td>
+          <td>{{ row.commission_id }}</td>
+          <td>
+            {{ row.referrer_phone or ('user ' ~ row.referrer_id) }}
+            <span class="muted">(#{{ row.referrer_id }})</span>
+          </td>
+          <td>user {{ row.referee_id }}</td>
+          <td>{{ row.product_id }}</td>
+          <td><strong>{{ '%.2f'|format(row.amount) }} {{ row.currency }}</strong></td>
+          <td>{{ row.status|upper }}</td>
+          <td class="muted">{{ row.created_at }}</td>
+          <td class="muted">{{ row.paid_at or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p><button type="submit" class="btn">Mark selected as paid</button></p>
+  </form>
+  {% else %}
+  <p class="muted">No rows{% if status %} with status {{ status }}{% endif %}.</p>
+  {% endif %}
+</section>
+
+{% endif %}
+{% endblock %}

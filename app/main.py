@@ -44,6 +44,7 @@ from app.routes import (
     profit,
     pulse,
     raw_edge,
+    referrals,
     signal_detail,
     signals,
     strategy_lab,
@@ -112,6 +113,7 @@ app.include_router(positions.router)
 app.include_router(profit.router)
 app.include_router(control.router)
 app.include_router(users.router)
+app.include_router(referrals.router)
 app.include_router(alerts.router)
 app.include_router(data_export.router)
 app.include_router(audit_status.router)
