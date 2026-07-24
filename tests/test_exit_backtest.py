@@ -225,6 +225,24 @@ def test_run_triggers_and_redirects():
         fake.start.assert_called_once()
 
 
+def test_htmx_run_returns_status_inline():
+    """HTMX submit returns the status partial from the same request — instant
+    inline confirmation, no redirect dependency."""
+    with TestClient(app) as client:
+        _login(client)
+        fake = MagicMock()
+        fake.start.return_value = (True, "started")
+        fake.snapshot.return_value = _idle_running()
+        app.state.exit_backtest = fake
+        r = client.post("/exit-backtest/run",
+                        data={"months": 6, "entry_tf": "5m", "exit_tf": "15m"},
+                        headers={"HX-Request": "true"})
+        assert r.status_code == 200
+        assert "RUNNING" in r.text          # status swapped in from the POST itself
+        assert "started" in r.text          # flash confirmation
+        fake.start.assert_called_once()
+
+
 def test_status_partial_shows_done_with_downloads():
     with TestClient(app) as client:
         _login(client)

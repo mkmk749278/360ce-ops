@@ -77,9 +77,19 @@ async def exit_backtest_run(
         max_forward_bars=max_forward_bars,
     )
     ok, msg = runner.start(params)
-    # PRG: a refresh lands on GET, never re-fires the run. Carry the outcome so
-    # the page always says what happened (started / already running / disabled /
-    # state-write failure) instead of looking like nothing happened.
+    # HTMX submit: return the status partial straight from THIS request, so the
+    # confirmation (RUNNING / already-running / failure) is shown inline
+    # immediately — no dependency on a full-page redirect completing, which is
+    # the failure mode where clicking Run "did nothing" on some mobile browsers.
+    if request.headers.get("HX-Request"):
+        templates = request.app.state.templates
+        return templates.TemplateResponse(
+            "_exit_backtest_status.html",
+            {"request": request, "state": runner.snapshot(),
+             "flash": msg, "flash_ok": ok},
+            headers={"Cache-Control": "no-store"},
+        )
+    # Non-JS fallback — PRG: a refresh lands on GET, never re-fires the run.
     q = urlencode({"flash": msg, "ok": "1" if ok else "0"})
     return RedirectResponse(f"/exit-backtest?{q}", status_code=303)
 
