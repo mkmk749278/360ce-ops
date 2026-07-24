@@ -1,0 +1,33 @@
+{# Self-terminating HTMX poll: re-fetches every 3s while running, stops otherwise. #}
+<div{% if state.running %} hx-get="/_partial/exit-backtest/status" hx-trigger="load delay:3s" hx-swap="outerHTML"{% endif %}>
+  {% if state.status == 'idle' %}
+    <p class="muted">No run yet — configure above and hit <b>Run backtest</b>.</p>
+  {% elif state.running %}
+    <section class="card">
+      <h2>⏳ Running… <span class="muted">{{ state.elapsed_sec() }}s elapsed</span></h2>
+      {% if state.params %}
+      <p class="muted">{{ '%g'|format(state.params.months) }}mo · entry
+        {{ state.params.entry_tf }} / exit {{ state.params.exit_tf }}{% if state.params.pairs %}
+        · {{ state.params.pairs }}{% else %} · fixed universe{% endif %}</p>
+      {% endif %}
+    </section>
+  {% elif state.status == 'error' %}
+    <section class="card">
+      <h2>Failed <span class="muted">rc={{ state.returncode }}</span></h2>
+      <pre class="mono small error">{{ state.error }}</pre>
+      {% if state.stderr %}<pre class="mono small error">{{ state.stderr }}</pre>{% endif %}
+    </section>
+  {% elif state.status == 'done' %}
+    <section class="card">
+      <h2>Done
+        <span class="muted">{{ state.n_signals }} signals · {{ state.elapsed_sec() }}s</span>
+      </h2>
+      <p>
+        <a href="/exit-backtest/download.csv">⬇ signals.csv</a>
+        &nbsp;·&nbsp;
+        <a href="/exit-backtest/download.md">⬇ summary.md</a>
+      </p>
+      {% if state.summary_md %}<pre class="mono small">{{ state.summary_md }}</pre>{% endif %}
+    </section>
+  {% endif %}
+</div>

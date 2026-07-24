@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Exit backtest — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Exit-method backtest</h1>
+<p class="muted">
+  Large-sample bake-off: generate historical entries from the price-action
+  strategies over a fixed universe and replay four exits
+  (engine-baseline / ATR / SuperTrend / Parabolic SAR) on each. Answers whether
+  <b>SAR-15m</b>'s 7-day edge (PF 1.51, but carried by one trade) survives on
+  thousands of trades — via per-regime PF, drop-top-N outlier robustness, and
+  median vs mean. Runs
+  <code>docker exec engine python /app/scripts/exit_method_backtest.py</code>
+  as a background job.
+</p>
+
+{% if not runner.enabled %}
+  <section class="card"><p class="error">Exit backtest is disabled
+    (<code>EXIT_BACKTEST_ENABLED=false</code>).</p></section>
+{% else %}
+<form method="post" action="/exit-backtest/run" class="filters">
+  <label>Months
+    <input type="number" name="months" min="0.1" max="24" step="0.1" value="6">
+  </label>
+  <label>Entry TF
+    <select name="entry_tf">
+      {% for tf in ['1m','3m','5m','15m','30m','1h'] %}
+        <option value="{{ tf }}"{% if tf == '5m' %} selected{% endif %}>{{ tf }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Exit TF
+    <select name="exit_tf">
+      {% for tf in ['5m','15m','30m','1h','4h'] %}
+        <option value="{{ tf }}"{% if tf == '15m' %} selected{% endif %}>{{ tf }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Pairs (optional)
+    <input type="text" name="pairs" value="{{ default_pairs }}"
+           placeholder="blank = fixed liquid universe">
+  </label>
+  <details>
+    <summary class="muted">Advanced knobs</summary>
+    <label>ATR/ST period <input type="number" name="period" min="2" max="100" value="10"></label>
+    <label>ATR/ST mult <input type="number" name="mult" min="0.1" max="20" step="0.1" value="3"></label>
+    <label>SAR step <input type="number" name="sar_step" min="0.001" max="0.2" step="0.001" value="0.02"></label>
+    <label>SAR max <input type="number" name="sar_max" min="0.001" max="1" step="0.01" value="0.2"></label>
+    <label>Fee % <input type="number" name="fee_pct" min="0" max="2" step="0.01" value="0.07"></label>
+    <label>Funding bps/8h <input type="number" name="funding_bps" min="0" max="100" step="0.1" value="1"></label>
+    <label>Baseline lookahead <input type="number" name="lookahead" min="2" max="200" value="20"></label>
+    <label>Max forward bars <input type="number" name="max_forward_bars" min="0" max="5000" value="192"></label>
+  </details>
+  <button type="submit"{% if state.running %} disabled{% endif %}>Run backtest</button>
+  {% if state.running %}<span class="muted">a run is already in flight</span>{% endif %}
+</form>
+
+<p class="muted small">
+  A full 6-month run over the default universe takes several minutes; the page
+  polls and offers CSV + summary downloads when it finishes. Requires the engine
+  container to carry <code>scripts/exit_method_backtest.py</code> (ships with
+  360-v2 #780).
+</p>
+
+<div id="bt-status">
+  {% include "_exit_backtest_status.html" %}
+</div>
+{% endif %}
+{% endblock %}
