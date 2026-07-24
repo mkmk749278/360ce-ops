@@ -85,6 +85,7 @@ class Settings:
     exit_backtest_timeout_sec: int
     exit_backtest_default_pairs: str
     exit_backtest_out_root: str
+    exit_backtest_state_dir: str
     port: int
     log_level: str
 
@@ -164,6 +165,9 @@ def load_settings() -> Settings:
         exit_backtest_timeout_sec=_env_int("EXIT_BACKTEST_TIMEOUT_SEC", 1800),
         exit_backtest_default_pairs=_env("EXIT_BACKTEST_DEFAULT_PAIRS", ""),
         exit_backtest_out_root=_env("EXIT_BACKTEST_OUT_ROOT", "/app/scripts/out"),
+        # Job state + artifacts on the shared ops-data volume so every worker
+        # sees the same run (POST→redirect→GET works under any topology).
+        exit_backtest_state_dir=_env("EXIT_BACKTEST_STATE_DIR", "/data/exit_backtest"),
         port=_env_int("OPS_PORT", 8000),
         log_level=_env("LOG_LEVEL", "INFO"),
     )

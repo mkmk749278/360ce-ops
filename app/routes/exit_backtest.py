@@ -44,6 +44,8 @@ async def exit_backtest_page(request: Request):
             "state": runner.snapshot(),
             "default_pairs": runner.default_pairs,
         },
+        # Never let a browser serve a cached idle page over a fresh run's state.
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -87,15 +89,15 @@ async def exit_backtest_status(request: Request):
 
 @router.get("/exit-backtest/download.csv")
 async def exit_backtest_csv(request: Request):
-    state = request.app.state.exit_backtest.snapshot()
-    if not state.has_csv:
+    csv_text = request.app.state.exit_backtest.read_csv()
+    if not csv_text:
         return RedirectResponse("/exit-backtest", status_code=303)
-    return _attachment(state.csv_text, "exit_backtest_signals", "csv", "text/csv")
+    return _attachment(csv_text, "exit_backtest_signals", "csv", "text/csv")
 
 
 @router.get("/exit-backtest/download.md")
 async def exit_backtest_summary(request: Request):
-    state = request.app.state.exit_backtest.snapshot()
-    if not state.summary_md:
+    summary_md = request.app.state.exit_backtest.read_summary()
+    if not summary_md:
         return RedirectResponse("/exit-backtest", status_code=303)
-    return _attachment(state.summary_md, "exit_backtest_summary", "md", "text/markdown")
+    return _attachment(summary_md, "exit_backtest_summary", "md", "text/markdown")

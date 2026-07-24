@@ -1,11 +1,14 @@
 """Exit-method backtest runner + route.
 
 Covers the safety envelope (unsafe pairs dropped, args validated, single-slot),
-the docker-exec success/error paths (mocked — no docker), and the ops route
+the docker-exec success/error paths (mocked — no docker), the **cross-process
+state** fix (a second runner instance sees the first's job — the reason a POST
+then redirect-GET on different workers used to read back idle), and the ops route
 (trigger, poll partial, downloads). Mirrors the diag-runner test discipline.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,13 +21,28 @@ from app.config import load_settings  # noqa: E402
 from app.data_sources.exit_backtest import (  # noqa: E402
     ExitBacktestParams,
     ExitBacktestRunner,
-    JobState,
 )
 from app.main import app  # noqa: E402
 
 
 def _login(client: TestClient) -> None:
     client.post("/login", data={"password": "test-token"})
+
+
+def _runner() -> ExitBacktestRunner:
+    # Fresh state dir per runner so tests don't bleed state into each other.
+    settings = load_settings()
+    import tempfile
+    object.__setattr__(settings, "exit_backtest_state_dir", tempfile.mkdtemp())
+    r = ExitBacktestRunner(settings)
+    return r
+
+
+def _params() -> ExitBacktestParams:
+    return ExitBacktestParams.clamped(
+        months=1, pairs="BTCUSDT", entry_tf="15m", exit_tf="15m", period=10,
+        mult=3, sar_step=0.02, sar_max=0.2, fee_pct=0.07, funding_bps=1,
+        lookahead=20, max_forward_bars=192)
 
 
 # --------------------------------------------------------------------------- #
@@ -54,10 +72,7 @@ def test_params_clamp_out_of_range():
 
 
 def test_params_to_args_includes_pairs_only_when_set():
-    args = ExitBacktestParams.clamped(
-        months=1, pairs="BTCUSDT", entry_tf="15m", exit_tf="15m", period=10,
-        mult=3, sar_step=0.02, sar_max=0.2, fee_pct=0.07, funding_bps=1,
-        lookahead=20, max_forward_bars=192).to_args()
+    args = _params().to_args()
     assert "--months" in args and "1" in args
     assert args[args.index("--pairs") + 1] == "BTCUSDT"
 
@@ -71,17 +86,6 @@ def test_params_to_args_includes_pairs_only_when_set():
 # --------------------------------------------------------------------------- #
 # Runner — single slot, disabled guard, exec success/error (mocked)
 # --------------------------------------------------------------------------- #
-def _runner() -> ExitBacktestRunner:
-    return ExitBacktestRunner(load_settings())
-
-
-def _params() -> ExitBacktestParams:
-    return ExitBacktestParams.clamped(
-        months=1, pairs="BTCUSDT", entry_tf="15m", exit_tf="15m", period=10,
-        mult=3, sar_step=0.02, sar_max=0.2, fee_pct=0.07, funding_bps=1,
-        lookahead=20, max_forward_bars=192)
-
-
 def test_disabled_runner_refuses():
     r = _runner()
     r._enabled = False
@@ -91,7 +95,8 @@ def test_disabled_runner_refuses():
 
 def test_runner_rejects_concurrent_run():
     r = _runner()
-    r._state = JobState(status="running")
+    # A running job is on disk (as if another worker started it).
+    r._write_raw({"status": "running", "started_at": 9e18})
     ok, msg = r.start(_params())
     assert ok is False and "already running" in msg
 
@@ -108,7 +113,7 @@ async def test_run_success_reads_artifacts():
     st = r.snapshot()
     assert st.status == "done"
     assert st.n_signals == 2                 # 2 data rows (header excluded)
-    assert st.has_csv and "BTCUSDT" in st.csv_text
+    assert st.has_csv and "BTCUSDT" in (r.read_csv() or "")
     assert "bake-off" in st.summary_md
 
 
@@ -121,13 +126,43 @@ async def test_run_nonzero_rc_is_error():
     assert "boom" in st.error
 
 
-async def test_run_rejects_unsafe_out_root(monkeypatch):
+async def test_run_rejects_unsafe_out_root():
     r = _runner()
     r._out_root = "/app/scripts/out; rm -rf /"   # metacharacters
     r._exec = AsyncMock()
     await r._run(_params())
     assert r.snapshot().status == "error"
     r._exec.assert_not_awaited()                 # never reached docker exec
+
+
+async def test_state_is_shared_across_runner_instances():
+    """The bug fix: a POST that starts a job on one worker must be visible to a
+    poll served by a *different* worker. Two runner instances over the same state
+    dir stand in for two workers."""
+    settings = load_settings()
+    import tempfile
+    shared_dir = tempfile.mkdtemp()
+    object.__setattr__(settings, "exit_backtest_state_dir", shared_dir)
+
+    worker_a = ExitBacktestRunner(settings)
+    worker_b = ExitBacktestRunner(settings)
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocking_exec(cmd, timeout):
+        started.set()
+        await release.wait()          # keep the job "running"
+        return (0, "", "")
+
+    worker_a._exec = blocking_exec
+    ok, _ = worker_a.start(_params())
+    assert ok is True
+    await started.wait()
+    # Worker B never called start(), yet sees A's running job.
+    assert worker_b.snapshot().running is True
+    release.set()
+    await worker_a._task
 
 
 # --------------------------------------------------------------------------- #
@@ -140,6 +175,7 @@ def test_page_renders_form():
         assert r.status_code == 200
         assert "/exit-backtest/run" in r.text
         assert "Exit-method backtest" in r.text
+        assert r.headers.get("cache-control") == "no-store"
 
 
 def test_run_triggers_and_redirects():
@@ -147,7 +183,7 @@ def test_run_triggers_and_redirects():
         _login(client)
         fake = MagicMock()
         fake.start.return_value = (True, "started")
-        fake.snapshot.return_value = JobState(status="running")
+        fake.snapshot.return_value = _idle_running()
         fake.default_pairs = ""
         fake.enabled = True
         app.state.exit_backtest = fake
@@ -162,9 +198,7 @@ def test_status_partial_shows_done_with_downloads():
     with TestClient(app) as client:
         _login(client)
         fake = MagicMock()
-        fake.snapshot.return_value = JobState(
-            status="done", summary_md="# summary\nPF 1.2\n",
-            csv_text="h\n1\n", n_signals=1, started_at=0.0, finished_at=5.0)
+        fake.snapshot.return_value = _done_state()
         app.state.exit_backtest = fake
         r = client.get("/_partial/exit-backtest/status")
         assert r.status_code == 200
@@ -176,7 +210,7 @@ def test_download_csv_when_present():
     with TestClient(app) as client:
         _login(client)
         fake = MagicMock()
-        fake.snapshot.return_value = JobState(status="done", csv_text="h\n1\n")
+        fake.read_csv.return_value = "h\n1\n"
         app.state.exit_backtest = fake
         r = client.get("/exit-backtest/download.csv")
         assert r.status_code == 200
@@ -188,7 +222,19 @@ def test_download_csv_redirects_when_absent():
     with TestClient(app) as client:
         _login(client)
         fake = MagicMock()
-        fake.snapshot.return_value = JobState(status="idle")
+        fake.read_csv.return_value = None
         app.state.exit_backtest = fake
         r = client.get("/exit-backtest/download.csv", follow_redirects=False)
         assert r.status_code == 303
+
+
+# --- tiny state builders for the route tests ------------------------------- #
+def _idle_running():
+    from app.data_sources.exit_backtest import JobState
+    return JobState(status="running", started_at=0.0)
+
+
+def _done_state():
+    from app.data_sources.exit_backtest import JobState
+    return JobState(status="done", summary_md="# summary\nPF 1.2\n",
+                    n_signals=1, has_csv=True, started_at=0.0, finished_at=5.0)
