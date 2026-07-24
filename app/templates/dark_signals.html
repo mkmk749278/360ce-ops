@@ -102,7 +102,15 @@
     <input type="number" name="funding" value="{{ '%g'|format(params.funding_bps_per_8h) }}" step="0.5" min="0" max="100"
            style="width:5em" onchange="this.form.submit()">
   </label>
-  <a class="badge" href="/dark-signals/export.csv?window={{ window }}&view={{ view }}&tf_min={{ params.tf_min }}&period={{ params.period }}&mult={{ params.mult }}&fee={{ params.fee_pct }}&funding={{ params.funding_bps_per_8h }}">Export CSV</a>
+  <label title="Parabolic SAR acceleration step (higher = faster/tighter trail, exits sooner).">SAR step
+    <input type="number" name="sar_step" value="{{ '%g'|format(params.sar_step) }}" step="0.005" min="0.001" max="0.2"
+           style="width:5em" onchange="this.form.submit()">
+  </label>
+  <label title="Parabolic SAR max acceleration cap.">SAR max
+    <input type="number" name="sar_max" value="{{ '%g'|format(params.sar_max) }}" step="0.05" min="0.001" max="1"
+           style="width:5em" onchange="this.form.submit()">
+  </label>
+  <a class="badge" href="/dark-signals/export.csv?window={{ window }}&view={{ view }}&tf_min={{ params.tf_min }}&period={{ params.period }}&mult={{ params.mult }}&fee={{ params.fee_pct }}&funding={{ params.funding_bps_per_8h }}&sar_step={{ params.sar_step }}&sar_max={{ params.sar_max }}">Export CSV</a>
 </form>
 
 <p class="small muted" style="margin:.25rem 0 1rem">

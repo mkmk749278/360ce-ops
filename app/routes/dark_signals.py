@@ -190,6 +190,7 @@ def _row(res: DarkSignalResult) -> dict:
         "degraded": res.degraded,
         "source": res.source,
         "methods": methods,
+        "timestamp": res.timestamp,
         "created_relative": _format_relative(res.timestamp),
         "minutes_ago": res.minutes_ago,
     }
@@ -385,7 +386,7 @@ async def dark_signals(
 
 
 _EXPORT_COLS = [
-    "id", "symbol", "side", "setup_class", "regime", "entry", "confidence",
+    "id", "timestamp", "symbol", "side", "setup_class", "regime", "entry", "confidence",
     "real_is_active", "real_pnl_pct",
     "atr_result", "atr_mfe", "atr_hold", "atr_exited",
     "supertrend_result", "supertrend_mfe", "supertrend_hold", "supertrend_exited",
@@ -413,7 +414,7 @@ async def dark_signals_export(
     rows, _ = await _build(request, window, view, params)
     data = [
         [
-            r["id"], r["symbol"], r["side"], r["setup_class"], r["regime"],
+            r["id"], r.get("timestamp"), r["symbol"], r["side"], r["setup_class"], r["regime"],
             r["entry"], r["confidence"], r["real_is_active"], r["real_pnl_pct"],
             _cell(r, "atr", "result_pct"), _cell(r, "atr", "mfe"), _cell(r, "atr", "hold_mins"), _cell(r, "atr", "exited"),
             _cell(r, "supertrend", "result_pct"), _cell(r, "supertrend", "mfe"), _cell(r, "supertrend", "hold_mins"), _cell(r, "supertrend", "exited"),
