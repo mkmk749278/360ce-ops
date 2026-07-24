@@ -57,6 +57,10 @@ class Settings:
     agent_redis_url: str
     # Free-run ("held to SL") candle replay — Profit tab only.
     binance_futures_rest_base: str
+    # Binance IP-ban circuit breaker for the kline client (Held-to-stop +
+    # Dark Signals). Cooldown when Binance 418/403/429s the box.
+    binance_ban_cooldown_sec: float
+    binance_ban_max_sec: float
     free_run_enabled: bool
     free_run_max_lookback_min: int
     free_run_cache_ttl_sec: int
@@ -115,6 +119,11 @@ def load_settings() -> Settings:
         # candles come from Binance Futures (fapi), matching the engine's
         # own kline source. Public market data — no key, read-only.
         binance_futures_rest_base=_env("BINANCE_FUTURES_REST_BASE", "https://fapi.binance.com"),
+        # Ban-circuit cooldown: fallback 120s when Binance gives no explicit
+        # "banned until" (e.g. a 429), clamped to at most 30m even when the
+        # parsed ban is longer (we re-probe rather than trust an unbounded ban).
+        binance_ban_cooldown_sec=_env_float("BINANCE_BAN_COOLDOWN_SEC", 120.0),
+        binance_ban_max_sec=_env_float("BINANCE_BAN_MAX_SEC", 1800.0),
         free_run_enabled=_env_bool("FREE_RUN_ENABLED", True),
         # Cap the replay window so a signal whose stop is never touched can't
         # drive an unbounded candle pull. 7 days of 1m candles ≈ 7 requests.

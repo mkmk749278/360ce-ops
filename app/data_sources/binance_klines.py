@@ -15,9 +15,21 @@ Network policy note: the ops container must be allowed outbound to
 ``fapi.binance.com`` for this to work. When it can't reach Binance the caller
 (``free_run``) degrades gracefully to the engine's own MFE rather than
 crashing the page — see ``FreeRunTracker``.
+
+Circuit breaker (2026-07-24): when Binance IP-bans the box (HTTP 418 / 403 with
+``-1003 'Way too many requests; IP(...) banned until <ms>'``), every subsequent
+kline fetch would otherwise hang until timeout — so the Held-to-stop and
+Dark-Signals pages (up to ~500 signals each) crawl on *every* load for the whole
+ban window. The breaker trips on the first ban response, parses the ``banned
+until`` deadline when present, and short-circuits all fetches until it clears —
+so those pages return **instantly in degraded mode** instead of timing out row
+by row. This is the ops-side symptom fix; the root cause (a PositionWorker
+hammering a dead key into the ban) is fixed engine-side.
 """
 from __future__ import annotations
 
+import re
+import time
 from typing import NamedTuple
 
 import httpx
@@ -27,6 +39,53 @@ from app.config import Settings
 # Binance hard cap on klines per request.
 _MAX_LIMIT = 1500
 _MINUTE_MS = 60_000
+
+# Status codes that mean "Binance is refusing this IP for now": 418 (IP banned,
+# -1003), 403 (WAF/ban), 429 (rate-limited). We back off on all three.
+_BAN_STATUSES = frozenset({403, 418, 429})
+_BAN_UNTIL_RE = re.compile(r"banned until (\d+)")
+
+
+class _BanCircuit:
+    """A one-shot backoff gate for Binance IP bans. Pure/monotonic; no I/O.
+
+    ``note_ban`` opens the gate for a cooldown — parsed from the ``banned until``
+    epoch-ms in the response when Binance provides it (so the breaker clears the
+    moment the real ban lifts), else a fixed fallback. The gate only ever
+    *extends* (never shrinks) an open window, so a nearer re-ban can't reopen the
+    door early. After the window passes the next fetch probes again (half-open),
+    re-tripping if still banned.
+    """
+
+    def __init__(self, cooldown_sec: float, max_sec: float) -> None:
+        self._cooldown = max(1.0, cooldown_sec)
+        self._max = max(self._cooldown, max_sec)
+        self._open_until = 0.0  # monotonic deadline
+
+    @property
+    def open(self) -> bool:
+        return time.monotonic() < self._open_until
+
+    def seconds_remaining(self) -> float:
+        return max(0.0, self._open_until - time.monotonic())
+
+    def note_ban(self, body: str, *, now_wall: float | None = None) -> None:
+        """Open (or extend) the breaker in response to a ban body."""
+        cooldown = self._cooldown
+        match = _BAN_UNTIL_RE.search(body or "")
+        if match:
+            try:
+                deadline_wall = int(match.group(1)) / 1000.0
+                remaining = deadline_wall - (
+                    now_wall if now_wall is not None else time.time()
+                )
+                if remaining > 0:
+                    # +5s guard so we don't probe a hair before the ban lifts.
+                    cooldown = remaining + 5.0
+            except ValueError:
+                pass
+        cooldown = max(self._cooldown, min(self._max, cooldown))
+        self._open_until = max(self._open_until, time.monotonic() + cooldown)
 
 
 class Kline(NamedTuple):
@@ -52,6 +111,19 @@ class BinanceKlinesClient:
     def __init__(self, settings: Settings) -> None:
         self._base = settings.binance_futures_rest_base.rstrip("/")
         self._client: httpx.AsyncClient | None = None
+        self._circuit = _BanCircuit(
+            settings.binance_ban_cooldown_sec,
+            settings.binance_ban_max_sec,
+        )
+
+    @property
+    def circuit_open(self) -> bool:
+        """True while the box is in a Binance-ban cooldown (fetches short-circuit)."""
+        return self._circuit.open
+
+    @property
+    def ban_seconds_remaining(self) -> float:
+        return self._circuit.seconds_remaining()
 
     @property
     def client(self) -> httpx.AsyncClient:
@@ -73,7 +145,16 @@ class BinanceKlinesClient:
 
         Raises ``httpx.HTTPError`` on transport/HTTP failure so the caller can
         decide whether to degrade. Returns candles in ascending time order.
+
+        While the ban circuit is open (recent 418/403/429 from Binance), this
+        short-circuits immediately with ``httpx.HTTPError`` — no network call —
+        so callers degrade instantly instead of timing out row by row.
         """
+        if self._circuit.open:
+            raise httpx.HTTPError(
+                f"binance klines circuit open — IP-ban cooldown "
+                f"{self._circuit.seconds_remaining():.0f}s remaining"
+            )
         out: list[Kline] = []
         cursor = start_ms
         # Bound the loop defensively: even a 7-day window is ~7 pages. Cap at
@@ -89,6 +170,11 @@ class BinanceKlinesClient:
                 "limit": _MAX_LIMIT,
             }
             r = await self.client.get("/fapi/v1/klines", params=params)
+            # Trip the breaker on a ban response before raising, so the *next*
+            # fetch short-circuits instead of re-hitting a banned endpoint.
+            if r.status_code in _BAN_STATUSES:
+                self._circuit.note_ban(r.text)
+                r.raise_for_status()
             r.raise_for_status()
             rows = r.json()
             if not isinstance(rows, list) or not rows:

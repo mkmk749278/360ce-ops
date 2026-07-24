@@ -45,6 +45,16 @@
 <section class="card neg">Engine/data error: {{ error }}</section>
 {% endif %}
 
+{% if ban_seconds %}
+<section class="card" style="border-color:#c0392b;margin-bottom:.75rem">
+  <strong class="neg">Binance IP-ban cooldown active</strong>
+  <span class="small muted"> — the box is temporarily banned from Binance REST, so
+    candle fetches are paused (~{{ (ban_seconds // 60) + 1 }} min remaining). Rows show
+    degraded rather than hanging; they'll fill automatically once the ban lifts.
+    Root cause is engine-side (a dead key hammering listenKey) — not this page.</span>
+</section>
+{% endif %}
+
 {% if degraded %}
 <p class="small muted" style="margin:0 0 .5rem">ℹ {{ degraded }} row(s) degraded —
   Binance candles unavailable on this host, so those signals are excluded from the
