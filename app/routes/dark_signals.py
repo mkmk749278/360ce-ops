@@ -358,6 +358,8 @@ async def dark_signals(
     # Aggregations run over resolved (real-closed) rows so the baseline is fair.
     closed = [r for r in rows if not r["real_is_active"]]
     pagination = _paginate(rows, page)
+    klines = request.app.state.binance_klines
+    ban_seconds = klines.ban_seconds_remaining if klines.circuit_open else 0
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "dark_signals.html",
@@ -372,6 +374,7 @@ async def dark_signals(
             "methods": [(m, METHOD_LABELS[m]) for m in METHODS],
             "params": params,
             "degraded": sum(1 for r in rows if r["degraded"]),
+            "ban_seconds": int(ban_seconds),
             "n_closed": len(closed),
             "window": window,
             "view": view,
