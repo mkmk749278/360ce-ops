@@ -22,6 +22,16 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None or raw == "":
@@ -51,6 +61,19 @@ class Settings:
     free_run_max_lookback_min: int
     free_run_cache_ttl_sec: int
     free_run_concurrency: int
+    # Dark-Signals trailing-exit bake-off (Performance tab). Observe-only shadow
+    # measurement: replay real signals under a trailing-only (no-TP) exit.
+    dark_signals_enabled: bool
+    dark_tf_min: int
+    dark_atr_period: int
+    dark_atr_mult: float
+    dark_sar_step: float
+    dark_sar_max: float
+    dark_funding_bps_per_8h: float
+    dark_warmup_min: int
+    dark_max_lookback_min: int
+    dark_cache_ttl_sec: int
+    dark_concurrency: int
     port: int
     log_level: str
 
@@ -100,6 +123,25 @@ def load_settings() -> Settings:
         # rows are immutable and cached for the process lifetime.
         free_run_cache_ttl_sec=_env_int("FREE_RUN_CACHE_TTL_SEC", 30),
         free_run_concurrency=_env_int("FREE_RUN_CONCURRENCY", 5),
+        # Dark-Signals trailing-exit bake-off. Reuses the same Binance-futures
+        # candle source as the held-to-stop replay. Defaults: 5m exit-decision
+        # bars, ATR(10)×3 (the SuperTrend(10,3) the owner tested), SAR 0.02/0.2,
+        # and a conservative 1bp/8h modelled funding cost (real-money holds pay
+        # funding, and a no-TP trail holds far longer than a scalp).
+        dark_signals_enabled=_env_bool("DARK_SIGNALS_ENABLED", True),
+        dark_tf_min=_env_int("DARK_TF_MIN", 5),
+        dark_atr_period=_env_int("DARK_ATR_PERIOD", 10),
+        dark_atr_mult=_env_float("DARK_ATR_MULT", 3.0),
+        dark_sar_step=_env_float("DARK_SAR_STEP", 0.02),
+        dark_sar_max=_env_float("DARK_SAR_MAX", 0.2),
+        dark_funding_bps_per_8h=_env_float("DARK_FUNDING_BPS_PER_8H", 1.0),
+        # Warm-up window fetched before dispatch to seed ATR/SuperTrend. Fixed
+        # (not derived from period/tf) so a swept period/tf still seeds from the
+        # same cached candles. 1200m covers period≤60 on 15m bars in one page.
+        dark_warmup_min=_env_int("DARK_WARMUP_MIN", 1200),
+        dark_max_lookback_min=_env_int("DARK_MAX_LOOKBACK_MIN", 10080),
+        dark_cache_ttl_sec=_env_int("DARK_CACHE_TTL_SEC", 30),
+        dark_concurrency=_env_int("DARK_CONCURRENCY", 5),
         port=_env_int("OPS_PORT", 8000),
         log_level=_env("LOG_LEVEL", "INFO"),
     )

@@ -30,12 +30,20 @@ _MINUTE_MS = 60_000
 
 
 class Kline(NamedTuple):
-    """One 1m candle, reduced to the fields the replay needs."""
+    """One 1m candle, reduced to the fields the replay needs.
+
+    ``open`` was added 2026-07-24 for the Dark-Signals trailing-exit sim, which
+    needs the bar open to model gap-through fills (a trailing stop that price
+    opens beyond fills at the open, not the stop level). The held-to-stop replay
+    (``free_run``) constructs ``Kline`` by keyword and ignores ``open``, so the
+    added field is backward-compatible.
+    """
 
     open_time_ms: int
     high: float
     low: float
     close: float
+    open: float = 0.0
 
 
 class BinanceKlinesClient:
@@ -91,6 +99,7 @@ class BinanceKlinesClient:
                     out.append(
                         Kline(
                             open_time_ms=int(row[0]),
+                            open=float(row[1]),
                             high=float(row[2]),
                             low=float(row[3]),
                             close=float(row[4]),
