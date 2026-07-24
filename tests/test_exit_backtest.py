@@ -243,6 +243,19 @@ def test_htmx_run_returns_status_inline():
         fake.start.assert_called_once()
 
 
+def test_run_now_get_fallback_starts_and_redirects():
+    """The plain-link fallback (GET) must start the job and redirect with flash."""
+    with TestClient(app) as client:
+        _login(client)
+        fake = MagicMock()
+        fake.start.return_value = (True, "started")
+        app.state.exit_backtest = fake
+        r = client.get("/exit-backtest/run-now", follow_redirects=False)
+        assert r.status_code == 303
+        assert "flash=started" in r.headers["location"]
+        fake.start.assert_called_once()
+
+
 def test_status_partial_shows_done_with_downloads():
     with TestClient(app) as client:
         _login(client)

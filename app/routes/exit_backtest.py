@@ -94,6 +94,33 @@ async def exit_backtest_run(
     return RedirectResponse(f"/exit-backtest?{q}", status_code=303)
 
 
+@router.get("/exit-backtest/run-now")
+async def exit_backtest_run_now(
+    request: Request,
+    months: float = 6.0,
+    pairs: str = "",
+    entry_tf: str = "5m",
+    exit_tf: str = "15m",
+):
+    """Plain-navigation fallback for starting a run — a GET link, not a form POST.
+
+    Some environments drop the Run form's POST (proxy, browser quirk) so the
+    button appears to do nothing. A link is a normal navigation (like clicking a
+    nav tab), so it always reaches the server. Read-only on the engine and
+    single-slot (a refresh just says "already running"), so a GET trigger is
+    acceptable here even though control writes normally use POST+PRG.
+    """
+    runner = request.app.state.exit_backtest
+    params = ExitBacktestParams.clamped(
+        months=months, pairs=pairs, entry_tf=entry_tf, exit_tf=exit_tf,
+        period=10, mult=3.0, sar_step=0.02, sar_max=0.2, fee_pct=0.07,
+        funding_bps=1.0, lookahead=20, max_forward_bars=192,
+    )
+    ok, msg = runner.start(params)
+    q = urlencode({"flash": msg, "ok": "1" if ok else "0"})
+    return RedirectResponse(f"/exit-backtest?{q}", status_code=303)
+
+
 @router.get("/_partial/exit-backtest/status")
 async def exit_backtest_status(request: Request):
     runner = request.app.state.exit_backtest
