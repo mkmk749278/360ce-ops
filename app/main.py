@@ -28,6 +28,7 @@ from app.data_sources.dark_signals import DarkSignalTracker
 from app.data_sources.data_volume import DataVolumeReader
 from app.data_sources.diag_runner import DiagRunner
 from app.data_sources.engine_api import EngineApiClient
+from app.data_sources.exit_backtest import ExitBacktestRunner
 from app.data_sources.free_run import FreeRunTracker
 from app.data_sources.monitor_logs import MonitorLogsReader
 from app.routes import (
@@ -39,6 +40,7 @@ from app.routes import (
     dark_signals,
     data_export,
     diag,
+    exit_backtest,
     invalidations,
     pairs,
     performance,
@@ -79,6 +81,7 @@ async def lifespan(app: FastAPI):
     app.state.binance_klines = BinanceKlinesClient(settings)
     app.state.free_run = FreeRunTracker(settings, app.state.binance_klines)
     app.state.dark_signals = DarkSignalTracker(settings, app.state.binance_klines)
+    app.state.exit_backtest = ExitBacktestRunner(settings)
     logger.info("ops up — engine_api=%s data_dir=%s", settings.engine_api_base, settings.engine_data_dir)
     try:
         yield
@@ -115,6 +118,7 @@ app.include_router(strategy_lab.router)
 app.include_router(positions.router)
 app.include_router(profit.router)
 app.include_router(dark_signals.router)
+app.include_router(exit_backtest.router)
 app.include_router(control.router)
 app.include_router(users.router)
 app.include_router(referrals.router)

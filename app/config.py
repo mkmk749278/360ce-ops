@@ -78,6 +78,13 @@ class Settings:
     dark_max_lookback_min: int
     dark_cache_ttl_sec: int
     dark_concurrency: int
+    # Exit-method backtest runner (Performance tab). Triggers the engine-side
+    # scripts/exit_method_backtest.py over a large historical sample via
+    # `docker exec` (long-running → background job) and serves its CSV + summary.
+    exit_backtest_enabled: bool
+    exit_backtest_timeout_sec: int
+    exit_backtest_default_pairs: str
+    exit_backtest_out_root: str
     port: int
     log_level: str
 
@@ -151,6 +158,12 @@ def load_settings() -> Settings:
         dark_max_lookback_min=_env_int("DARK_MAX_LOOKBACK_MIN", 10080),
         dark_cache_ttl_sec=_env_int("DARK_CACHE_TTL_SEC", 30),
         dark_concurrency=_env_int("DARK_CONCURRENCY", 5),
+        # A full 6-month run over the default universe is minutes of compute, so
+        # the runner is a background job with a generous timeout (default 30min).
+        exit_backtest_enabled=_env_bool("EXIT_BACKTEST_ENABLED", True),
+        exit_backtest_timeout_sec=_env_int("EXIT_BACKTEST_TIMEOUT_SEC", 1800),
+        exit_backtest_default_pairs=_env("EXIT_BACKTEST_DEFAULT_PAIRS", ""),
+        exit_backtest_out_root=_env("EXIT_BACKTEST_OUT_ROOT", "/app/scripts/out"),
         port=_env_int("OPS_PORT", 8000),
         log_level=_env("LOG_LEVEL", "INFO"),
     )
