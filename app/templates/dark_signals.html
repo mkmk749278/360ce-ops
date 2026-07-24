@@ -1,0 +1,261 @@
+{% extends "base.html" %}
+{% block title %}Dark Signals — 360 CE Ops{% endblock %}
+
+{%- macro px(v) -%}
+{%- if v is none -%}—
+{%- elif v >= 1000 -%}{{ "%.2f"|format(v) }}
+{%- elif v >= 1 -%}{{ "%.4f"|format(v) }}
+{%- else -%}{{ "%.6f"|format(v) }}
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro pct(v) -%}
+{%- if v is none -%}—{%- else -%}{{ "%+.2f"|format(v) }}%{%- endif -%}
+{%- endmacro -%}
+
+{%- macro num(v, dp=2) -%}
+{%- if v is none -%}—{%- else -%}{{ ("%."+dp|string+"f")|format(v) }}{%- endif -%}
+{%- endmacro -%}
+
+{%- macro hold(v) -%}
+{%- if v is none -%}—
+{%- elif v < 60 -%}{{ "%.0f"|format(v) }}m
+{%- elif v < 1440 -%}{{ "%.1f"|format(v/60.0) }}h
+{%- else -%}{{ "%.1f"|format(v/1440.0) }}d
+{%- endif -%}
+{%- endmacro -%}
+
+{%- macro signed_cell(v) -%}
+<td class="mono {% if v is not none and v > 0 %}pos{% elif v is not none and v < 0 %}neg{% endif %}">{{ pct(v) }}</td>
+{%- endmacro -%}
+
+{% block content %}
+<h1>Dark Signals — trailing-exit bake-off</h1>
+<p class="muted">Every real signal replayed keeping <strong>only its entry price and
+  direction</strong> — TPs discarded — under three <strong>trailing-only</strong>
+  exit methods (no take-profit; the trail is the stop from bar one). Answers the
+  owner's thesis: <em>are our signals directionally right but leaking on the
+  exit?</em> <strong>Parallel observation only</strong> — the engine's real exits
+  still fire for real; nothing here runs on the live money path. The engine's real
+  exit is shown as the baseline to beat. Read <strong>expectancy + profit factor +
+  capture</strong>, not win-rate: dropping TPs deliberately lowers hit-rate and
+  raises payoff.</p>
+
+{% if error %}
+<section class="card neg">Engine/data error: {{ error }}</section>
+{% endif %}
+
+{% if degraded %}
+<p class="small muted" style="margin:0 0 .5rem">ℹ {{ degraded }} row(s) degraded —
+  Binance candles unavailable on this host, so those signals are excluded from the
+  method stats (never guessed).</p>
+{% endif %}
+
+<form method="get" action="/dark-signals" class="filters">
+  <label>Window
+    <select name="window" onchange="this.form.submit()">
+      <option value="live" {% if window == 'live' %}selected{% endif %}>live (recent ~500)</option>
+      <option value="24h"  {% if window == '24h' %}selected{% endif %}>last 24 hours</option>
+      <option value="3d"   {% if window == '3d' %}selected{% endif %}>last 3 days</option>
+      <option value="7d"   {% if window == '7d' %}selected{% endif %}>last 7 days</option>
+      <option value="30d"  {% if window == '30d' %}selected{% endif %}>last 30 days</option>
+      <option value="all"  {% if window == 'all' %}selected{% endif %}>all time</option>
+    </select>
+  </label>
+  <label>View
+    <select name="view" onchange="this.form.submit()">
+      <option value="all"    {% if view == 'all' %}selected{% endif %}>all</option>
+      <option value="active" {% if view == 'active' %}selected{% endif %}>active only</option>
+      <option value="closed" {% if view == 'closed' %}selected{% endif %}>closed only</option>
+    </select>
+  </label>
+  <label title="Exit-decision bar size. The trailing indicators run on these resampled candles — e.g. SuperTrend(10,3) on 15m vs 5m behaves very differently.">Bar (min)
+    <select name="tf_min" onchange="this.form.submit()">
+      {% for t in [1, 3, 5, 15] %}
+      <option value="{{ t }}" {% if params.tf_min == t %}selected{% endif %}>{{ t }}m</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label title="ATR / SuperTrend look-back period.">Period
+    <input type="number" name="period" value="{{ params.period }}" step="1" min="2" max="100"
+           style="width:4.5em" onchange="this.form.submit()">
+  </label>
+  <label title="ATR / SuperTrend band multiplier (wider = looser trail, more give-back but fewer whipsaws).">Mult
+    <input type="number" name="mult" value="{{ '%g'|format(params.mult) }}" step="0.5" min="0.1" max="20"
+           style="width:4.5em" onchange="this.form.submit()">
+  </label>
+  <label title="Round-trip trading fee (maker + taker) deducted from every closed trailing exit.">Fee %
+    <input type="number" name="fee" value="{{ '%g'|format(params.fee_pct) }}" step="0.01" min="0" max="2"
+           style="width:5em" onchange="this.form.submit()">
+  </label>
+  <label title="Modelled funding cost per 8h of hold, in basis points (1bp = 0.01%). A no-TP trail holds far longer than a scalp, so funding is real. Estimate — applied as a holding cost to both sides.">Funding bp/8h
+    <input type="number" name="funding" value="{{ '%g'|format(params.funding_bps_per_8h) }}" step="0.5" min="0" max="100"
+           style="width:5em" onchange="this.form.submit()">
+  </label>
+  <a class="badge" href="/dark-signals/export.csv?window={{ window }}&view={{ view }}&tf_min={{ params.tf_min }}&period={{ params.period }}&mult={{ params.mult }}&fee={{ params.fee_pct }}&funding={{ params.funding_bps_per_8h }}">Export CSV</a>
+</form>
+
+<p class="small muted" style="margin:.25rem 0 1rem">
+  SuperTrend/ATR use <strong>period {{ params.period }} × {{ '%g'|format(params.mult) }}</strong>
+  on <strong>{{ params.tf_min }}m</strong> bars · SAR {{ '%g'|format(params.sar_step) }}/{{ '%g'|format(params.sar_max) }} ·
+  fee {{ '%g'|format(params.fee_pct) }}% · funding {{ '%g'|format(params.funding_bps_per_8h) }} bp/8h ·
+  aggregations over <strong>{{ n_closed }} closed</strong> signal(s).
+</p>
+
+{# ---- Headline bake-off: method vs method vs engine-real ---- #}
+<section class="card">
+  <h2>Exit bake-off <span class="muted small">— closed signals, net of fee + funding</span></h2>
+  {% if n_closed %}
+  <table class="data-table sortable">
+    <thead>
+      <tr>
+        <th>Exit method</th><th>n</th><th title="Average realised return per trade — the expectancy">Expectancy</th>
+        <th title="Sum of realised returns across all trades">Total P/L</th>
+        <th title="Gross wins ÷ gross losses. >1 is profitable; higher is better.">Profit factor</th>
+        <th title="Win rate — expected to DROP under a no-TP trail; not the headline">Win %</th>
+        <th title="Avg max-favourable-excursion the trades printed">Avg MFE</th>
+        <th title="Realised ÷ MFE — how much of the favourable move the trail actually captured">Capture</th>
+        <th title="Average time in trade">Avg hold</th>
+        <th title="Share of trades the trail actually closed within the window (rest marked-to-close)">Exited</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in bake_off %}
+      {% set s = row.stats %}
+      <tr>
+        <td><strong>{{ row.label }}</strong></td>
+        <td class="mono">{{ s.n }}</td>
+        {{ signed_cell(s.avg) }}
+        {{ signed_cell(s.total) }}
+        <td class="mono {% if s.profit_factor is not none and s.profit_factor >= 1 %}pos{% elif s.profit_factor is not none %}neg{% endif %}">{{ num(s.profit_factor) }}</td>
+        <td class="mono">{% if s.win_rate is not none %}{{ "%.0f"|format(s.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="mono">{{ pct(s.avg_mfe) }}</td>
+        <td class="mono">{% if s.capture is not none %}{{ "%.0f"|format(s.capture) }}%{% else %}—{% endif %}</td>
+        <td class="mono">{{ hold(s.avg_hold) }}</td>
+        <td class="mono">{% if s.exited_rate is not none %}{{ "%.0f"|format(s.exited_rate) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+      <tr class="muted">
+        <td><strong>Engine real exit</strong> (baseline)</td>
+        <td class="mono">{{ real_baseline.n }}</td>
+        {{ signed_cell(real_baseline.avg) }}
+        {{ signed_cell(real_baseline.total) }}
+        <td class="mono">—</td>
+        <td class="mono">{% if real_baseline.win_rate is not none %}{{ "%.0f"|format(real_baseline.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="mono">—</td><td class="mono">—</td><td class="mono">—</td><td class="mono">—</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="small muted" style="margin:.5rem 0 0">If a method's <strong>total &amp; profit
+    factor</strong> beat the engine-real baseline on the same signals, the exit — not
+    the entries — was leaving money on the table. Confirm it holds <em>per regime</em>
+    below (a trail wins in trend, bleeds in chop) before trusting it. This is a
+    dark measurement; promoting a winner to the engine is still dark-first + owner
+    sign-off.</p>
+  {% else %}
+  <p class="muted">No closed signals in this window/view to measure.</p>
+  {% endif %}
+</section>
+
+{# ---- Per-regime matrix (the make-or-break: does the trail survive chop?) ---- #}
+<section class="card">
+  <h2>By market regime <span class="muted small">— total P/L per method vs real</span></h2>
+  {% if by_regime %}
+  <table class="data-table sortable">
+    <thead>
+      <tr><th>Regime</th><th>n</th>
+        {% for m, label in methods %}<th title="{{ label }}">{{ label }}</th>{% endfor %}
+        <th>Engine real</th></tr>
+    </thead>
+    <tbody>
+      {% for g in by_regime %}
+      <tr>
+        <td><strong>{{ g.key }}</strong></td>
+        <td class="mono">{{ g.n }}</td>
+        {% for m, label in methods %}{{ signed_cell(g.methods[m].total) }}{% endfor %}
+        {{ signed_cell(g.real.total) }}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="small muted" style="margin:.5rem 0 0">This is the table that decides it.
+    A trailing exit that only wins in <em>trending</em> regimes and bleeds in
+    <em>ranging</em> ones argues for a regime-gated exit (§3.2b), not a blanket
+    switch.</p>
+  {% else %}
+  <p class="muted">No data.</p>
+  {% endif %}
+</section>
+
+{# ---- Per-setup matrix ---- #}
+<section class="card">
+  <h2>By setup class <span class="muted small">— total P/L per method vs real</span></h2>
+  {% if by_setup %}
+  <table class="data-table sortable">
+    <thead>
+      <tr><th>Setup</th><th>n</th>
+        {% for m, label in methods %}<th title="{{ label }}">{{ label }}</th>{% endfor %}
+        <th>Engine real</th></tr>
+    </thead>
+    <tbody>
+      {% for g in by_setup %}
+      <tr>
+        <td><strong>{{ g.key }}</strong></td>
+        <td class="mono">{{ g.n }}</td>
+        {% for m, label in methods %}{{ signed_cell(g.methods[m].total) }}{% endfor %}
+        {{ signed_cell(g.real.total) }}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No data.</p>
+  {% endif %}
+</section>
+
+{# ---- Per-signal rows ---- #}
+<section class="card">
+  <h2>Signals <span class="muted small">— {{ pagination.n_active }} active · {{ pagination.n_closed }} closed
+    · page {{ pagination.page }}/{{ pagination.total_pages }}</span></h2>
+  <table class="data-table sortable">
+    <thead>
+      <tr>
+        <th>Signal</th><th>Side</th><th>Entry</th><th>Regime</th><th>Real exit</th>
+        {% for m, label in methods %}<th title="{{ label }} — net result">{{ label }}</th>{% endfor %}
+        <th title="ATR-trail hold time">Hold</th><th>Age</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.symbol }} <span class="small muted">{{ r.setup_class }}</span></td>
+        <td class="{% if r.side == 'LONG' %}pos{% else %}neg{% endif %}">{{ r.side }}</td>
+        <td class="mono">{{ px(r.entry) }}</td>
+        <td class="small">{{ r.regime }}</td>
+        <td class="mono {% if r.real_is_active %}muted{% elif r.real_pnl_pct is not none and r.real_pnl_pct > 0 %}pos{% elif r.real_pnl_pct is not none and r.real_pnl_pct < 0 %}neg{% endif %}">
+          {% if r.real_is_active %}active{% else %}{{ pct(r.real_pnl_pct) }}{% endif %}</td>
+        {% for m, label in methods %}
+          {% set mr = r.methods[m] %}
+          {% if mr %}
+          <td class="mono {% if mr.result_pct is not none and mr.result_pct > 0 %}pos{% elif mr.result_pct is not none and mr.result_pct < 0 %}neg{% endif %}"
+              title="{{ 'trail exit' if mr.exited else 'still running (marked to close)' }} · MFE {{ pct(mr.mfe) }}">
+            {{ pct(mr.result_pct) }}{% if not mr.exited and mr.result_pct is not none %} <span class="small muted">·run</span>{% endif %}</td>
+          {% else %}<td class="mono">—</td>{% endif %}
+        {% endfor %}
+        <td class="mono small">{{ hold(r.methods['atr'].hold_mins if r.methods['atr'] else none) }}</td>
+        <td class="small muted">{{ r.created_relative or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  {% if pagination.total_pages > 1 %}
+  <div class="pager" style="margin-top:.5rem">
+    {% set qs = 'window=' ~ window ~ '&view=' ~ view ~ '&tf_min=' ~ params.tf_min ~ '&period=' ~ params.period ~ '&mult=' ~ params.mult ~ '&fee=' ~ params.fee_pct ~ '&funding=' ~ params.funding_bps_per_8h %}
+    {% if pagination.page > 1 %}<a class="badge" href="/dark-signals?{{ qs }}&page={{ pagination.page - 1 }}">← prev</a>{% endif %}
+    <span class="small muted">page {{ pagination.page }} / {{ pagination.total_pages }}</span>
+    {% if pagination.page < pagination.total_pages %}<a class="badge" href="/dark-signals?{{ qs }}&page={{ pagination.page + 1 }}">next →</a>{% endif %}
+  </div>
+  {% endif %}
+</section>
+{% endblock %}
