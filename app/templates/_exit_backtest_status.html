@@ -1,25 +1,20 @@
 {# Self-terminating HTMX poll: re-fetches every 3s while running, stops otherwise. #}
 <div{% if state.running %} hx-get="/_partial/exit-backtest/status" hx-trigger="load delay:3s" hx-swap="outerHTML"{% endif %}>
-  {% if state.status == 'idle' %}
-    <p class="muted">No run yet — configure above and hit <b>Run backtest</b>.</p>
-  {% elif state.running %}
-    <section class="card">
-      <h2>⏳ Running… <span class="muted">{{ state.elapsed_sec() }}s elapsed</span></h2>
+  <section class="card">
+    {% if state.status == 'running' %}
+      <h2>🟢 RUNNING <span class="muted">· {{ state.elapsed_sec() }}s elapsed</span></h2>
       {% if state.params %}
       <p class="muted">{{ '%g'|format(state.params.months) }}mo · entry
         {{ state.params.entry_tf }} / exit {{ state.params.exit_tf }}{% if state.params.pairs %}
-        · {{ state.params.pairs }}{% else %} · fixed universe{% endif %}</p>
+        · {{ state.params.pairs }}{% else %} · fixed universe{% endif %}
+        — auto-refreshing…</p>
       {% endif %}
-    </section>
-  {% elif state.status == 'error' %}
-    <section class="card">
-      <h2>Failed <span class="muted">rc={{ state.returncode }}</span></h2>
+    {% elif state.status == 'error' %}
+      <h2 class="error">❌ FAILED <span class="muted">rc={{ state.returncode }}</span></h2>
       <pre class="mono small error">{{ state.error }}</pre>
-      {% if state.stderr %}<pre class="mono small error">{{ state.stderr }}</pre>{% endif %}
-    </section>
-  {% elif state.status == 'done' %}
-    <section class="card">
-      <h2>Done
+      {% if state.stderr_tail %}<pre class="mono small error">{{ state.stderr_tail }}</pre>{% endif %}
+    {% elif state.status == 'done' %}
+      <h2>✅ DONE
         <span class="muted">{{ state.n_signals }} signals · {{ state.elapsed_sec() }}s</span>
       </h2>
       <p>
@@ -28,6 +23,10 @@
         <a href="/exit-backtest/download.md">⬇ summary.md</a>
       </p>
       {% if state.summary_md %}<pre class="mono small">{{ state.summary_md }}</pre>{% endif %}
-    </section>
-  {% endif %}
+    {% else %}
+      <h2>○ IDLE <span class="muted">· no run yet</span></h2>
+      <p class="muted">Configure below and hit <b>Run backtest</b> — this box will
+        switch to 🟢 RUNNING and refresh on its own.</p>
+    {% endif %}
+  </section>
 </div>

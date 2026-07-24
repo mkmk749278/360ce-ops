@@ -10,6 +10,7 @@ reads public Binance klines). See ``app/data_sources/exit_backtest.py``.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Request
 from starlette.responses import RedirectResponse, StreamingResponse
@@ -32,7 +33,7 @@ def _attachment(text: str, stem: str, ext: str, media: str) -> StreamingResponse
 
 
 @router.get("/exit-backtest")
-async def exit_backtest_page(request: Request):
+async def exit_backtest_page(request: Request, flash: str = "", ok: str = ""):
     runner = request.app.state.exit_backtest
     templates = request.app.state.templates
     return templates.TemplateResponse(
@@ -43,6 +44,9 @@ async def exit_backtest_page(request: Request):
             "runner": runner,
             "state": runner.snapshot(),
             "default_pairs": runner.default_pairs,
+            "diag": runner.diagnostics(),
+            "flash": flash,
+            "flash_ok": ok != "0",
         },
         # Never let a browser serve a cached idle page over a fresh run's state.
         headers={"Cache-Control": "no-store"},
@@ -72,9 +76,12 @@ async def exit_backtest_run(
         fee_pct=fee_pct, funding_bps=funding_bps, lookahead=lookahead,
         max_forward_bars=max_forward_bars,
     )
-    runner.start(params)
-    # PRG: a refresh lands on GET, never re-fires the run.
-    return RedirectResponse("/exit-backtest", status_code=303)
+    ok, msg = runner.start(params)
+    # PRG: a refresh lands on GET, never re-fires the run. Carry the outcome so
+    # the page always says what happened (started / already running / disabled /
+    # state-write failure) instead of looking like nothing happened.
+    q = urlencode({"flash": msg, "ok": "1" if ok else "0"})
+    return RedirectResponse(f"/exit-backtest?{q}", status_code=303)
 
 
 @router.get("/_partial/exit-backtest/status")
