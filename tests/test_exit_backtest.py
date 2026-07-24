@@ -135,6 +135,37 @@ async def test_run_rejects_unsafe_out_root():
     r._exec.assert_not_awaited()                 # never reached docker exec
 
 
+def test_start_refuses_when_state_dir_not_writable():
+    r = _runner()
+    # Point the state dir at a path *under a regular file* so makedirs fails —
+    # this is the silent "nothing happens" mode we now surface loudly.
+    import tempfile
+    fd, blocker = tempfile.mkstemp()
+    os.close(fd)
+    r._dir = os.path.join(blocker, "sub")
+    r._state_path = os.path.join(r._dir, "state.json")
+    ok, msg = r.start(_params())
+    assert ok is False and "not" in msg.lower() and "writable" in msg.lower()
+    assert r.diagnostics()["writable"] is False
+
+
+def test_diagnostics_and_status_render_on_page():
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/exit-backtest")
+        assert r.status_code == 200
+        assert "state dir" in r.text and "engine container" in r.text
+        assert "IDLE" in r.text                      # prominent status badge
+
+
+def test_flash_message_renders():
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/exit-backtest?flash=a+backtest+is+already+running&ok=0")
+        assert r.status_code == 200
+        assert "already running" in r.text
+
+
 async def test_state_is_shared_across_runner_instances():
     """The bug fix: a POST that starts a job on one worker must be visible to a
     poll served by a *different* worker. Two runner instances over the same state

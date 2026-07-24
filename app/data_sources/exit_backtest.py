@@ -202,6 +202,30 @@ class ExitBacktestRunner:
     def timeout_sec(self) -> int:
         return self._timeout
 
+    def _writable(self) -> bool:
+        """True iff we can actually create + write the state dir (the silent
+        failure mode: /data not mounted writable → state never persists → the
+        page shows idle after Run)."""
+        try:
+            os.makedirs(self._dir, exist_ok=True)
+            probe = os.path.join(self._dir, ".wtest")
+            with open(probe, "w", encoding="utf-8") as fh:
+                fh.write("ok")
+            os.unlink(probe)
+            return True
+        except OSError:
+            return False
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Surfaced on the page so a broken deploy is self-evident."""
+        return {
+            "engine_container": self._container,
+            "state_dir": self._dir,
+            "writable": self._writable(),
+            "script": _SCRIPT,
+            "timeout_sec": self._timeout,
+        }
+
     # --- persistence ------------------------------------------------------- #
     def _read_raw(self) -> dict[str, Any]:
         try:
@@ -291,6 +315,9 @@ class ExitBacktestRunner:
         with self._lock:
             if self.snapshot().running:
                 return False, "a backtest is already running"
+            if not self._writable():
+                return False, (f"cannot persist job state — {self._dir} is not "
+                               "writable (ops-data volume). Fix the mount and retry.")
             # Clear stale artifacts and stamp the running state atomically so a
             # concurrent poll (any process) immediately sees "running".
             for p in (self._csv_path, self._md_path):
@@ -303,6 +330,10 @@ class ExitBacktestRunner:
                 "params": params.to_dict(),
                 "started_at": time.time(),
             })
+            # Confirm it actually landed — never return "started" on a silent
+            # write failure (that was the invisible-idle bug class).
+            if self._read_raw().get("status") != "running":
+                return False, "failed to persist job state (write returned no data)"
         self._task = asyncio.create_task(self._run(params))
         return True, "started"
 
