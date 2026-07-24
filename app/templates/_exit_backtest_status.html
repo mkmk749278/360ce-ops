@@ -1,5 +1,11 @@
-{# Self-terminating HTMX poll: re-fetches every 3s while running, stops otherwise. #}
+{# Self-terminating HTMX poll: re-fetches every 3s while running, stops otherwise.
+   Also returned directly as the hx-post response when Run is clicked, so the
+   confirmation comes from the same request that started the job (no dependency
+   on a redirect landing on a volume-sharing process). #}
 <div{% if state.running %} hx-get="/_partial/exit-backtest/status" hx-trigger="load delay:3s" hx-swap="outerHTML"{% endif %}>
+  {% if flash %}
+    <p class="{{ '' if flash_ok else 'error' }}">{{ '✅' if flash_ok else '⚠️' }} {{ flash }}</p>
+  {% endif %}
   <section class="card">
     {% if state.status == 'running' %}
       <h2>🟢 RUNNING <span class="muted">· {{ state.elapsed_sec() }}s elapsed</span></h2>
