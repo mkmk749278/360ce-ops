@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}SAR signals — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>SAR signals <span class="muted">— what a trailing 15m Parabolic SAR would have done, trade by trade</span></h1>
+
+<section class="card">
+  <p class="small">
+    {% if ledger_status.state == 'live' %}<span class="badge st-done">LIVE</span>
+    {% elif ledger_status.state == 'measuring' %}<span class="badge st-partial">MEASURING</span>
+    {% elif ledger_status.state == 'dark' %}<span class="badge st-open">DARK</span>
+    {% else %}<span class="badge sev-high">UNAVAILABLE</span>{% endif %}
+    {{ ledger_status.detail }}
+  </p>
+  <p class="muted small">These are <strong>shadow trades, not signals</strong> — none was dispatched,
+  sent to a subscriber, or opened on anyone's capital. A SAR trade has <strong>no TP and no SL</strong>:
+  the trail is its only exit, so those columns don't exist here. It closes when the moving stop catches
+  price, or gets marked to the close if 48h pass untouched.
+  The live signal book is under <a href="/signals">Feed</a>.</p>
+</section>
+
+<form method="get" action="/signals/sar" class="filters">
+  <label>Status
+    <select name="status">
+      <option value="">all</option>
+      {% for s in statuses %}<option value="{{ s }}" {% if s == filter_status %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+  </label>
+  <label>Setup class
+    <select name="strategy">
+      <option value="">all</option>
+      {% for s in strategies %}<option value="{{ s }}" {% if s == filter_strategy %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+  </label>
+  <button type="submit">Filter</button>
+  <span class="muted">{{ rows | length }} of {{ total }} rows</span>
+</form>
+
+<div class="actions">
+  <a class="btn" href="/signals/sar/export.csv{% if filter_status or filter_strategy %}?{% if filter_status %}status={{ filter_status | urlencode }}{% endif %}{% if filter_status and filter_strategy %}&{% endif %}{% if filter_strategy %}strategy={{ filter_strategy | urlencode }}{% endif %}{% endif %}">Download CSV (current filter)</a>
+  <a class="btn" href="/sar-exit">A/B summary</a>
+</div>
+
+{% if rows %}
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Stamped</th>
+      <th>Symbol</th>
+      <th>Side</th>
+      <th>Setup</th>
+      <th>Entry</th>
+      <th>Closed at</th>
+      <th>Status</th>
+      <th>Held</th>
+      <th>R</th>
+      <th>PnL %</th>
+      <th>vs live</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="mono small" data-sort="{{ r.stamped_at }}"><span title="{{ r.stamped_iso }}">{{ r.stamped_iso[:16] or "—" }}</span></td>
+      <td>{{ r.symbol }}</td>
+      <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
+      <td class="small">{{ r.strategy }}</td>
+      <td class="mono">{{ "%.6g"|format(r.entry) }}</td>
+      <td class="mono">{% if r.exit_price %}{{ "%.6g"|format(r.exit_price) }}{% else %}—{% endif %}</td>
+      <td data-sort="{{ r.status }}"><span class="badge {{ r.status_class }}">{{ r.status }}</span></td>
+      <td class="small">{% if r.hold_min is not none %}{{ "%.0f"|format(r.hold_min) }}m{% else %}—{% endif %}</td>
+      <td class="{% if r.r_multiple is not none and r.r_multiple > 0 %}pos{% elif r.r_multiple is not none and r.r_multiple < 0 %}neg{% endif %}">
+        {% if r.r_multiple is not none %}{{ "%+.2f"|format(r.r_multiple) }}{% else %}—{% endif %}
+      </td>
+      <td class="{% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">
+        {% if r.pnl_pct is not none %}{{ "%+.2f"|format(r.pnl_pct) }}%{% else %}—{% endif %}
+      </td>
+      <td class="{% if r.delta_r is not none and r.delta_r > 0 %}pos{% elif r.delta_r is not none and r.delta_r < 0 %}neg{% endif %}">
+        {% if r.delta_r is not none %}{{ "%+.2f"|format(r.delta_r) }}R{% else %}—{% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted small">
+  <strong>RUNNING</strong> — stamped, still inside its 48h measurement window (no exit yet, so R and PnL are blank rather than zero).
+  <strong>CLOSED_TRAIL</strong> — the moving stop caught price.
+  <strong>CLOSED_WINDOW</strong> — 48h passed without the trail firing; marked to the window's close.
+  <strong>vs live</strong> — this trade's R minus what the live geometry (its paired <code>@SARBASE</code> arm) made on the same entry;
+  positive means the trail would have done better on this signal. Blank until both arms resolve.
+</p>
+{% else %}
+<section class="card"><div class="muted">
+  {% if total %}No SAR trades matched this filter.{% else %}No SAR trades stamped yet.{% endif %}
+</div></section>
+{% endif %}
+{% endblock %}

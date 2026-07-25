@@ -34,9 +34,10 @@ All reducers are pure module-top functions, unit-testable without the app.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
 
 from app.routes.strategy_lab import EDGE_MIN_SAMPLES, reduce_edge_matrix
 
@@ -176,31 +177,9 @@ def reduce_sar_pairs(records: Any, limit: int = 100) -> list[dict]:
     comparison, and showing one would invite reading the resolved arm alone.
     Newest first.
     """
-    if not isinstance(records, list):
-        return []
-    groups: dict[tuple, dict[str, list[dict]]] = {}
-    for rec in records:
-        if not isinstance(rec, dict):
-            continue
-        strategy = str(rec.get("setup_class", ""))
-        if strategy.endswith(SAREXIT_SUFFIX):
-            arm = "sar"
-        elif strategy.endswith(SARBASE_SUFFIX):
-            arm = "base"
-        else:
-            continue
-        key = (
-            str(rec.get("symbol", "")),
-            str(rec.get("side", "")).upper(),
-            _sar_base(strategy),
-        )
-        groups.setdefault(key, {"base": [], "sar": []})[arm].append(rec)
-
     out: list[dict] = []
-    for (symbol, side, strategy), arms in groups.items():
-        base_recs = sorted(arms["base"], key=lambda r: float(r.get("suppress_timestamp") or 0.0))
-        sar_recs = sorted(arms["sar"], key=lambda r: float(r.get("suppress_timestamp") or 0.0))
-        for base_rec, sar_rec in zip(base_recs, sar_recs):
+    for (symbol, side, strategy), arms in _group_arms(records).items():
+        for base_rec, sar_rec in zip(arms["base"], arms["sar"]):
             if base_rec.get("classification") is None or sar_rec.get("classification") is None:
                 continue
             base_r = _record_r(base_rec)
@@ -225,6 +204,150 @@ def reduce_sar_pairs(records: Any, limit: int = 100) -> list[dict]:
             })
     out.sort(key=lambda r: r["stamped_at"], reverse=True)
     return out[:limit]
+
+
+def _group_arms(records: Any) -> dict[tuple, dict[str, list[dict]]]:
+    """Group ledger records into (symbol, side, strategy) → {base:[…], sar:[…]}.
+
+    Sorted by stamp time within each arm so the k-th base record lines up with
+    the k-th trail record — the engine stamps both in one call under a
+    both-or-neither invariant, so ordinal position is the join key. Timestamps
+    differ by microseconds and are not safe to match on.
+    """
+    groups: dict[tuple, dict[str, list[dict]]] = {}
+    if not isinstance(records, list):
+        return groups
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        strategy = str(rec.get("setup_class", ""))
+        if strategy.endswith(SAREXIT_SUFFIX):
+            arm = "sar"
+        elif strategy.endswith(SARBASE_SUFFIX):
+            arm = "base"
+        else:
+            continue
+        key = (
+            str(rec.get("symbol", "")),
+            str(rec.get("side", "")).upper(),
+            _sar_base(strategy),
+        )
+        groups.setdefault(key, {"base": [], "sar": []})[arm].append(rec)
+    for arms in groups.values():
+        for arm in ("base", "sar"):
+            arms[arm].sort(key=lambda r: float(r.get("suppress_timestamp") or 0.0))
+    return groups
+
+
+# Status vocabulary for a SAR trade. A trailing exit has **no TP and no SL** —
+# the trail is the only way out — so the live signal statuses (TP1/TP2/SL) have
+# no analogue here and are deliberately absent. What a SAR trade can be:
+SAR_RUNNING = "RUNNING"          # stamped; its 48h window has not elapsed yet
+SAR_CLOSED_TRAIL = "CLOSED_TRAIL"   # the moving stop caught price
+SAR_CLOSED_WINDOW = "CLOSED_WINDOW"  # 48h passed untouched; marked to the close
+SAR_NO_DATA = "NO_DATA"          # window elapsed but candles couldn't resolve it
+
+SAR_STATUSES = (SAR_RUNNING, SAR_CLOSED_TRAIL, SAR_CLOSED_WINDOW, SAR_NO_DATA)
+
+
+def _sar_status(rec: dict) -> str:
+    cls = rec.get("classification")
+    if cls is None:
+        return SAR_RUNNING
+    if cls == "INSUFFICIENT_DATA":
+        return SAR_NO_DATA
+    reason = str(rec.get("trail_exit_reason") or "")
+    if reason == "window":
+        return SAR_CLOSED_WINDOW
+    if reason == "trail":
+        return SAR_CLOSED_TRAIL
+    return SAR_NO_DATA
+
+
+def _sar_status_class(status: str) -> str:
+    """Badge colour, mirroring the Feed's convention."""
+    if status == SAR_RUNNING:
+        return "st-active"
+    if status == SAR_CLOSED_TRAIL:
+        return "st-tp"
+    if status == SAR_CLOSED_WINDOW:
+        return "st-expired"
+    return "st-closed"
+
+
+def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
+    """The SAR arm as a signal-shaped feed — one row per stamped SAR trade.
+
+    Deliberately **not** the live-signal shape: a SAR trade carries no TP and no
+    SL, because the trail is its only exit. The stop/TP levels sitting on the
+    record are the live arm's geometry, kept solely as the shared R denominator,
+    and rendering them here would invite reading a level the trail never
+    consults. So the columns are entry, exit, status — what a trailing trade
+    actually has.
+
+    Still-running trades are included (they are the majority for the first 48h
+    after the flag goes live); their exit fields are ``None`` and the template
+    renders an em-dash rather than a zero, so "not yet" never reads as "flat".
+    """
+    out: list[dict] = []
+    for (symbol, side, strategy), arms in _group_arms(records).items():
+        base_recs, sar_recs = arms["base"], arms["sar"]
+        for i, rec in enumerate(sar_recs):
+            base_rec = base_recs[i] if i < len(base_recs) else None
+            status = _sar_status(rec)
+            entry = float(rec.get("entry") or 0.0)
+            exit_price = rec.get("trail_exit_price")
+            exit_price = float(exit_price) if exit_price else None
+            r_mult = _record_r(rec) if status != SAR_RUNNING else None
+            pnl_pct = None
+            if exit_price and entry > 0:
+                move = (exit_price - entry) if side == "LONG" else (entry - exit_price)
+                pnl_pct = move / entry * 100.0
+            # Δ vs the live arm — the reason this arm exists. Only when BOTH
+            # sides have resolved; a delta against an unresolved control is
+            # not a comparison.
+            delta_r = None
+            if r_mult is not None and base_rec is not None:
+                base_r = _record_r(base_rec)
+                if base_r is not None:
+                    delta_r = r_mult - base_r
+            stamped = float(rec.get("suppress_timestamp") or 0.0)
+            out.append({
+                "symbol": symbol,
+                "side": side,
+                "strategy": strategy,
+                "stamped_at": stamped,
+                "stamped_iso": (
+                    datetime.fromtimestamp(stamped, tz=timezone.utc).isoformat()
+                    if stamped > 0 else ""
+                ),
+                "context_key": str(rec.get("context_key", "")),
+                "regime": str(rec.get("regime", "")),
+                "entry": entry,
+                "exit_price": exit_price,
+                "exit_reason": rec.get("trail_exit_reason"),
+                "hold_min": rec.get("trail_hold_min"),
+                "mfe_pct": rec.get("trail_mfe_pct"),
+                "status": status,
+                "status_class": _sar_status_class(status),
+                "r_multiple": r_mult,
+                "pnl_pct": pnl_pct,
+                "delta_r": delta_r,
+            })
+    out.sort(key=lambda r: r["stamped_at"], reverse=True)
+    return out[:limit]
+
+
+def filter_sar_signals(
+    rows: list[dict], status: str = "", strategy: str = ""
+) -> list[dict]:
+    """Apply the Feed-style status / setup filters (pure)."""
+    out = rows
+    if status:
+        out = [r for r in out if r["status"] == status]
+    if strategy:
+        out = [r for r in out if r["strategy"] == strategy]
+    return out
 
 
 def reduce_ledger_status(records: Any, pairs: list[dict]) -> dict:
@@ -331,6 +454,59 @@ async def sar_exit(request: Request):
     ctx = _build_view(request.app.state.data_volume)
     ctx.update({"request": request, "active": "sar_exit"})
     return templates.TemplateResponse("sar_exit.html", ctx)
+
+
+@router.get("/signals/sar")
+async def sar_signals(
+    request: Request,
+    status: str = Query("", alias="status"),
+    strategy: str = Query("", alias="strategy"),
+):
+    """The SAR arm as a signal feed — lives under Signals, beside the live Feed.
+
+    Kept a **separate page** rather than merged into the live Feed on purpose:
+    these are counterfactual shadow trades, not dispatched signals. Nothing here
+    was ever sent to a subscriber or opened on anyone's capital, and the Feed's
+    row actions (force-close) are meaningless against a measurement record.
+    Mixing them would put shadow rows in the operator's live signal book.
+    """
+    templates = request.app.state.templates
+    ledger = request.app.state.data_volume.sar_exit_candidates()
+    all_rows = reduce_sar_signals(ledger)
+    rows = filter_sar_signals(all_rows, status=status, strategy=strategy)
+    return templates.TemplateResponse("sar_signals.html", {
+        "request": request,
+        "active": "sar_signals",
+        "rows": rows,
+        "total": len(all_rows),
+        "statuses": [s for s in SAR_STATUSES if any(r["status"] == s for r in all_rows)],
+        "strategies": sorted({r["strategy"] for r in all_rows}),
+        "filter_status": status,
+        "filter_strategy": strategy,
+        "ledger_status": reduce_ledger_status(ledger, []),
+    })
+
+
+_SIGNAL_COLS = [
+    "stamped_iso", "symbol", "side", "strategy", "entry", "exit_price",
+    "status", "exit_reason", "hold_min", "r_multiple", "pnl_pct", "delta_r",
+    "mfe_pct", "context_key",
+]
+
+
+@router.get("/signals/sar/export.csv")
+async def sar_signals_export_csv(
+    request: Request,
+    status: str = Query("", alias="status"),
+    strategy: str = Query("", alias="strategy"),
+):
+    """The SAR signal feed as CSV, honouring the current filter."""
+    from app.reports import csv_response
+
+    ledger = request.app.state.data_volume.sar_exit_candidates()
+    rows = filter_sar_signals(reduce_sar_signals(ledger), status=status, strategy=strategy)
+    data = [[r.get(c) for c in _SIGNAL_COLS] for r in rows]
+    return csv_response("sar_signals", _SIGNAL_COLS, data)
 
 
 _PAIR_COLS = [
