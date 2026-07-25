@@ -181,7 +181,11 @@ async def test_state_is_shared_across_runner_instances():
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def blocking_exec(cmd, timeout):
+    async def blocking_exec(cmd, timeout, params=None):
+        # `params` is the progress-persist handle the streaming exec takes; the
+        # main run passes it positionally, so the stub must accept it or the
+        # TypeError gets swallowed by _run's broad except and this test hangs
+        # on `started.wait()` instead of failing.
         started.set()
         await release.wait()          # keep the job "running"
         return (0, "", "")

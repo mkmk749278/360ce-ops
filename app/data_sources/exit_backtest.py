@@ -35,6 +35,7 @@ import os
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -53,6 +54,20 @@ _TF_CHOICES = ("1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h")
 # A "running" state older than the timeout plus this slack means the worker that
 # owned the job died mid-run (redeploy/crash) — report it rather than spin forever.
 _STALE_SLACK_SEC = 180
+# Lines of the script's stderr kept for the live status card and for the
+# timeout/failure report. Enough to hold every per-symbol [ok] line plus the
+# [pace] header for the 20-pair universe.
+_TAIL_LINES = 200
+# How often the running job's tail is flushed to the shared volume.
+_PROGRESS_EVERY_SEC = 3.0
+
+
+class _RunTimeout(Exception):
+    """Timeout carrying the stderr tail captured up to the kill."""
+
+    def __init__(self, tail: str) -> None:
+        super().__init__("timeout")
+        self.tail = tail
 
 
 def _safe_symbol(sym: str) -> Optional[str]:
@@ -158,6 +173,7 @@ class JobState:
     n_signals: Optional[int] = None
     summary_md: str = ""
     has_csv: bool = False
+    progress_tail: str = ""
 
     @property
     def running(self) -> bool:
@@ -285,6 +301,7 @@ class ExitBacktestRunner:
             error=str(raw.get("error") or ""),
             stderr_tail=str(raw.get("stderr_tail") or ""),
             n_signals=raw.get("n_signals"),
+            progress_tail=str(raw.get("progress_tail") or ""),
         )
         # A run whose owning process died mid-flight would sit "running" forever;
         # surface it as an error past a generous deadline instead.
@@ -293,6 +310,7 @@ class ExitBacktestRunner:
                 st.status = "error"
                 st.error = ("run did not finish — the worker may have restarted "
                             "mid-run. Check engine logs and retry.")
+                st.stderr_tail = st.stderr_tail or st.progress_tail
                 st.finished_at = st.finished_at or time.time()
         if st.status == "done":
             st.has_csv = os.path.exists(self._csv_path)
@@ -337,23 +355,77 @@ class ExitBacktestRunner:
         self._task = asyncio.create_task(self._run(params))
         return True, "started"
 
-    async def _exec(self, cmd: list[str], timeout: float) -> tuple[int, str, str]:
-        """Run a command, capturing stdout/stderr. Isolated for testability."""
+    async def _exec(
+        self, cmd: list[str], timeout: float,
+        params: "Optional[ExitBacktestParams]" = None,
+    ) -> tuple[int, str, str]:
+        """Run the backtest, streaming stderr so progress survives a timeout.
+
+        ``communicate()`` buffers both pipes until the process ends, so killing
+        it on timeout threw away everything the run had printed — a 3600s
+        timeout reported ``rc=None`` and nothing else, with no way to tell
+        whether it died in the fetch or the compute. The script prints
+        ``[pace]`` and ``[ok] SYM: N entries`` to stderr precisely so a long run
+        is legible; we keep a bounded tail of it and persist it as the run goes,
+        so the status card shows live progress AND a timeout still reports where
+        it got to.
+        """
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+        tail: deque[str] = deque(maxlen=_TAIL_LINES)
+        out_chunks: list[str] = []
+        last_persist = 0.0
+
+        async def _pump_err(stream: Any) -> None:
+            nonlocal last_persist
+            while True:
+                raw = await stream.readline()
+                if not raw:
+                    break
+                tail.append(raw.decode("utf-8", errors="replace").rstrip())
+                # Throttled: a busy run prints often, and every persist is a
+                # tmpfile + rename on the shared volume.
+                now = time.time()
+                if params is not None and now - last_persist >= _PROGRESS_EVERY_SEC:
+                    last_persist = now
+                    self._write_progress(params, "\n".join(tail))
+
+        async def _pump_out(stream: Any) -> None:
+            while True:
+                raw = await stream.readline()
+                if not raw:
+                    break
+                out_chunks.append(raw.decode("utf-8", errors="replace"))
+
+        pumps = asyncio.gather(_pump_err(proc.stderr), _pump_out(proc.stdout))
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            await asyncio.wait_for(proc.wait(), timeout=timeout)
+            await pumps
         except asyncio.TimeoutError:
+            pumps.cancel()
             try:
                 proc.kill()
             except ProcessLookupError:
                 pass
-            raise
+            # Hand the tail back to the caller so the failure is legible.
+            raise _RunTimeout("\n".join(tail)) from None
+        finally:
+            if not pumps.done():
+                pumps.cancel()
+
         rc = proc.returncode if proc.returncode is not None else 0
-        return rc, out.decode("utf-8", errors="replace"), err.decode("utf-8", errors="replace")
+        return rc, "".join(out_chunks), "\n".join(tail)
+
+    def _write_progress(self, params: ExitBacktestParams, tail: str) -> None:
+        """Refresh the running job's persisted tail (best-effort, never raises)."""
+        raw = self._read_raw()
+        if raw.get("status") != "running":
+            return  # a newer run (or a finish) owns the slot now
+        raw["progress_tail"] = tail
+        self._write_raw(raw)
 
     @staticmethod
     def _has_unsafe(values: list[str]) -> Optional[str]:
@@ -371,9 +443,14 @@ class ExitBacktestRunner:
             return
         cmd = ["docker", "exec", self._container, "python", _SCRIPT, *args]
         try:
-            rc, stdout, stderr = await self._exec(cmd, self._timeout)
-        except asyncio.TimeoutError:
-            self._finish_error(params, f"timeout after {self._timeout}s")
+            rc, stdout, stderr = await self._exec(cmd, self._timeout, params)
+        except _RunTimeout as exc:
+            self._finish_error(
+                params,
+                f"timeout after {self._timeout}s — killed mid-run; the tail below "
+                "is how far it got",
+                stderr=exc.tail,
+            )
             return
         except FileNotFoundError:
             self._finish_error(params, "docker binary not found in ops container")
@@ -402,6 +479,7 @@ class ExitBacktestRunner:
             "finished_at": time.time(),
             "returncode": 0,
             "n_signals": n_signals,
+            "stderr_tail": stderr[-4000:] if stderr else "",
         })
 
     async def _cat(self, path: str) -> Optional[str]:
