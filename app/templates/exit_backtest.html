@@ -78,8 +78,12 @@
 </p>
 
 <p class="muted small">
-  A full 6-month run over the default universe takes several minutes; the status
-  above updates itself and offers CSV + summary downloads when it finishes.
+  A <strong>first</strong> 6-month run over the default universe takes ~30 min — not
+  CPU, but Binance request weight: the script shares the production IP with live
+  trading, so it paces itself to the headroom the engine's rate limiter leaves free
+  rather than risking a 429/IP-ban on the money path. It caches the klines it
+  fetches, so <strong>re-runs with different exit knobs finish in minutes</strong>.
+  The status above updates itself and offers CSV + summary downloads when it finishes.
 </p>
 <p class="muted small">
   engine container <code>{{ diag.engine_container }}</code> ·
