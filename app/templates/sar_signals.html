@@ -96,6 +96,8 @@
       <th>Setup</th>
       <th>Source</th>
       <th>Entry</th>
+      <th>Current</th>
+      <th>Unreal %</th>
       <th>Closed at</th>
       <th>Status</th>
       <th>Held</th>
@@ -117,6 +119,10 @@
         {% else %}<span class="muted">—</span>{% endif %}
       </td>
       <td class="mono">{{ "%.6g"|format(r.entry) }}</td>
+      <td class="mono">{% if r.current_price %}{{ "%.6g"|format(r.current_price) }}{% else %}—{% endif %}</td>
+      <td class="{% if r.unrealized_pct is defined and r.unrealized_pct > 0 %}pos{% elif r.unrealized_pct is defined and r.unrealized_pct < 0 %}neg{% endif %}">
+        {% if r.unrealized_pct is defined %}{{ "%+.2f"|format(r.unrealized_pct) }}%{% else %}—{% endif %}
+      </td>
       <td class="mono">{% if r.exit_price %}{{ "%.6g"|format(r.exit_price) }}{% else %}—{% endif %}</td>
       <td data-sort="{{ r.status }}"><span class="badge {{ r.status_class }}">{{ r.status }}</span></td>
       <td class="small">{% if r.hold_min is not none %}{{ "%.0f"|format(r.hold_min) }}m{% else %}—{% endif %}</td>
@@ -142,6 +148,11 @@
   <strong>Source</strong> — <code>EMITTED</code> means this candidate actually went out to subscribers;
   <code>SUPPRESSED</code> means a gate killed it and nobody saw it. Both are measured, but only the
   emitted half can justify changing what users receive.
+  <strong>Current / Unreal %</strong> — live mark from Binance for trades still running, so an open
+  trade isn't a blank row for two days. It is <em>not</em> the SAR arm's result: both arms share this
+  entry, so the unrealized move is identical for both and says nothing about which exit wins. That is
+  why it sits in its own columns and never in R / PnL % / vs live, which stay blank until the trail
+  actually exits. Blank here means the price was unavailable, not that the trade is flat.
 </p>
 {% else %}
 <section class="card"><div class="muted">
