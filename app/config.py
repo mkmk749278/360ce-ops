@@ -159,10 +159,16 @@ def load_settings() -> Settings:
         dark_max_lookback_min=_env_int("DARK_MAX_LOOKBACK_MIN", 10080),
         dark_cache_ttl_sec=_env_int("DARK_CACHE_TTL_SEC", 30),
         dark_concurrency=_env_int("DARK_CONCURRENCY", 5),
-        # A full 6-month run over the default universe is minutes of compute, so
-        # the runner is a background job with a generous timeout (default 30min).
+        # Timeout sizing (2026-07-25). Compute is now ~5 min for a 6-month run
+        # over the default universe (the engine's Backtester was Theta(n^2) and
+        # is linear as of 360-v2#782). The binding constraint is Binance request
+        # weight, not CPU: the script shares the production IP with live trading,
+        # so it paces itself to the ~200 weight/min the engine's rate limiter
+        # leaves spare. A COLD 6-month/20-pair fetch is ~5,540 weight ~= 28 min,
+        # so 30 min was too tight by construction. Warm runs hit the script's
+        # on-disk kline cache and finish in minutes.
         exit_backtest_enabled=_env_bool("EXIT_BACKTEST_ENABLED", True),
-        exit_backtest_timeout_sec=_env_int("EXIT_BACKTEST_TIMEOUT_SEC", 1800),
+        exit_backtest_timeout_sec=_env_int("EXIT_BACKTEST_TIMEOUT_SEC", 3600),
         exit_backtest_default_pairs=_env("EXIT_BACKTEST_DEFAULT_PAIRS", ""),
         exit_backtest_out_root=_env("EXIT_BACKTEST_OUT_ROOT", "/app/scripts/out"),
         # Job state + artifacts on the shared ops-data volume so every worker
