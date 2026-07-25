@@ -18,13 +18,28 @@ For every change, ask: **"how does this make signals more profitable for paid su
 
 ## Scope of this repo
 
-Diagnostic dashboard **and the engine control plane** (promoted 2026-06-20). Diagnostic-first, but no longer read-only: Telegram is banned in-region, so the owner's manual control of the engine (auto-mode flips, kill switch, and — over time — manual close / per-user settings) now lives here. Monitoring of signals/positions/PnL stays primarily in the Lumin app; **ops owns control**.
+Diagnostic dashboard **and the engine control plane** (promoted 2026-06-20). Diagnostic-first, but no longer read-only: the owner's manual control of the engine (auto-mode flips, kill switch, and — over time — manual close / per-user settings) lives here. Monitoring of signals/positions/PnL stays primarily in the Lumin app; **ops owns control**.
+
+> **Correction 2026-07-25: Telegram is NOT banned in India — it works.** This doc
+> previously gave "Telegram is banned in-region" as the *reason* ops owns control.
+> That premise was false. The decision stands on its own — ops is the auditable,
+> owner-gated, PRG-confirmed control surface and that is where control belongs —
+> but it is a standing owner decision, not a consequence of Telegram being
+> unreachable. Do not re-derive product or routing choices from the old premise.
 
 Three deliverables live in this repo:
 
 - **The web dashboard + control plane** (`app/`) — FastAPI + HTMX, deployed at `ops.luminapp.org`.
 - **The 24/7 monitoring agent** (`app/agent/`) — a separate container (`python -m app.agent.runner`, 60s poll cycle) running the Tier-0 safety detectors (naked position, signing-service down, engine/Redis stale, …). Alert state is a Redis-backed dedup/escalation FSM (`alert:state:{fingerprint}`, in-memory fallback); it pages via FCM push (Telegram notifier retained in code) and pings a healthchecks.io heartbeat after each clean cycle. The web app's `/alerts` page reads the same Redis state.
 - **The native ops mobile app** (`mobile/`) — owner-only Flutter Android app over the ops `/api/v1` JSON surface (see `mobile/README.md` and `docs/OPS_MOBILE_APP_PLAN.md`). Its CI (`.github/workflows/mobile-apk.yml`) generates the Android scaffolding with `flutter create`, so `mobile/android/` is not committed.
+
+**This repo is also where "dark" becomes visible.** Money-path work in the engine
+ships dark — invisible to users, *live to the owner* (see `CLAUDE.md § Project
+Phase` in 360-v2). The measurement runs from day one; ops is where the owner
+actually reads it. So a dark engine change is not finished until its ops surface
+exists: a panel, a table, or a truth-report section readable the same day.
+"Measured but nowhere to look" is an unfinished change, and building that surface
+is this repo's job.
 
 Control doctrine (non-negotiable for every write surface):
 - **Owner-gated end to end.** Writes call the engine's owner-gated endpoints; the dashboard's static Bearer token is owner-tier on the engine. Everything stays behind the auth gate (password + TOTP when enrolled).
