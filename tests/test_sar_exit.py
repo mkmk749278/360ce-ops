@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 import time
 
+import pytest
+
 os.environ.setdefault("OPS_SESSION_SECRET", "test-secret")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
 
@@ -21,9 +23,14 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.data_sources.data_volume import DataVolumeReader  # noqa: E402
 from app.routes.sar_exit import (  # noqa: E402
+    SAR_CLOSED_TRAIL,
+    SAR_CLOSED_WINDOW,
+    SAR_RUNNING,
+    filter_sar_signals,
     reduce_ledger_status,
     reduce_sar_exit,
     reduce_sar_pairs,
+    reduce_sar_signals,
     reduce_totals,
 )
 from app.routes.strategy_lab import (  # noqa: E402
@@ -232,6 +239,81 @@ class TestLedgerStatus:
         assert "missing" in st["detail"]
 
 
+class TestSarSignalFeed:
+    """The signal-shaped view. A SAR trade has no TP and no SL — the trail is
+    its only exit — so those columns must not exist, and a still-running trade
+    must read as 'not yet', never as a flat zero."""
+
+    def test_running_trades_are_listed_with_no_exit_yet(self):
+        recs = [
+            _arm("@SARBASE", ts=1000.0, cls=None),
+            _arm("@SAREXIT", ts=1000.001, cls=None),
+        ]
+        rows = reduce_sar_signals(recs)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["status"] == SAR_RUNNING
+        assert row["status_class"] == "st-active"
+        # Blank, not zero — "no exit yet" must not read as a flat trade.
+        assert row["exit_price"] is None
+        assert row["r_multiple"] is None
+        assert row["pnl_pct"] is None
+        assert row["delta_r"] is None
+        assert row["entry"] == 100.0
+
+    def test_a_trail_close_carries_exit_price_r_and_pnl(self):
+        rows = reduce_sar_signals(_pair(1000.0, sar_exit=103.5))
+        row = rows[0]
+        assert row["status"] == SAR_CLOSED_TRAIL
+        assert row["status_class"] == "st-tp"
+        assert row["exit_price"] == 103.5
+        assert row["r_multiple"] == 3.5
+        assert row["pnl_pct"] == pytest.approx(3.5)     # (103.5-100)/100
+        assert row["delta_r"] == 1.5                    # 3.5 SAR − 2.0 live
+        assert row["hold_min"] == 90.0
+
+    def test_a_window_expiry_is_its_own_status(self):
+        recs = [
+            _arm("@SARBASE", ts=1.0, cls="WOULD_EXPIRE", post_price_final=100.5),
+            _arm("@SAREXIT", ts=1.001, cls="WOULD_EXPIRE", trail_exit_price=100.2,
+                 trail_exit_reason="window", trail_hold_min=2880.0),
+        ]
+        row = reduce_sar_signals(recs)[0]
+        assert row["status"] == SAR_CLOSED_WINDOW
+        assert row["status_class"] == "st-expired"
+        assert row["hold_min"] == 2880.0
+
+    def test_short_side_pnl_is_signed_from_the_short_direction(self):
+        recs = [
+            _arm("@SARBASE", ts=1.0, cls="WOULD_WIN", side="SHORT", tp1=98.0),
+            _arm("@SAREXIT", ts=1.001, cls="WOULD_WIN", side="SHORT",
+                 trail_exit_price=97.0, trail_exit_reason="trail"),
+        ]
+        row = reduce_sar_signals(recs)[0]
+        assert row["r_multiple"] == 3.0                 # (100-97)/1.0
+        assert row["pnl_pct"] == pytest.approx(3.0)     # short profits as price falls
+
+    def test_newest_first_and_bad_shapes_survive(self):
+        recs = _pair(1000.0) + _pair(2000.0, sar_exit=101.0)
+        rows = reduce_sar_signals(recs)
+        assert [r["stamped_at"] for r in rows] == [2000.001, 1000.001]
+        assert reduce_sar_signals({"error": "missing"}) == []
+        assert reduce_sar_signals(None) == []
+        assert reduce_sar_signals([None, 7, "x"]) == []
+
+    def test_filters(self):
+        recs = (
+            _pair(1000.0)
+            + [_arm("@SARBASE", ts=2000.0, cls=None), _arm("@SAREXIT", ts=2000.001, cls=None)]
+        )
+        rows = reduce_sar_signals(recs)
+        assert len(rows) == 2
+        assert len(filter_sar_signals(rows, status=SAR_RUNNING)) == 1
+        assert len(filter_sar_signals(rows, status=SAR_CLOSED_TRAIL)) == 1
+        assert len(filter_sar_signals(rows, strategy="SR_FLIP_RETEST")) == 2
+        assert len(filter_sar_signals(rows, strategy="NOPE")) == 0
+
+
 class TestSarExitRoutes:
     def _stub_volume(self, monkeypatch, *, ledger=None, edge=None):
         now = time.time()
@@ -317,3 +399,82 @@ class TestSarExitRoutes:
             r = client.get("/sar-exit")
             assert '/sar-exit' in r.text
             assert 'Strategy Lab' in r.text     # sibling under Autonomy
+
+
+class TestSarSignalRoutes:
+    def _stub_ledger(self, monkeypatch, ledger):
+        monkeypatch.setattr(
+            DataVolumeReader, "sar_exit_candidates", lambda self: ledger
+        )
+
+    def test_requires_auth(self):
+        with TestClient(app) as client:
+            r = client.get("/signals/sar", follow_redirects=False)
+            assert r.status_code == 302
+
+    def test_the_route_is_not_swallowed_by_the_signal_detail_catch_all(self, monkeypatch):
+        """`/signals/{signal_id}` is a catch-all registered on another router.
+        If ordering regresses, "sar" gets treated as a signal id and this page
+        silently becomes a signal-detail 404/blank instead of the feed."""
+        self._stub_ledger(monkeypatch, _pair(1000.0))
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals/sar")
+            assert r.status_code == 200
+            assert "SAR signals" in r.text
+            assert "Signal not found" not in r.text
+
+    def test_feed_renders_trades_without_tp_or_sl_columns(self, monkeypatch):
+        self._stub_ledger(monkeypatch, _pair(1000.0))
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals/sar")
+            assert r.status_code == 200
+            assert "BTCUSDT" in r.text
+            assert "CLOSED_TRAIL" in r.text
+            assert "<th>Entry</th>" in r.text
+            assert "<th>Closed at</th>" in r.text
+            # A trailing exit has neither — rendering them would show a level
+            # the trail never consults.
+            assert "<th>TP1</th>" not in r.text
+            assert "<th>SL</th>" not in r.text
+            assert "<th>Stop</th>" not in r.text
+
+    def test_filter_applies(self, monkeypatch):
+        recs = (
+            _pair(1000.0)
+            + [_arm("@SARBASE", ts=2000.0, cls=None), _arm("@SAREXIT", ts=2000.001, cls=None)]
+        )
+        self._stub_ledger(monkeypatch, recs)
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals/sar?status=RUNNING")
+            assert r.status_code == 200
+            assert "1 of 2 rows" in r.text
+
+    def test_empty_ledger_renders_the_dark_hint(self, monkeypatch):
+        self._stub_ledger(monkeypatch, [])
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals/sar")
+            assert r.status_code == 200
+            assert "No SAR trades stamped yet" in r.text
+            assert "DARK" in r.text
+
+    def test_csv_export(self, monkeypatch):
+        self._stub_ledger(monkeypatch, _pair(1000.0))
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals/sar/export.csv")
+            assert r.status_code == 200
+            assert "exit_price" in r.text and "delta_r" in r.text
+            assert "BTCUSDT" in r.text
+
+    def test_the_live_feed_still_works(self, monkeypatch):
+        """The new route must not disturb the real signal book."""
+        self._stub_ledger(monkeypatch, [])
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals")
+            assert r.status_code == 200
+            assert "<h1>Signals</h1>" in r.text

@@ -109,6 +109,10 @@ app.include_router(api_v1.router)
 app.include_router(pulse.router)
 app.include_router(truth.router)
 app.include_router(signals.router)
+# Before signal_detail: its `/signals/{signal_id}` is a catch-all that would
+# otherwise swallow `/signals/sar` and treat "sar" as a signal id. Same reason
+# `/signals/export.csv` sits on the signals router registered above.
+app.include_router(sar_exit.router)
 app.include_router(signal_detail.router)
 app.include_router(pairs.router)
 app.include_router(diag.router)
@@ -116,7 +120,6 @@ app.include_router(invalidations.router)
 app.include_router(performance.router)
 app.include_router(raw_edge.router)
 app.include_router(strategy_lab.router)
-app.include_router(sar_exit.router)
 app.include_router(positions.router)
 app.include_router(profit.router)
 app.include_router(dark_signals.router)
