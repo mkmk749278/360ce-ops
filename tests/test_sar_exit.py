@@ -28,6 +28,7 @@ from app.routes.sar_exit import (  # noqa: E402
     SAR_RUNNING,
     filter_sar_signals,
     reduce_ledger_status,
+    summarize_rows,
     reduce_sar_exit,
     reduce_sar_pairs,
     reduce_sar_signals,
@@ -68,11 +69,14 @@ def _arm(suffix: str, *, ts: float, cls: str | None, **kw) -> dict:
     return rec
 
 
-def _pair(ts: float, *, base_cls="WOULD_WIN", sar_cls="WOULD_WIN", sar_exit=103.5):
+def _pair(ts: float, *, base_cls="WOULD_WIN", sar_cls="WOULD_WIN", sar_exit=103.5,
+          provenance=""):
+    # Both arms share the provenance — they are one candidate, and a pair split
+    # across the source filter would corrupt both halves of the comparison.
     return [
-        _arm("@SARBASE", ts=ts, cls=base_cls),
+        _arm("@SARBASE", ts=ts, cls=base_cls, provenance=provenance),
         _arm("@SAREXIT", ts=ts + 0.001, cls=sar_cls, trail_exit_price=sar_exit,
-             trail_exit_reason="trail", trail_hold_min=90.0),
+             trail_exit_reason="trail", trail_hold_min=90.0, provenance=provenance),
     ]
 
 
@@ -314,6 +318,86 @@ class TestSarSignalFeed:
         assert len(filter_sar_signals(rows, strategy="NOPE")) == 0
 
 
+class TestSourceFilter:
+    """Emitted vs suppressed. The emitted subset is the only one whose answer
+    can justify changing what subscribers receive, so it must be separable and
+    must never be silently padded with unknown-provenance rows."""
+
+    def _mixed(self):
+        return (
+            _pair(1000.0, sar_exit=103.0, provenance="emitted")       # +3.0R
+            + _pair(2000.0, sar_exit=99.0, provenance="suppressed")   # -1.0R
+            + _pair(3000.0, sar_exit=104.0)                           # unknown
+        )
+
+    def test_all_shows_every_candidate(self):
+        rows = reduce_sar_signals(self._mixed())
+        assert len(filter_sar_signals(rows)) == 3
+
+    def test_emitted_narrows_to_signals_that_went_out(self):
+        rows = reduce_sar_signals(self._mixed())
+        emitted = filter_sar_signals(rows, source="emitted")
+        assert len(emitted) == 1
+        assert emitted[0]["r_multiple"] == 3.0
+
+    def test_suppressed_narrows_to_gate_kills(self):
+        rows = reduce_sar_signals(self._mixed())
+        supp = filter_sar_signals(rows, source="suppressed")
+        assert len(supp) == 1
+        assert supp[0]["r_multiple"] == -1.0
+
+    def test_unknown_provenance_matches_neither_filter(self):
+        """Guessing an old record into 'emitted' would inflate exactly the
+        number an adoption decision reads."""
+        rows = reduce_sar_signals(self._mixed())
+        assert len(filter_sar_signals(rows, source="emitted")) == 1
+        assert len(filter_sar_signals(rows, source="suppressed")) == 1
+        # 3 total, 1+1 named → the third is reachable only under "All".
+        assert sum(1 for r in rows if r["provenance"] == "") == 1
+
+    def test_source_composes_with_the_other_filters(self):
+        recs = self._mixed() + [
+            _arm("@SARBASE", ts=4000.0, cls=None, provenance="emitted"),
+            _arm("@SAREXIT", ts=4000.001, cls=None, provenance="emitted"),
+        ]
+        rows = reduce_sar_signals(recs)
+        both = filter_sar_signals(rows, source="emitted", status=SAR_RUNNING)
+        assert len(both) == 1
+        assert both[0]["stamped_at"] == 4000.001
+
+
+class TestFilteredSummary:
+    def test_averages_cover_resolved_trades_only(self):
+        """A running trade has no R. Scoring it 0R would drag the average
+        toward zero and make the arm look flat while it is still measuring."""
+        recs = _pair(1000.0, sar_exit=103.0) + [
+            _arm("@SARBASE", ts=2000.0, cls=None),
+            _arm("@SAREXIT", ts=2000.001, cls=None),
+        ]
+        s = summarize_rows(reduce_sar_signals(recs))
+        assert s["n"] == 2
+        assert s["running"] == 1
+        assert s["closed"] == 1
+        assert s["avg_r"] == 3.0          # not 1.5 — the running trade is excluded
+        assert s["win_rate"] == 1.0
+
+    def test_delta_covers_only_fully_paired_trades(self):
+        recs = _pair(1000.0, sar_exit=103.0)          # base +2.0, sar +3.0
+        s = summarize_rows(reduce_sar_signals(recs))
+        assert s["compared"] == 1
+        assert s["avg_delta_r"] == 1.0
+
+    def test_nothing_resolved_yet(self):
+        recs = [_arm("@SARBASE", ts=1.0, cls=None), _arm("@SAREXIT", ts=1.001, cls=None)]
+        s = summarize_rows(reduce_sar_signals(recs))
+        assert s["n"] == 1 and s["closed"] == 0
+        assert s["avg_r"] is None and s["win_rate"] is None
+
+    def test_empty(self):
+        s = summarize_rows([])
+        assert s["n"] == 0 and s["avg_r"] is None
+
+
 class TestSarExitRoutes:
     def _stub_volume(self, monkeypatch, *, ledger=None, edge=None):
         now = time.time()
@@ -469,6 +553,51 @@ class TestSarSignalRoutes:
             assert r.status_code == 200
             assert "exit_price" in r.text and "delta_r" in r.text
             assert "BTCUSDT" in r.text
+
+    def test_source_filter_renders_and_narrows(self, monkeypatch):
+        self._stub_ledger(
+            monkeypatch,
+            _pair(1000.0, sar_exit=103.0, provenance="emitted")
+            + _pair(2000.0, sar_exit=99.0, provenance="suppressed"),
+        )
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals/sar")
+            assert "Emitted to live (1)" in r.text
+            assert "Gate-suppressed (1)" in r.text
+            assert "EMITTED" in r.text and "SUPPRESSED" in r.text
+
+            r = client.get("/signals/sar?source=emitted")
+            assert r.status_code == 200
+            assert "1 of 2 rows" in r.text
+            assert "Signals we actually sent" in r.text
+            # The emitted trade made +3.0R; the suppressed one (−1.0R) must be
+            # excluded, so the total is +3.00 and not +2.00.
+            assert "+3.00R" in r.text
+            assert "+2.00R" not in r.text
+
+    def test_unknown_provenance_is_disclosed_not_hidden(self, monkeypatch):
+        self._stub_ledger(monkeypatch, _pair(1000.0))
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals/sar")
+            assert "1 UNKNOWN" in r.text
+            # Reachable under All, but not counted into either named source.
+            assert "Emitted to live (0)" in r.text
+
+    def test_csv_honours_the_source_filter(self, monkeypatch):
+        self._stub_ledger(
+            monkeypatch,
+            _pair(1000.0, provenance="emitted")
+            + _pair(2000.0, provenance="suppressed"),
+        )
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/signals/sar/export.csv?source=emitted")
+            assert r.status_code == 200
+            assert "provenance" in r.text
+            assert r.text.count("emitted") >= 1
+            assert "suppressed" not in r.text
 
     def test_the_live_feed_still_works(self, monkeypatch):
         """The new route must not disturb the real signal book."""
