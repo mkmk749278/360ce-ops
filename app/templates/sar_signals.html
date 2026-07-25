@@ -19,6 +19,13 @@
 </section>
 
 <form method="get" action="/signals/sar" class="filters">
+  <label>Source
+    <select name="source">
+      <option value="" {% if not filter_source %}selected{% endif %}>All ({{ total }})</option>
+      <option value="emitted" {% if filter_source == 'emitted' %}selected{% endif %}>Emitted to live ({{ n_emitted }})</option>
+      <option value="suppressed" {% if filter_source == 'suppressed' %}selected{% endif %}>Gate-suppressed ({{ n_suppressed }})</option>
+    </select>
+  </label>
   <label>Status
     <select name="status">
       <option value="">all</option>
@@ -36,9 +43,48 @@
 </form>
 
 <div class="actions">
-  <a class="btn" href="/signals/sar/export.csv{% if filter_status or filter_strategy %}?{% if filter_status %}status={{ filter_status | urlencode }}{% endif %}{% if filter_status and filter_strategy %}&{% endif %}{% if filter_strategy %}strategy={{ filter_strategy | urlencode }}{% endif %}{% endif %}">Download CSV (current filter)</a>
+  <a class="btn" href="/signals/sar/export.csv?status={{ filter_status | urlencode }}&strategy={{ filter_strategy | urlencode }}&source={{ filter_source | urlencode }}">Download CSV (current filter)</a>
   <a class="btn" href="/sar-exit">A/B summary</a>
 </div>
+
+{% if summary.n %}
+<section class="card">
+  <h2>
+    {% if filter_source == 'emitted' %}Signals we actually sent
+    {% elif filter_source == 'suppressed' %}Candidates a gate killed
+    {% else %}All stamped candidates{% endif %}
+    <span class="muted small">— {{ summary.n }} trades, {{ summary.closed }} resolved, {{ summary.running }} still running</span>
+  </h2>
+  {% if summary.closed %}
+  <div class="summary-row">
+    <span class="stat"><span class="n">{{ "%+.2f"|format(summary.total_r) }}R</span> total</span>
+    <span class="stat"><span class="n">{{ "%+.3f"|format(summary.avg_r) }}R</span> avg</span>
+    <span class="stat"><span class="n">{{ "%.0f"|format(summary.win_rate * 100) }}%</span> win</span>
+    {% if summary.avg_delta_r is not none %}
+    <span class="stat"><span class="n {% if summary.avg_delta_r > 0 %}pos{% elif summary.avg_delta_r < 0 %}neg{% endif %}">{{ "%+.3f"|format(summary.avg_delta_r) }}R</span> avg vs live ({{ summary.compared }} pairs)</span>
+    {% endif %}
+  </div>
+  <p class="muted small">Averages cover <strong>resolved</strong> trades only — a running trade has no R,
+  and counting it as 0R would drag every average toward zero and make the arm look flat while it is
+  simply still measuring.
+  {% if filter_source == 'emitted' %}<strong>This is the number that matters for adoption</strong>:
+  it is measured only on signals that actually reached subscribers.{% elif not filter_source %}
+  This mixes signals we sent with candidates we suppressed — switch Source to
+  <em>Emitted to live</em> for the population an adoption decision should read.{% endif %}</p>
+  {% else %}
+  <p class="muted small">Nothing resolved yet in this selection — each trade needs its 48h window.</p>
+  {% endif %}
+</section>
+{% endif %}
+
+{% if n_unknown %}
+<section class="card">
+  <p class="muted small"><span class="badge st-partial">{{ n_unknown }} UNKNOWN</span>
+  stamped before the engine started recording provenance. They appear under <em>All</em> but match
+  neither Source filter — counting them as emitted would inflate the one number an adoption
+  decision reads. They age out of the ledger on their own.</p>
+</section>
+{% endif %}
 
 {% if rows %}
 <table class="data-table">
@@ -48,6 +94,7 @@
       <th>Symbol</th>
       <th>Side</th>
       <th>Setup</th>
+      <th>Source</th>
       <th>Entry</th>
       <th>Closed at</th>
       <th>Status</th>
@@ -64,6 +111,11 @@
       <td>{{ r.symbol }}</td>
       <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
       <td class="small">{{ r.strategy }}</td>
+      <td class="small">
+        {% if r.provenance == 'emitted' %}<span class="badge st-done">EMITTED</span>
+        {% elif r.provenance == 'suppressed' %}<span class="badge st-closed">SUPPRESSED</span>
+        {% else %}<span class="muted">—</span>{% endif %}
+      </td>
       <td class="mono">{{ "%.6g"|format(r.entry) }}</td>
       <td class="mono">{% if r.exit_price %}{{ "%.6g"|format(r.exit_price) }}{% else %}—{% endif %}</td>
       <td data-sort="{{ r.status }}"><span class="badge {{ r.status_class }}">{{ r.status }}</span></td>
@@ -87,6 +139,9 @@
   <strong>CLOSED_WINDOW</strong> — 48h passed without the trail firing; marked to the window's close.
   <strong>vs live</strong> — this trade's R minus what the live geometry (its paired <code>@SARBASE</code> arm) made on the same entry;
   positive means the trail would have done better on this signal. Blank until both arms resolve.
+  <strong>Source</strong> — <code>EMITTED</code> means this candidate actually went out to subscribers;
+  <code>SUPPRESSED</code> means a gate killed it and nobody saw it. Both are measured, but only the
+  emitted half can justify changing what users receive.
 </p>
 {% else %}
 <section class="card"><div class="muted">

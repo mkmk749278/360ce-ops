@@ -249,6 +249,17 @@ SAR_NO_DATA = "NO_DATA"          # window elapsed but candles couldn't resolve i
 
 SAR_STATUSES = (SAR_RUNNING, SAR_CLOSED_TRAIL, SAR_CLOSED_WINDOW, SAR_NO_DATA)
 
+# Provenance (engine: src/suppression_audit.py). The arm stamps from both
+# scanner call sites, so the ledger mixes candidates that reached subscribers
+# with candidates a gate killed. Only the EMITTED half can justify changing
+# what users receive — "would this exit have improved the signals we sent" is a
+# different question from "…every candidate we considered", and they can have
+# different answers. Records stamped before the engine recorded this read
+# UNKNOWN and are excluded from both filters rather than guessed at.
+PROV_EMITTED = "emitted"
+PROV_SUPPRESSED = "suppressed"
+PROV_UNKNOWN = ""
+
 
 def _sar_status(rec: dict) -> str:
     cls = rec.get("classification")
@@ -323,6 +334,7 @@ def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
                 ),
                 "context_key": str(rec.get("context_key", "")),
                 "regime": str(rec.get("regime", "")),
+                "provenance": str(rec.get("provenance", "") or PROV_UNKNOWN),
                 "entry": entry,
                 "exit_price": exit_price,
                 "exit_reason": rec.get("trail_exit_reason"),
@@ -339,15 +351,49 @@ def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
 
 
 def filter_sar_signals(
-    rows: list[dict], status: str = "", strategy: str = ""
+    rows: list[dict], status: str = "", strategy: str = "", source: str = ""
 ) -> list[dict]:
-    """Apply the Feed-style status / setup filters (pure)."""
+    """Apply the status / setup / source filters (pure).
+
+    ``source`` empty means **all** — every stamped candidate, emitted or not.
+    Selecting ``emitted`` narrows to the signals that actually went out, which
+    is the only population whose answer can justify changing live behaviour.
+    An unknown-provenance record matches neither named filter: it is excluded
+    rather than assumed, because guessing it into ``emitted`` would inflate
+    exactly the number an adoption decision reads.
+    """
     out = rows
     if status:
         out = [r for r in out if r["status"] == status]
     if strategy:
         out = [r for r in out if r["strategy"] == strategy]
+    if source:
+        out = [r for r in out if r["provenance"] == source]
     return out
+
+
+def summarize_rows(rows: list[dict]) -> dict:
+    """Headline for whatever the current filter selected.
+
+    Averages are over **resolved** trades only — a running trade has no R, and
+    counting it as 0R would drag every average toward zero and make the arm
+    look flat while it is simply still measuring.
+    """
+    closed = [r for r in rows if r["r_multiple"] is not None]
+    compared = [r for r in rows if r["delta_r"] is not None]
+    wins = sum(1 for r in closed if r["r_multiple"] > 0)
+    return {
+        "n": len(rows),
+        "running": sum(1 for r in rows if r["status"] == SAR_RUNNING),
+        "closed": len(closed),
+        "avg_r": (sum(r["r_multiple"] for r in closed) / len(closed)) if closed else None,
+        "total_r": sum(r["r_multiple"] for r in closed) if closed else None,
+        "win_rate": (wins / len(closed)) if closed else None,
+        "compared": len(compared),
+        "avg_delta_r": (
+            sum(r["delta_r"] for r in compared) / len(compared)
+        ) if compared else None,
+    }
 
 
 def reduce_ledger_status(records: Any, pairs: list[dict]) -> dict:
@@ -461,6 +507,7 @@ async def sar_signals(
     request: Request,
     status: str = Query("", alias="status"),
     strategy: str = Query("", alias="strategy"),
+    source: str = Query("", alias="source"),
 ):
     """The SAR arm as a signal feed — lives under Signals, beside the live Feed.
 
@@ -473,24 +520,29 @@ async def sar_signals(
     templates = request.app.state.templates
     ledger = request.app.state.data_volume.sar_exit_candidates()
     all_rows = reduce_sar_signals(ledger)
-    rows = filter_sar_signals(all_rows, status=status, strategy=strategy)
+    rows = filter_sar_signals(all_rows, status=status, strategy=strategy, source=source)
     return templates.TemplateResponse("sar_signals.html", {
         "request": request,
         "active": "sar_signals",
         "rows": rows,
         "total": len(all_rows),
+        "summary": summarize_rows(rows),
         "statuses": [s for s in SAR_STATUSES if any(r["status"] == s for r in all_rows)],
         "strategies": sorted({r["strategy"] for r in all_rows}),
+        "n_emitted": sum(1 for r in all_rows if r["provenance"] == PROV_EMITTED),
+        "n_suppressed": sum(1 for r in all_rows if r["provenance"] == PROV_SUPPRESSED),
+        "n_unknown": sum(1 for r in all_rows if r["provenance"] == PROV_UNKNOWN),
         "filter_status": status,
         "filter_strategy": strategy,
+        "filter_source": source,
         "ledger_status": reduce_ledger_status(ledger, []),
     })
 
 
 _SIGNAL_COLS = [
-    "stamped_iso", "symbol", "side", "strategy", "entry", "exit_price",
-    "status", "exit_reason", "hold_min", "r_multiple", "pnl_pct", "delta_r",
-    "mfe_pct", "context_key",
+    "stamped_iso", "symbol", "side", "strategy", "provenance", "entry",
+    "exit_price", "status", "exit_reason", "hold_min", "r_multiple", "pnl_pct",
+    "delta_r", "mfe_pct", "context_key",
 ]
 
 
@@ -499,12 +551,15 @@ async def sar_signals_export_csv(
     request: Request,
     status: str = Query("", alias="status"),
     strategy: str = Query("", alias="strategy"),
+    source: str = Query("", alias="source"),
 ):
     """The SAR signal feed as CSV, honouring the current filter."""
     from app.reports import csv_response
 
     ledger = request.app.state.data_volume.sar_exit_candidates()
-    rows = filter_sar_signals(reduce_sar_signals(ledger), status=status, strategy=strategy)
+    rows = filter_sar_signals(
+        reduce_sar_signals(ledger), status=status, strategy=strategy, source=source
+    )
     data = [[r.get(c) for c in _SIGNAL_COLS] for r in rows]
     return csv_response("sar_signals", _SIGNAL_COLS, data)
 
