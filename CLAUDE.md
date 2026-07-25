@@ -51,6 +51,26 @@ Control doctrine (non-negotiable for every write surface):
 
 Every change ships via PR. Fresh topic branch off `main`. Design-summary in the PR body before code review. Never push to `main` directly — auto-deploy on `main` push ships in ~60s and bypasses review.
 
+## What the Strategy Lab is (and what it must not do)
+
+`/strategy-lab` is the owner-facing surface of the engine's **Autonomous Portfolio**
+(Layers A–G — see `OWNER_BRIEF.md § 3.11` in 360-v2). It renders the
+Strategy×Context edge matrix, the per-gate KEEP/TUNE/DROP audit, the allocator's
+would-do panel, and the counterfactual measurement arms.
+
+Two rules, both learned the hard way:
+
+- **Measurement arms are not strategies.** `@FIXED`/`@ATR`/`@TUNED`/`@DSV2`/`@GOV`/
+  `@SARBASE`/`@SAREXIT` are stamped from the *same candidates* as the real rows, so
+  counting them in the per-strategy rollup double-counts the candidate. The list
+  lives in `strategy_lab.MEASUREMENT_SUFFIXES` and mirrors the engine's
+  `geometry_ab._VARIANT_SUFFIXES` — **keep them in sync.** They drifted once
+  (@TUNED/@DSV2/@GOV shipped engine-side and ops never learned about them) and
+  quietly inflated the rollup for a week.
+- **Ops ports the engine's math, it does not invent it.** Reducers here are ports of
+  engine functions; the thresholds are mirrored and displayed in the UI footer for
+  honesty. If a number here disagrees with the truth report, ops is wrong.
+
 ## Data sources (one-line each)
 
 | Source | Module |
