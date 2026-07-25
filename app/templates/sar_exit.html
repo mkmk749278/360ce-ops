@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+{% block title %}SAR exit A/B — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>SAR exit A/B <span class="muted">— live geometry vs a trailing 15m Parabolic SAR, on real signals</span></h1>
+
+<div class="export-row">
+  <span class="lbl">Download:</span>
+  <a class="btn" href="/sar-exit/export.csv">Paired trades CSV</a>
+  <a class="btn" href="/sar-exit/export.json">Full view JSON</a>
+</div>
+
+<section class="card">
+  <h2>Measurement state</h2>
+  <p class="small">
+    {% if status.state == 'live' %}<span class="badge st-done">LIVE</span>
+    {% elif status.state == 'measuring' %}<span class="badge st-partial">MEASURING</span>
+    {% elif status.state == 'dark' %}<span class="badge st-open">DARK</span>
+    {% else %}<span class="badge sev-high">UNAVAILABLE</span>{% endif %}
+    {{ status.detail }}
+  </p>
+  <div class="summary-row">
+    <span class="stat"><span class="n">{{ status.stamped }}</span> arms stamped</span>
+    <span class="stat"><span class="n">{{ status.classified }}</span> resolved</span>
+    <span class="stat"><span class="n">{{ status.pending }}</span> awaiting window</span>
+    <span class="stat"><span class="n">{{ status.pairs }}</span> complete pairs</span>
+  </div>
+  <p class="muted small">The arm ships <strong>dark</strong>: it stamps nothing until
+  <code>sar_exit_shadow_enabled</code> is switched on. An empty ledger here means off, not broken.
+  Observe-only either way — no live exit, FSM transition or dispatch reads any of this, and
+  activating a SAR exit is a separate owner-signed change.</p>
+</section>
+
+{% if totals.n %}
+<section class="card">
+  <h2>Paired totals <span class="muted small">({{ totals.n }} trades where both arms resolved)</span></h2>
+  <table class="data-table">
+    <thead>
+      <tr><th>Arm</th><th>Total R</th><th>Avg R</th><th>Median R</th><th>Win %</th><th>PF</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="mono">Live geometry</td>
+        <td>{{ "%+.2f"|format(totals.base_total_r) }}</td>
+        <td>{{ "%+.3f"|format(totals.base_avg_r) }}</td>
+        <td>{{ "%+.3f"|format(totals.base_median_r) }}</td>
+        <td>{{ "%.0f"|format(totals.base_win_rate * 100) }}%</td>
+        <td>{{ "%.2f"|format(totals.base_pf) if totals.base_pf is not none else "—" }}</td>
+      </tr>
+      <tr>
+        <td class="mono">SAR trail</td>
+        <td>{{ "%+.2f"|format(totals.sar_total_r) }}</td>
+        <td>{{ "%+.3f"|format(totals.sar_avg_r) }}</td>
+        <td>{{ "%+.3f"|format(totals.sar_median_r) }}</td>
+        <td>{{ "%.0f"|format(totals.sar_win_rate * 100) }}%</td>
+        <td>{{ "%.2f"|format(totals.sar_pf) if totals.sar_pf is not none else "—" }}</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="small">Δ total: <strong>{{ "%+.2f"|format(totals.delta_total_r) }}R</strong>
+    (positive = the trail would have earned more on these same signals)</p>
+  <p class="muted small">Both columns are <strong>gross</strong> R over the identical 192-bar (48h)
+  window, divided by the same live stop distance — so hold time is not a confound here, and a
+  wider-riding exit still has to pay more R per unit of risk to win. Median is shown beside mean
+  deliberately: a trend-following exit's signature is a negative median with a positive mean, and
+  whether that disqualifies it is the criterion the owner deferred on 2026-07-25.</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Per-strategy rollup <span class="muted small">(from the edge matrix, pooled across contexts)</span></h2>
+  {% if rollup %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Strategy</th><th>n live</th><th>Win% / R live</th>
+        <th>n SAR</th><th>Win% / R SAR</th><th>ΔR (SAR−live)</th><th>Leader</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rollup %}
+      <tr>
+        <td class="mono">{{ r.strategy }}</td>
+        <td>{{ r.base.n }}</td>
+        <td>{{ "%.0f"|format(r.base.win_rate * 100) }}% / {{ "%+.2f"|format(r.base.avg_r) }}R</td>
+        <td>{{ r.sar.n }}</td>
+        <td>{{ "%.0f"|format(r.sar.win_rate * 100) }}% / {{ "%+.2f"|format(r.sar.avg_r) }}R</td>
+        <td>{{ "%+.2f"|format(r.delta_r) if r.delta_r is not none else "—" }}</td>
+        <td><span class="badge {% if r.leader == 'SAR' %}st-done{% elif r.leader == 'LIVE' %}st-partial{% else %}st-open{% endif %}">{{ r.leader }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">A leader is named only when <strong>both</strong> arms clear
+  n≥{{ min_sample }}; a thin arm reads MEASURING, never a winner. These rows are counterfactual
+  measurement arms, not strategies — they are excluded from the Strategy Lab's per-strategy table
+  on purpose, since both arms are stamped from the same candidate and would double-count it.</p>
+  {% else %}
+  <p class="muted">No SAR arms in the edge matrix yet — rows appear once stamped pairs resolve
+  and feed the matrix on the engine's 5-min audit cycle.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Paired trades <span class="muted small">(newest first — the individual signals behind the numbers)</span></h2>
+  {% if pairs %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Side</th><th>Strategy</th><th>Entry</th>
+        <th>Live outcome</th><th>R live</th>
+        <th>SAR outcome</th><th>R SAR</th><th>SAR exit</th><th>Held</th><th>ΔR</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for p in pairs %}
+      <tr>
+        <td class="mono">{{ p.symbol }}</td>
+        <td>{{ p.side }}</td>
+        <td class="mono small">{{ p.strategy }}</td>
+        <td>{{ "%.6g"|format(p.entry) }}</td>
+        <td class="small">{{ p.base_class }}</td>
+        <td>{{ "%+.2f"|format(p.base_r) }}</td>
+        <td class="small">{{ p.sar_class }}</td>
+        <td>{{ "%+.2f"|format(p.sar_r) }}</td>
+        <td class="small">
+          {% if p.sar_exit_price %}{{ "%.6g"|format(p.sar_exit_price) }}{% else %}—{% endif %}
+          {% if p.sar_exit_reason %}<span class="muted">({{ p.sar_exit_reason }})</span>{% endif %}
+        </td>
+        <td class="small">{% if p.sar_hold_min is not none %}{{ "%.0f"|format(p.sar_hold_min) }}m{% else %}—{% endif %}</td>
+        <td><strong>{{ "%+.2f"|format(p.delta_r) }}</strong></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">A pair appears only once <strong>both</strong> arms have resolved — half a
+  pair is not a comparison. <code>trail</code> means the moving stop caught price;
+  <code>window</code> means it never fired inside 48h and the trade was marked to the window's
+  close.</p>
+  {% else %}
+  <p class="muted">No completed pairs yet. Each stamped pair needs a 48h forward window of real
+  candles before both arms resolve.</p>
+  {% endif %}
+</section>
+{% endblock %}

@@ -164,14 +164,33 @@ def _alignment(strategy: str, context_key: str, affinity: Optional[dict]) -> Opt
 # strategies — they get their own A/B card and stay out of the strategy rollup.
 GEOMETRY_SUFFIXES = ("@FIXED", "@ATR")
 
+# EVERY measurement-arm suffix the engine can write into the edge matrix —
+# the mirror of ``geometry_ab._VARIANT_SUFFIXES``.  This list had drifted: it
+# carried only @FIXED/@ATR while the engine had been writing @TUNED, @DSV2 and
+# @GOV rows for over a week, so those counterfactual arms were being counted in
+# the per-strategy rollup **as if they were strategies** — double-counting the
+# same candidates and moving the numbers the owner reads to make strategy
+# decisions.  @SARBASE/@SAREXIT (2026-07-25) would have been two more.
+#
+# Keep this in sync with the engine tuple. A measurement arm is evidence about
+# how to trade a strategy, never a strategy.
+MEASUREMENT_SUFFIXES = (
+    "@FIXED", "@ATR", "@TUNED", "@DSV2", "@GOV", "@SARBASE", "@SAREXIT",
+)
+
 
 def _is_geometry_variant(strategy: str) -> bool:
     return any(str(strategy or "").endswith(s) for s in GEOMETRY_SUFFIXES)
 
 
+def is_measurement_variant(strategy: str) -> bool:
+    """True for any counterfactual measurement row (never an activatable strategy)."""
+    return any(str(strategy or "").endswith(s) for s in MEASUREMENT_SUFFIXES)
+
+
 def _base_strategy(strategy: str) -> str:
     s = str(strategy or "")
-    for sfx in GEOMETRY_SUFFIXES:
+    for sfx in MEASUREMENT_SUFFIXES:
         if s.endswith(sfx):
             return s[: -len(sfx)]
     return s
@@ -236,12 +255,16 @@ def reduce_geometry_ab(rows: list[dict], min_sample: int = EDGE_MIN_SAMPLES) -> 
 def reduce_per_strategy(rows: list[dict]) -> list[dict]:
     """Aggregate matrix cells per strategy (sample-weighted).
 
-    Geometry A/B arms are excluded — they'd double-count their candidates
-    against the real strategy rows; they roll up in ``reduce_geometry_ab``.
+    **Every** measurement arm is excluded — geometry (@FIXED/@ATR), tuned
+    recipes (@TUNED), dispatch-rescue arms (@DSV2/@GOV) and the exit A/B
+    (@SARBASE/@SAREXIT). They are counterfactuals stamped from the same
+    candidates as the real rows, so counting them here double-counts the
+    candidate and shifts the per-strategy numbers. Each rolls up in its own
+    card instead.
     """
     agg: dict[str, dict] = {}
     for row in rows:
-        if _is_geometry_variant(row.get("strategy", "")):
+        if is_measurement_variant(row.get("strategy", "")):
             continue
         a = agg.setdefault(row["strategy"], {
             "strategy": row["strategy"],
