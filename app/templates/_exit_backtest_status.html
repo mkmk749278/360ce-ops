@@ -15,6 +15,13 @@
         · {{ state.params.pairs }}{% else %} · fixed universe{% endif %}
         — auto-refreshing…</p>
       {% endif %}
+      {% if state.progress_tail %}
+      {# Live stderr tail. A 6-month run is tens of minutes, so "is it moving?"
+         has to be answerable without waiting for it to finish. #}
+      <pre class="mono small">{{ state.progress_tail }}</pre>
+      {% else %}
+      <p class="muted small">waiting for first output…</p>
+      {% endif %}
     {% elif state.status == 'error' %}
       <h2 class="error">❌ FAILED <span class="muted">rc={{ state.returncode }}</span></h2>
       <pre class="mono small error">{{ state.error }}</pre>
