@@ -115,6 +115,9 @@ class BinanceKlinesClient:
             settings.binance_ban_cooldown_sec,
             settings.binance_ban_max_sec,
         )
+        # Whole-book price cache for fetch_all_prices (TTL enforced there).
+        self._prices: dict[str, float] = {}
+        self._prices_at: float = 0.0
 
     @property
     def circuit_open(self) -> bool:
@@ -139,6 +142,47 @@ class BinanceKlinesClient:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    async def fetch_all_prices(self, *, ttl_sec: float = 15.0) -> dict[str, float]:
+        """Last price for **every** futures symbol, in one request.
+
+        ``/fapi/v1/ticker/price`` with no symbol returns the whole book for
+        weight 2 — so marking N open rows costs one call, not N. Doing it
+        per-symbol would put the page's cost on the number of running trades,
+        which is exactly the hot-path shape the cost rules forbid.
+
+        TTL-cached (a mark that is 15s stale is fine for an operator view) and
+        ban-circuit aware. Returns ``{}`` rather than raising when prices are
+        unavailable: a missing mark must blank a column, never break the page.
+        """
+        now = time.monotonic()
+        if self._prices and (now - self._prices_at) < ttl_sec:
+            return self._prices
+        if self._circuit.open:
+            return {}
+        try:
+            r = await self.client.get("/fapi/v1/ticker/price")
+            if r.status_code in _BAN_STATUSES:
+                self._circuit.note_ban(r.text)
+                return {}
+            r.raise_for_status()
+            rows = r.json()
+        except (httpx.HTTPError, ValueError):
+            return {}
+        if not isinstance(rows, list):
+            return {}
+        out: dict[str, float] = {}
+        for row in rows:
+            try:
+                price = float(row["price"])
+                if price > 0:
+                    out[str(row["symbol"])] = price
+            except (KeyError, TypeError, ValueError):
+                continue
+        if out:
+            self._prices = out
+            self._prices_at = now
+        return out
 
     async def fetch_1m(self, symbol: str, start_ms: int, end_ms: int) -> list[Kline]:
         """All 1m candles for ``symbol`` in ``[start_ms, end_ms]`` (inclusive).

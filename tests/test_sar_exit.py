@@ -27,6 +27,7 @@ from app.routes.sar_exit import (  # noqa: E402
     SAR_CLOSED_WINDOW,
     SAR_RUNNING,
     filter_sar_signals,
+    mark_running_rows,
     reduce_ledger_status,
     summarize_rows,
     reduce_sar_exit,
@@ -398,6 +399,57 @@ class TestFilteredSummary:
         assert s["n"] == 0 and s["avg_r"] is None
 
 
+class TestMarkToMarket:
+    """Without a live mark the tab is a dead list for 48h — every row RUNNING,
+    every number blank. But the mark must never be mistaken for the arm's
+    result: both arms share the entry, so the unrealized move is identical for
+    both and says nothing about which exit wins."""
+
+    def _running(self, side="LONG"):
+        return reduce_sar_signals([
+            _arm("@SARBASE", ts=1.0, cls=None, side=side),
+            _arm("@SAREXIT", ts=1.001, cls=None, side=side),
+        ])
+
+    def test_long_marks_up_and_short_marks_down(self):
+        rows = mark_running_rows(self._running("LONG"), {"BTCUSDT": 103.0})
+        assert rows[0]["current_price"] == 103.0
+        assert rows[0]["unrealized_pct"] == pytest.approx(3.0)
+
+        rows = mark_running_rows(self._running("SHORT"), {"BTCUSDT": 97.0})
+        # A short profits as price falls.
+        assert rows[0]["unrealized_pct"] == pytest.approx(3.0)
+
+    def test_a_short_going_against_you_marks_negative(self):
+        rows = mark_running_rows(self._running("SHORT"), {"BTCUSDT": 102.0})
+        assert rows[0]["unrealized_pct"] == pytest.approx(-2.0)
+
+    def test_realized_columns_are_never_written(self):
+        """An unrealized number in a realized column is how a still-open trade
+        gets read as a finished one."""
+        rows = mark_running_rows(self._running(), {"BTCUSDT": 150.0})
+        assert rows[0]["r_multiple"] is None
+        assert rows[0]["pnl_pct"] is None
+        assert rows[0]["delta_r"] is None
+        assert rows[0]["exit_price"] is None
+
+    def test_closed_rows_are_not_marked(self):
+        rows = reduce_sar_signals(_pair(1.0, sar_exit=103.5))
+        mark_running_rows(rows, {"BTCUSDT": 999.0})
+        assert "current_price" not in rows[0]
+        # Its realized numbers are untouched.
+        assert rows[0]["r_multiple"] == 3.5
+
+    def test_a_missing_price_leaves_the_row_blank_not_zero(self):
+        rows = mark_running_rows(self._running(), {})
+        assert "current_price" not in rows[0]
+        assert "unrealized_pct" not in rows[0]
+
+    def test_a_junk_price_is_ignored(self):
+        rows = mark_running_rows(self._running(), {"BTCUSDT": 0.0})
+        assert "current_price" not in rows[0]
+
+
 class TestSarExitRoutes:
     def _stub_volume(self, monkeypatch, *, ledger=None, edge=None):
         now = time.time()
@@ -598,6 +650,40 @@ class TestSarSignalRoutes:
             assert "provenance" in r.text
             assert r.text.count("emitted") >= 1
             assert "suppressed" not in r.text
+
+    def test_running_rows_render_a_live_mark(self, monkeypatch):
+        self._stub_ledger(monkeypatch, [
+            _arm("@SARBASE", ts=1.0, cls=None, provenance="emitted"),
+            _arm("@SAREXIT", ts=1.001, cls=None, provenance="emitted"),
+        ])
+        with TestClient(app) as client:
+            _login(client)
+            client.app.state.binance_klines._prices = {"BTCUSDT": 104.0}
+            client.app.state.binance_klines._prices_at = time.monotonic()
+            r = client.get("/signals/sar")
+            assert r.status_code == 200
+            assert "<th>Current</th>" in r.text
+            assert "104" in r.text
+            assert "+4.00%" in r.text
+
+    def test_the_page_survives_binance_being_unavailable(self, monkeypatch):
+        """A Binance hiccup must blank a column, never break the page."""
+        self._stub_ledger(monkeypatch, [
+            _arm("@SARBASE", ts=1.0, cls=None),
+            _arm("@SAREXIT", ts=1.001, cls=None),
+        ])
+
+        async def _boom(*a, **k):
+            raise RuntimeError("binance down")
+
+        with TestClient(app) as client:
+            _login(client)
+            monkeypatch.setattr(
+                client.app.state.binance_klines, "fetch_all_prices", _boom
+            )
+            r = client.get("/signals/sar")
+            assert r.status_code == 200
+            assert "RUNNING" in r.text
 
     def test_the_live_feed_still_works(self, monkeypatch):
         """The new route must not disturb the real signal book."""

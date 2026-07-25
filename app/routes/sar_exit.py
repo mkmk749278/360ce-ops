@@ -396,6 +396,41 @@ def summarize_rows(rows: list[dict]) -> dict:
     }
 
 
+def mark_running_rows(rows: list[dict], prices: dict[str, float]) -> list[dict]:
+    """Mark still-running trades to the current price (pure, in place).
+
+    Without this the tab is a dead list for 48 hours: every row reads RUNNING
+    with every number blank, and there is no way to see whether a trade is
+    winning or bleeding while it is open.
+
+    Two things this deliberately does NOT do:
+
+    * It does not write into ``r_multiple`` / ``pnl_pct`` / ``delta_r``. Those
+      are **realized** results and stay blank until the trail actually exits —
+      an unrealized number sitting in a realized column is how a still-open
+      trade gets read as a finished one.
+    * It is not the SAR arm's result. Both arms share this entry, so the
+      unrealized move is identical for both and says nothing about which exit
+      wins. It is the trade's current state, and the UI labels it as such.
+
+    A missing price leaves the row untouched — the column blanks, the page
+    still renders.
+    """
+    for row in rows:
+        if row.get("status") != SAR_RUNNING:
+            continue
+        price = prices.get(row.get("symbol", ""))
+        if not price or price <= 0:
+            continue
+        entry = float(row.get("entry") or 0.0)
+        if entry <= 0:
+            continue
+        move = (price - entry) if row.get("side") == "LONG" else (entry - price)
+        row["current_price"] = float(price)
+        row["unrealized_pct"] = move / entry * 100.0
+    return rows
+
+
 def reduce_ledger_status(records: Any, pairs: list[dict]) -> dict:
     """Is the arm actually producing? — the honest state of the measurement.
 
@@ -521,6 +556,14 @@ async def sar_signals(
     ledger = request.app.state.data_volume.sar_exit_candidates()
     all_rows = reduce_sar_signals(ledger)
     rows = filter_sar_signals(all_rows, status=status, strategy=strategy, source=source)
+    # One request for the whole book, TTL-cached, ban-circuit aware, and
+    # {}-on-failure — so marking N open rows never costs N calls and a Binance
+    # hiccup blanks a column instead of breaking the page.
+    try:
+        prices = await request.app.state.binance_klines.fetch_all_prices()
+    except Exception:
+        prices = {}
+    mark_running_rows(rows, prices)
     return templates.TemplateResponse("sar_signals.html", {
         "request": request,
         "active": "sar_signals",
@@ -541,8 +584,8 @@ async def sar_signals(
 
 _SIGNAL_COLS = [
     "stamped_iso", "symbol", "side", "strategy", "provenance", "entry",
-    "exit_price", "status", "exit_reason", "hold_min", "r_multiple", "pnl_pct",
-    "delta_r", "mfe_pct", "context_key",
+    "current_price", "unrealized_pct", "exit_price", "status", "exit_reason",
+    "hold_min", "r_multiple", "pnl_pct", "delta_r", "mfe_pct", "context_key",
 ]
 
 
@@ -560,6 +603,11 @@ async def sar_signals_export_csv(
     rows = filter_sar_signals(
         reduce_sar_signals(ledger), status=status, strategy=strategy, source=source
     )
+    try:
+        prices = await request.app.state.binance_klines.fetch_all_prices()
+    except Exception:
+        prices = {}
+    mark_running_rows(rows, prices)
     data = [[r.get(c) for c in _SIGNAL_COLS] for r in rows]
     return csv_response("sar_signals", _SIGNAL_COLS, data)
 
