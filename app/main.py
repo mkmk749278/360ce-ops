@@ -53,6 +53,7 @@ from app.routes import (
     signal_detail,
     signals,
     strategy_lab,
+    trials,
     truth,
     users,
 )
@@ -127,6 +128,7 @@ app.include_router(exit_backtest.router)
 app.include_router(control.router)
 app.include_router(users.router)
 app.include_router(referrals.router)
+app.include_router(trials.router)
 app.include_router(alerts.router)
 app.include_router(data_export.router)
 app.include_router(audit_status.router)

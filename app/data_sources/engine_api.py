@@ -237,6 +237,16 @@ class EngineApiClient:
             {"commission_ids": commission_ids},
         )
 
+    async def trial_funnel(self, limit: int = 200) -> Any:
+        """Signup free-trial funnel (360-v2, 2026-07-25) — cohort, offers,
+        claims, conversions, beside the two dark-first flag states.
+
+        This is the surface that makes the trial's dark window readable:
+        while ``SIGNUP_TRIAL_ENABLED`` is false the engine still stamps every
+        eligible user, so the owner sees the real would-be cohort before
+        deciding to switch grants on.  Owner-gated on the engine."""
+        return await self._get("/api/trial/admin/funnel", limit=limit)
+
     async def user_lookup(self, phone: str) -> Any:
         """Look up a user's current tier/paid_until/display_name by phone —
         what the ops UI shows before the owner decides whether/what to
