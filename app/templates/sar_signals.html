@@ -22,7 +22,8 @@
   <label>Source
     <select name="source">
       <option value="" {% if not filter_source %}selected{% endif %}>All ({{ total }})</option>
-      <option value="emitted" {% if filter_source == 'emitted' %}selected{% endif %}>Emitted to live ({{ n_emitted }})</option>
+      <option value="emitted" {% if filter_source == 'emitted' %}selected{% endif %}>Delivered to users ({{ n_emitted }})</option>
+      <option value="enqueued" {% if filter_source == 'enqueued' %}selected{% endif %}>Queued, dropped by router ({{ n_enqueued }})</option>
       <option value="suppressed" {% if filter_source == 'suppressed' %}selected{% endif %}>Gate-suppressed ({{ n_suppressed }})</option>
     </select>
   </label>
@@ -50,7 +51,8 @@
 {% if summary.n %}
 <section class="card">
   <h2>
-    {% if filter_source == 'emitted' %}Signals we actually sent
+    {% if filter_source == 'emitted' %}Signals we actually delivered
+    {% elif filter_source == 'enqueued' %}Queued, then dropped by our own routing
     {% elif filter_source == 'suppressed' %}Candidates a gate killed
     {% else %}All stamped candidates{% endif %}
     <span class="muted small">— {{ summary.n }} trades, {{ summary.closed }} resolved, {{ summary.running }} still running</span>
@@ -68,9 +70,14 @@
   and counting it as 0R would drag every average toward zero and make the arm look flat while it is
   simply still measuring.
   {% if filter_source == 'emitted' %}<strong>This is the number that matters for adoption</strong>:
-  it is measured only on signals that actually reached subscribers.{% elif not filter_source %}
-  This mixes signals we sent with candidates we suppressed — switch Source to
-  <em>Emitted to live</em> for the population an adoption decision should read.{% endif %}</p>
+  it is measured only on signals the router confirmed delivery for, so a subscriber really saw
+  every one of them.{% elif filter_source == 'enqueued' %}These passed every scanner gate and the
+  queue accepted them, then the router's own caps dropped them — correlation lock, cooldowns,
+  per-channel concurrency, the same-direction throttle, staleness. <strong>Nobody saw these.</strong>
+  They cannot justify changing live behaviour; they are useful for judging whether our routing caps
+  are throwing away edge.{% elif not filter_source %}
+  This mixes three different populations — delivered, queued-then-dropped, and gate-suppressed.
+  Switch Source to <em>Delivered to users</em> for the one an adoption decision should read.{% endif %}</p>
   {% else %}
   <p class="muted small">Nothing resolved yet in this selection — each trade needs its 48h window.</p>
   {% endif %}
@@ -114,7 +121,8 @@
       <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
       <td class="small">{{ r.strategy }}</td>
       <td class="small">
-        {% if r.provenance == 'emitted' %}<span class="badge st-done">EMITTED</span>
+        {% if r.provenance == 'emitted' %}<span class="badge st-done">DELIVERED</span>
+        {% elif r.provenance == 'enqueued' %}<span class="badge st-partial">QUEUED</span>
         {% elif r.provenance == 'suppressed' %}<span class="badge st-closed">SUPPRESSED</span>
         {% else %}<span class="muted">—</span>{% endif %}
       </td>
@@ -145,9 +153,12 @@
   <strong>CLOSED_WINDOW</strong> — 48h passed without the trail firing; marked to the window's close.
   <strong>vs live</strong> — this trade's R minus what the live geometry (its paired <code>@SARBASE</code> arm) made on the same entry;
   positive means the trail would have done better on this signal. Blank until both arms resolve.
-  <strong>Source</strong> — <code>EMITTED</code> means this candidate actually went out to subscribers;
-  <code>SUPPRESSED</code> means a gate killed it and nobody saw it. Both are measured, but only the
-  emitted half can justify changing what users receive.
+  <strong>Source</strong> — three stages, and the middle one used to be miscounted as the first
+  (fixed 2026-07-25, when this page reported 98 &ldquo;emitted&rdquo; for a window with 3 real signals).
+  <code>DELIVERED</code> means the router confirmed delivery and a subscriber saw it.
+  <code>QUEUED</code> means it passed every scanner gate and the queue took it, but the router's own
+  caps then dropped it — nobody saw it. <code>SUPPRESSED</code> means a scanner gate killed it.
+  All three are measured; only <code>DELIVERED</code> can justify changing what users receive.
   <strong>Current / Unreal %</strong> — live mark from Binance for trades still running, so an open
   trade isn't a blank row for two days. It is <em>not</em> the SAR arm's result: both arms share this
   entry, so the unrealized move is identical for both and says nothing about which exit wins. That is
