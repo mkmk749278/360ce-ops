@@ -49,6 +49,16 @@ class DataVolumeReader:
     def strategy_allocations(self) -> Any:
         return self._load("strategy_allocations.json")
 
+    def sar_exit_candidates(self) -> Any:
+        """The SAR exit A/B pair ledger (engine: ``src/sar_exit_shadow.py``).
+
+        A flat list of stamped records, two per candidate: ``X@SARBASE`` (the
+        live evaluator geometry) and ``X@SAREXIT`` (the same entry exited by a
+        trailing 15m Parabolic SAR). Its own ledger, separate from
+        ``suppressed_candidates.json``, so A/B volume can never evict gate
+        records. Empty/missing until the owner enables the dark flag."""
+        return self._load("sar_exit_candidates.json")
+
     def feature_liveness(self) -> Any:
         """The engine's feature-liveness manifest (2026-07-14 incident
         response): per-feature output-vs-upstream verdicts, sustained-streak

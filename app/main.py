@@ -49,6 +49,7 @@ from app.routes import (
     pulse,
     raw_edge,
     referrals,
+    sar_exit,
     signal_detail,
     signals,
     strategy_lab,
@@ -115,6 +116,7 @@ app.include_router(invalidations.router)
 app.include_router(performance.router)
 app.include_router(raw_edge.router)
 app.include_router(strategy_lab.router)
+app.include_router(sar_exit.router)
 app.include_router(positions.router)
 app.include_router(profit.router)
 app.include_router(dark_signals.router)
