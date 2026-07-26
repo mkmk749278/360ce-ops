@@ -320,20 +320,37 @@ class TestSarSignalFeed:
 
 
 class TestSourceFilter:
-    """Emitted vs suppressed. The emitted subset is the only one whose answer
-    can justify changing what subscribers receive, so it must be separable and
-    must never be silently padded with unknown-provenance rows."""
+    """Delivered vs queued-then-dropped vs gate-suppressed. Only the delivered
+    subset can justify changing what subscribers receive, so it must be
+    separable, must never be padded with unknown-provenance rows, and must
+    never absorb the queued stage — that conflation reported 98 "emitted" in a
+    window where 3 signals reached the feed (engine fix 2026-07-25)."""
 
     def _mixed(self):
         return (
             _pair(1000.0, sar_exit=103.0, provenance="emitted")       # +3.0R
             + _pair(2000.0, sar_exit=99.0, provenance="suppressed")   # -1.0R
             + _pair(3000.0, sar_exit=104.0)                           # unknown
+            + _pair(5000.0, sar_exit=102.0, provenance="enqueued")    # +2.0R
         )
 
     def test_all_shows_every_candidate(self):
         rows = reduce_sar_signals(self._mixed())
-        assert len(filter_sar_signals(rows)) == 3
+        assert len(filter_sar_signals(rows)) == 4
+
+    def test_emitted_never_absorbs_the_queued_stage(self):
+        """A queued candidate the router dropped was seen by nobody. Counting
+        it as delivered is the bug this filter exists to prevent."""
+        rows = reduce_sar_signals(self._mixed())
+        emitted = filter_sar_signals(rows, source="emitted")
+        assert len(emitted) == 1
+        assert all(r["provenance"] == "emitted" for r in emitted)
+
+    def test_queued_is_its_own_separable_stage(self):
+        rows = reduce_sar_signals(self._mixed())
+        queued = filter_sar_signals(rows, source="enqueued")
+        assert len(queued) == 1
+        assert queued[0]["r_multiple"] == 2.0
 
     def test_emitted_narrows_to_signals_that_went_out(self):
         rows = reduce_sar_signals(self._mixed())
@@ -353,7 +370,8 @@ class TestSourceFilter:
         rows = reduce_sar_signals(self._mixed())
         assert len(filter_sar_signals(rows, source="emitted")) == 1
         assert len(filter_sar_signals(rows, source="suppressed")) == 1
-        # 3 total, 1+1 named → the third is reachable only under "All".
+        assert len(filter_sar_signals(rows, source="enqueued")) == 1
+        # 4 total, 1+1+1 named → the unknown row is reachable only under "All".
         assert sum(1 for r in rows if r["provenance"] == "") == 1
 
     def test_source_composes_with_the_other_filters(self):
@@ -615,14 +633,14 @@ class TestSarSignalRoutes:
         with TestClient(app) as client:
             _login(client)
             r = client.get("/signals/sar")
-            assert "Emitted to live (1)" in r.text
+            assert "Delivered to users (1)" in r.text
             assert "Gate-suppressed (1)" in r.text
-            assert "EMITTED" in r.text and "SUPPRESSED" in r.text
+            assert "DELIVERED" in r.text and "SUPPRESSED" in r.text
 
             r = client.get("/signals/sar?source=emitted")
             assert r.status_code == 200
             assert "1 of 2 rows" in r.text
-            assert "Signals we actually sent" in r.text
+            assert "Signals we actually delivered" in r.text
             # The emitted trade made +3.0R; the suppressed one (−1.0R) must be
             # excluded, so the total is +3.00 and not +2.00.
             assert "+3.00R" in r.text
@@ -635,7 +653,7 @@ class TestSarSignalRoutes:
             r = client.get("/signals/sar")
             assert "1 UNKNOWN" in r.text
             # Reachable under All, but not counted into either named source.
-            assert "Emitted to live (0)" in r.text
+            assert "Delivered to users (0)" in r.text
 
     def test_csv_honours_the_source_filter(self, monkeypatch):
         self._stub_ledger(

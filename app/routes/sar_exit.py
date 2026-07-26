@@ -256,8 +256,19 @@ SAR_STATUSES = (SAR_RUNNING, SAR_CLOSED_TRAIL, SAR_CLOSED_WINDOW, SAR_NO_DATA)
 # different question from "…every candidate we considered", and they can have
 # different answers. Records stamped before the engine recorded this read
 # UNKNOWN and are excluded from both filters rather than guessed at.
+# THREE states, not two (engine fix 2026-07-25). Conflating the middle one
+# with EMITTED is what made this page report "Emitted to live (98)" in a window
+# where 3 signals reached the feed:
+#   suppressed — a scanner gate killed it
+#   enqueued   — it passed every scanner gate and the queue accepted it, then
+#                the ROUTER's own caps (correlation lock, cooldowns, per-channel
+#                concurrency, same-direction throttle, staleness) dropped it.
+#                Never delivered. This was ~97% of the old "emitted" set.
+#   emitted    — the router confirmed delivery; a subscriber really saw it.
+# Mirrors src/suppression_audit.py PROVENANCE_*; keep the two in step.
 PROV_EMITTED = "emitted"
 PROV_SUPPRESSED = "suppressed"
+PROV_ENQUEUED = "enqueued"
 PROV_UNKNOWN = ""
 
 
@@ -355,12 +366,15 @@ def filter_sar_signals(
 ) -> list[dict]:
     """Apply the status / setup / source filters (pure).
 
-    ``source`` empty means **all** — every stamped candidate, emitted or not.
-    Selecting ``emitted`` narrows to the signals that actually went out, which
-    is the only population whose answer can justify changing live behaviour.
-    An unknown-provenance record matches neither named filter: it is excluded
-    rather than assumed, because guessing it into ``emitted`` would inflate
-    exactly the number an adoption decision reads.
+    ``source`` empty means **all** — every stamped candidate at any stage.
+    Selecting ``emitted`` narrows to the signals that were actually delivered,
+    which is the only population whose answer can justify changing live
+    behaviour. ``enqueued`` is the middle stage — passed the scanner, dropped by
+    the router's own caps, never seen by anyone; it is deliberately NOT part of
+    ``emitted`` (that conflation was a ~30x inflation of the adoption number).
+    An unknown-provenance record matches no named filter: it is excluded rather
+    than assumed, because guessing it into ``emitted`` would inflate exactly the
+    number an adoption decision reads.
     """
     out = rows
     if status:
@@ -574,6 +588,7 @@ async def sar_signals(
         "strategies": sorted({r["strategy"] for r in all_rows}),
         "n_emitted": sum(1 for r in all_rows if r["provenance"] == PROV_EMITTED),
         "n_suppressed": sum(1 for r in all_rows if r["provenance"] == PROV_SUPPRESSED),
+        "n_enqueued": sum(1 for r in all_rows if r["provenance"] == PROV_ENQUEUED),
         "n_unknown": sum(1 for r in all_rows if r["provenance"] == PROV_UNKNOWN),
         "filter_status": status,
         "filter_strategy": strategy,
