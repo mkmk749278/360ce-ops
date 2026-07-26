@@ -356,6 +356,10 @@ def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
                 "mfe_pct": rec.get("trail_mfe_pct"),
                 "status": status,
                 "status_class": _sar_status_class(status),
+                # None on a pre-fix row, or one the walker refused to replay —
+                # rendered as "?" and excluded from the split, never guessed
+                # into a bucket it would then skew.
+                "sar_aligned": rec.get("sar_aligned_at_entry"),
                 "r_multiple": r_mult,
                 "pnl_pct": pnl_pct,
                 "delta_r": delta_r,
@@ -365,7 +369,8 @@ def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
 
 
 def filter_sar_signals(
-    rows: list[dict], status: str = "", strategy: str = "", source: str = ""
+    rows: list[dict], status: str = "", strategy: str = "", source: str = "",
+    alignment: str = "",
 ) -> list[dict]:
     """Apply the status / setup / source filters (pure).
 
@@ -386,7 +391,52 @@ def filter_sar_signals(
         out = [r for r in out if r["strategy"] == strategy]
     if source:
         out = [r for r in out if r["provenance"] == source]
+    if alignment == "aligned":
+        out = [r for r in out if r["sar_aligned"] is True]
+    elif alignment == "opposed":
+        out = [r for r in out if r["sar_aligned"] is False]
     return out
+
+
+def summarize_alignment(rows: list[dict]) -> dict:
+    """Split resolved rows by whether SAR agreed with the signal at entry.
+
+    Port of the engine's ``sar_exit_shadow.summarize_sar_alignment`` — ops
+    mirrors engine math, it does not invent it; if these disagree, ops is wrong.
+
+    Why the arm cannot be read as one number: it pools two structurally
+    different populations. When SAR already points our way the trail rides and
+    the exit measures the method. When it points the other way its level is
+    already on the wrong side of price, so the trade is stopped on the first
+    testable bar for a near-deterministic loss that says nothing about trail
+    quality — it says we took a signal against the indicator. Averaged together
+    they answer a question nobody asked, and the headline moves with the
+    alignment mix rather than with the exit. ``opposed_share`` is the number
+    that says how much of a pooled average is not about SAR at all.
+    """
+    def _bucket(sel: list[dict]) -> dict:
+        closed = [r for r in sel if r["r_multiple"] is not None]
+        holds = [r["hold_min"] for r in closed if r.get("hold_min") is not None]
+        wins = sum(1 for r in closed if r["r_multiple"] > 0)
+        return {
+            "n": len(sel),
+            "closed": len(closed),
+            "avg_r": (sum(r["r_multiple"] for r in closed) / len(closed)) if closed else None,
+            "win_rate": (wins / len(closed)) if closed else None,
+            "avg_hold_min": (sum(holds) / len(holds)) if holds else None,
+        }
+
+    aligned = _bucket([r for r in rows if r["sar_aligned"] is True])
+    opposed = _bucket([r for r in rows if r["sar_aligned"] is False])
+    unknown = sum(1 for r in rows if r["sar_aligned"] is None)
+    known = aligned["n"] + opposed["n"]
+    return {
+        "aligned": aligned,
+        "opposed": opposed,
+        "unknown": unknown,
+        "known": known,
+        "opposed_share": (opposed["n"] / known) if known else None,
+    }
 
 
 def summarize_rows(rows: list[dict]) -> dict:
@@ -560,6 +610,7 @@ async def sar_signals(
     status: str = Query("", alias="status"),
     strategy: str = Query("", alias="strategy"),
     source: str = Query("", alias="source"),
+    alignment: str = Query("", alias="alignment"),
 ):
     """The SAR arm as a signal feed — lives under Signals, beside the live Feed.
 
@@ -572,7 +623,9 @@ async def sar_signals(
     templates = request.app.state.templates
     ledger = request.app.state.data_volume.sar_exit_candidates()
     all_rows = reduce_sar_signals(ledger)
-    rows = filter_sar_signals(all_rows, status=status, strategy=strategy, source=source)
+    rows = filter_sar_signals(
+        all_rows, status=status, strategy=strategy, source=source, alignment=alignment
+    )
     flash = request.session.pop("_sar_flash", None)
     # One request for the whole book, TTL-cached, ban-circuit aware, and
     # {}-on-failure — so marking N open rows never costs N calls and a Binance
@@ -597,6 +650,8 @@ async def sar_signals(
         "filter_status": status,
         "filter_strategy": strategy,
         "filter_source": source,
+        "filter_alignment": alignment,
+        "alignment": summarize_alignment(all_rows),
         "ledger_status": reduce_ledger_status(ledger, []),
         "flash": flash,
     })
@@ -605,7 +660,8 @@ async def sar_signals(
 _SIGNAL_COLS = [
     "stamped_iso", "symbol", "side", "strategy", "provenance", "entry",
     "current_price", "unrealized_pct", "exit_price", "status", "exit_reason",
-    "hold_min", "r_multiple", "pnl_pct", "delta_r", "mfe_pct", "context_key",
+    "hold_min", "r_multiple", "pnl_pct", "delta_r", "mfe_pct", "sar_aligned",
+    "context_key",
 ]
 
 
@@ -615,13 +671,15 @@ async def sar_signals_export_csv(
     status: str = Query("", alias="status"),
     strategy: str = Query("", alias="strategy"),
     source: str = Query("", alias="source"),
+    alignment: str = Query("", alias="alignment"),
 ):
     """The SAR signal feed as CSV, honouring the current filter."""
     from app.reports import csv_response
 
     ledger = request.app.state.data_volume.sar_exit_candidates()
     rows = filter_sar_signals(
-        reduce_sar_signals(ledger), status=status, strategy=strategy, source=source
+        reduce_sar_signals(ledger), status=status, strategy=strategy, source=source,
+        alignment=alignment,
     )
     try:
         prices = await request.app.state.binance_klines.fetch_all_prices()
