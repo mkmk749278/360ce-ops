@@ -56,8 +56,15 @@ class DataVolumeReader:
         live evaluator geometry) and ``X@SAREXIT`` (the same entry exited by a
         trailing 15m Parabolic SAR). Its own ledger, separate from
         ``suppressed_candidates.json``, so A/B volume can never evict gate
-        records. Empty/missing until the owner enables the dark flag."""
-        return self._load("sar_exit_candidates.json")
+        records. Empty/missing until the owner enables the dark flag.
+
+        **v2 path (2026-07-26).** The v1 file was resolved by a walker that
+        located the entry bar by counting elapsed time, so every row replayed a
+        different candle than the trade — exit price came out a pure function
+        of (symbol, side). Those rows are evidence of a bug, not of an exit
+        method, so the engine restarted the ledger on a new path and ops must
+        follow it; reading v1 would keep the fabricated numbers on screen."""
+        return self._load("sar_exit_candidates_v2.json")
 
     def feature_liveness(self) -> Any:
         """The engine's feature-liveness manifest (2026-07-14 incident
