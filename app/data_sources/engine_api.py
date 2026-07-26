@@ -213,6 +213,13 @@ class EngineApiClient:
         and paper broker state for all users.  Owner-gated on the engine."""
         return await self._post("/api/admin/reset-signals", {})
 
+    async def clear_sar_ledger(self) -> Any:
+        """Purge the SAR exit shadow ledger. Owner-gated on the engine.
+
+        Separate from :meth:`reset_signals` on purpose — that clears the live
+        signal feed, this clears a measurement window. Idempotent."""
+        return await self._post("/api/admin/sar-ledger/clear", {})
+
     async def close_signal(self, signal_id: str) -> Any:
         """Force-close ONE stuck OPEN signal via the engine's expiry-close path.
         Owner-gated on the engine; idempotent (a signal already gone is not an

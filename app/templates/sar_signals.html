@@ -18,6 +18,35 @@
   The live signal book is under <a href="/signals">Feed</a>.</p>
 </section>
 
+{% if flash %}
+<section class="card">
+  <p class="small {% if flash.ok %}pos{% else %}neg{% endif %}">{{ flash.text }}</p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2 class="small">Clear the ledger</h2>
+  <p class="muted small">
+    Drops every stamped and resolved row and starts the measurement window over.
+    <strong>Irreversible</strong> — there is no undo and no export taken on your behalf,
+    so pull the CSV first if you want the window kept. Use this when the rows are
+    evidence of a defect rather than of the exit method: a walker replaying the wrong
+    candles, a scoring change mid-window, anything that makes the population
+    untrustworthy. Leaving bad rows in place poisons the edge-matrix cells they pool
+    into, which is why clearing beats ignoring.
+    The engine owns the ledger and does the clearing; in isolated mode it applies
+    within ~15s. Recorded in the audit log.
+  </p>
+  <form method="post" action="/signals/sar/clear" class="btn-row"
+        onsubmit="return confirm('Clear the entire SAR shadow ledger? This cannot be undone.');">
+    <label class="small">
+      <input type="checkbox" name="confirm" value="CLEAR" required>
+      I understand this permanently deletes every SAR shadow record.
+    </label>
+    <button type="submit" class="btn btn-danger">Clear SAR ledger</button>
+  </form>
+</section>
+
 <form method="get" action="/signals/sar" class="filters">
   <label>Source
     <select name="source">

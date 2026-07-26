@@ -37,7 +37,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Form, Query, Request
+from fastapi.responses import RedirectResponse
+
+from app import audit
 
 from app.routes.strategy_lab import EDGE_MIN_SAMPLES, reduce_edge_matrix
 
@@ -570,6 +573,7 @@ async def sar_signals(
     ledger = request.app.state.data_volume.sar_exit_candidates()
     all_rows = reduce_sar_signals(ledger)
     rows = filter_sar_signals(all_rows, status=status, strategy=strategy, source=source)
+    flash = request.session.pop("_sar_flash", None)
     # One request for the whole book, TTL-cached, ban-circuit aware, and
     # {}-on-failure — so marking N open rows never costs N calls and a Binance
     # hiccup blanks a column instead of breaking the page.
@@ -594,6 +598,7 @@ async def sar_signals(
         "filter_strategy": strategy,
         "filter_source": source,
         "ledger_status": reduce_ledger_status(ledger, []),
+        "flash": flash,
     })
 
 
@@ -625,6 +630,48 @@ async def sar_signals_export_csv(
     mark_running_rows(rows, prices)
     data = [[r.get(c) for c in _SIGNAL_COLS] for r in rows]
     return csv_response("sar_signals", _SIGNAL_COLS, data)
+
+
+@router.post("/signals/sar/clear")
+async def sar_signals_clear(request: Request, confirm: str = Form("")):
+    """Purge the SAR shadow ledger (owner-gated on the engine, audited).
+
+    A measurement window is only worth reading if it is honest, so the owner
+    needs a way to throw one away the moment it isn't — without waiting on an
+    engine deploy. That is not hypothetical: on 2026-07-26 every resolved row
+    in this ledger had been replayed against the wrong candle, and 172 of them
+    were sitting here reading -4.4R while describing nothing at all.
+
+    Destructive and irreversible, so it follows the control doctrine: explicit
+    confirm, POST-redirect-GET so a refresh can't re-fire it, audited, and the
+    engine (which owns the buffer and the file) does the actual clearing.
+    """
+    settings = request.app.state.settings
+    if confirm != "CLEAR":
+        request.session["_sar_flash"] = {
+            "ok": False,
+            "text": "Not cleared — confirmation checkbox was not ticked.",
+        }
+        return RedirectResponse("/signals/sar", status_code=303)
+
+    result = await request.app.state.engine_api.clear_sar_ledger()
+    ok = not (isinstance(result, dict) and result.get("error"))
+    audit.record(
+        settings.audit_log_path,
+        action="sar_ledger_clear",
+        params={},
+        result=result if isinstance(result, dict) else {},
+        ok=ok,
+    )
+    if ok and isinstance(result, dict) and result.get("queued"):
+        text = "Clear queued — the engine container applies it within ~15s."
+    elif ok:
+        n = (result or {}).get("cleared_records", 0)
+        text = f"SAR ledger cleared ({n} records)."
+    else:
+        text = f"Clear failed — {(result or {}).get('error', 'engine unreachable')}."
+    request.session["_sar_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse("/signals/sar", status_code=303)
 
 
 _PAIR_COLS = [
