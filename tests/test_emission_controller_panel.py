@@ -260,3 +260,120 @@ class TestEmissionControllerRoute:
             assert r.status_code == 200
             assert "ENFORCING" in r.text
             assert "yet dead overrides persist" in r.text
+
+
+# --- regressions from the first deploy (owner-caught 2026-07-27) -------------
+#
+# Both of these shipped and were visible on the live page. Neither was caught by
+# the reducer tests above, which is the lesson: `classify_ledger` counted an
+# unstamped row as `unclassified` perfectly correctly, while the template
+# rendered that same row as "no". A reducer test cannot see a template bug.
+
+
+class TestUnstampedRowRendering:
+    """A row the engine never stamped must read as unknown, never as unroutable.
+
+    In Jinja, ``row.routable`` on a dict *lacking* the key yields ``Undefined``,
+    and ``Undefined is none`` is **False** — so a none/truthy/else chain lands on
+    the else branch and renders "no". The live page therefore asserted that
+    ``MOVER_AVWAP_SCALP`` and ``DIVERGENCE_CONTINUATION`` — real, routable
+    strategies — were unroutable. That is ops inventing a classification the
+    engine did not make, which is the one thing this module must never do.
+    """
+
+    UNSTAMPED = {
+        "strategy": "MOVER_AVWAP_SCALP", "param": "min_samples",
+        "old": 25, "new": 30, "applied": True, "status": "PROMOTED",
+        "verdict": "RAISE", "ev_per_suppression_r": None, "n": 22,
+        "reason": "stable+bar+grace → promote (strong_cell_n=22)",
+        # NOTE: no "routable" key — exactly what the pre-fix store holds.
+    }
+
+    def test_reducer_normalises_the_missing_key_to_none(self):
+        from app.routes.emission_controller import _rows
+
+        rows = _rows({"ledger": [dict(self.UNSTAMPED)]}, "ledger")
+        assert "routable" in rows[0] and rows[0]["routable"] is None
+
+    def test_page_renders_unknown_not_unroutable(self, monkeypatch):
+        # bind outside the lambda: inside it, `self` is the DataVolumeReader
+        payload = _payload(ledger=[dict(self.UNSTAMPED)])
+        monkeypatch.setattr(
+            DataVolumeReader, "emission_controller", lambda _self: payload,
+        )
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/emission-controller")
+            assert r.status_code == 200
+            assert "MOVER_AVWAP_SCALP" in r.text
+            # the unknown marker is present, and the unroutable badge is NOT
+            assert '<span class="muted">?</span>' in r.text
+            assert '<span class="neg">no</span>' not in r.text
+
+    def test_a_genuinely_unroutable_row_still_reads_no(self, monkeypatch):
+        # The fix must not swing the other way and hide real unroutable rows.
+        payload = _payload(ledger=[dict(self.UNSTAMPED, strategy="QCB@ATR", routable=False)])
+        monkeypatch.setattr(
+            DataVolumeReader, "emission_controller", lambda _self: payload,
+        )
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/emission-controller")
+            assert '<span class="neg">no</span>' in r.text
+
+
+class TestNotMeasuringMakesNoClaims:
+    """With no routability block, the page must not say the policy reads anything.
+
+    The first cut split overrides into two states and defaulted to "live", so with
+    no routability block all 18 overrides — including the 9 known dead keys —
+    rendered under the heading "Active overrides the policy actually reads". Every
+    number was defensible; the sentence above them was false.
+    """
+
+    ACTIVE = {
+        "RANGE_FADE": {"min_samples": 20},
+        "QUIET_COMPRESSION_BREAK@ATR": {"min_samples": 15},
+        "SHADOW_FUNDING_FADE": {"min_samples": 15},
+    }
+
+    def test_split_refuses_to_classify_when_not_measuring(self):
+        out = split_overrides(self.ACTIVE, {}, measuring=False)
+        assert out["unknown_n"] == 3
+        assert out["live_n"] == 0 and out["unroutable_n"] == 0
+        assert out["total_n"] == 3
+
+    def test_split_still_classifies_when_measuring(self):
+        out = split_overrides(
+            self.ACTIVE, {"QUIET_COMPRESSION_BREAK@ATR": {"min_samples": 15}},
+            measuring=True,
+        )
+        assert out["live_n"] == 2 and out["unroutable_n"] == 1
+        assert out["unknown_n"] == 0
+
+    def test_page_does_not_claim_the_policy_reads_them(self, monkeypatch):
+        payload = _payload(routability={}, active_overrides=self.ACTIVE)
+        monkeypatch.setattr(
+            DataVolumeReader, "emission_controller", lambda _self: payload,
+        )
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/emission-controller")
+            assert r.status_code == 200
+            assert "Not measuring" in r.text
+            # the false claim must be gone, replaced by an honest heading
+            assert "the policy actually reads" not in r.text
+            assert "routability unknown" in r.text
+            # the overrides are still listed — hiding them would be worse
+            assert "QUIET_COMPRESSION_BREAK@ATR" in r.text
+            assert "RANGE_FADE" in r.text
+
+    def test_measuring_page_does_make_the_claim(self, monkeypatch):
+        # The honest heading is conditional, not a blanket removal.
+        monkeypatch.setattr(
+            DataVolumeReader, "emission_controller", lambda self: STORE_PAYLOAD,
+        )
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/emission-controller")
+            assert "the policy actually reads" in r.text
