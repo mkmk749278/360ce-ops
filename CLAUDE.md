@@ -69,7 +69,27 @@ Two rules, both learned the hard way:
   quietly inflated the rollup for a week.
 - **Ops ports the engine's math, it does not invent it.** Reducers here are ports of
   engine functions; the thresholds are mirrored and displayed in the UI footer for
-  honesty. If a number here disagrees with the truth report, ops is wrong.
+  honesty. If a number here disagrees with the truth report, ops is wrong. Mirror
+  the engine's **denominators** too: a rate divided by "all bucketed rows" where the
+  engine divides by "resolved rows" agrees only until the two populations differ.
+- **A panel must be measured on the population the page is showing.** A summary
+  computed over the whole ledger while the table beside it is filtered is not a
+  summary of anything the owner is looking at. `/signals/sar` shipped a split panel
+  reading all 267 rows above a table showing 149 (#90, fixed #91) — pooling
+  delivered, router-dropped and gate-killed candidates into the one number an
+  adoption decision reads. Every count is measured with **every filter applied
+  except its own**; a selector applied to its own counts makes each option describe
+  only itself.
+- **Disclose concentration; don't silently average it.** Overlapping entries into
+  one move resolve at the same exit price and are not independent evidence — three
+  BUSDT rows stamped 00:04 / 00:47 / 01:34 all exited at 0.1959 and carried 3/8 of a
+  bucket. Show the distinct-outcome count beside the trade count. De-duplicating is
+  a judgement call; counting them silently is not.
+- **Copy is part of the measurement.** A panel asserting "a near-deterministic loss"
+  directly above a bucket reading 38% win rate is wrong on screen even when every
+  number is right, and explanatory text that names a *cause* for missing rows must
+  be true of those rows. Say whether an R is gross or net — #90 predicted a
+  cost-inclusive figure and then measured a cost-free one.
 
 ## Data sources (one-line each)
 
