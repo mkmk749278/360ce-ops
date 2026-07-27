@@ -138,8 +138,18 @@ def test_page_offers_the_clear_control(monkeypatch):
 # page and that the two populations stay apart.
 
 
-def _row(aligned, r):
-    return {"sar_aligned": aligned, "r_multiple": r, "hold_min": 15.0 if r else None}
+def _row(aligned, r, **over):
+    row = {
+        "sar_aligned": aligned,
+        "r_multiple": r,
+        "hold_min": 15.0 if r else None,
+        "status": "CLOSED_TRAIL" if r is not None else "RUNNING",
+        "symbol": over.pop("symbol", "AAAUSDT"),
+        "side": "LONG",
+        "exit_price": over.pop("exit_price", r),
+    }
+    row.update(over)
+    return row
 
 
 def test_split_keeps_opposed_out_of_the_aligned_average():
@@ -194,4 +204,160 @@ def test_page_renders_the_split(monkeypatch):
         r = client.get("/signals/sar")
         assert r.status_code == 200
         assert "SAR agreement at entry" in r.text
-        assert "Opposed share" in r.text or "No classified trades yet" in r.text
+
+
+# ---- what #90 got wrong, pinned ------------------------------------------
+
+
+def _ledger_rec(symbol, aligned, *, provenance, resolved=True):
+    """A ledger record in the ENGINE's shape, driven through the real reducer.
+
+    Hand-writing the reduced row shape is how a wrong key goes green over dead
+    code, so the population tests below build records the way the engine writes
+    them and let ``reduce_sar_signals`` produce the rows under test.
+    """
+    rec = {
+        "setup_class": "MTP@SAREXIT",
+        "symbol": symbol,
+        "side": "LONG",
+        "entry": 100.0,
+        "sl_distance": 1.0,
+        "exit_model": "trailing",
+        "provenance": provenance,
+        "suppress_timestamp": 1_800_000_000.0,
+    }
+    if resolved:
+        rec.update({
+            "classification": "WOULD_WIN",
+            "trail_exit_price": 101.0,
+            "trail_exit_reason": "trail",
+            "trail_hold_min": 15.0,
+            # The engine writes this ONLY in the resolve path, so an unresolved
+            # record genuinely carries no key — that asymmetry is the bug the
+            # "no verdict" copy misread, and the fixture must reproduce it.
+            "sar_aligned_at_entry": aligned,
+        })
+    return rec
+
+
+def test_the_split_follows_the_source_filter():
+    """#90 measured the panel on the whole ledger while the table was filtered.
+
+    That is the #88 mistake again: only the delivered population can justify a
+    live change, and a panel that ignores the selector pools it with candidates
+    nobody ever saw.
+    """
+    from app.routes.sar_exit import (
+        filter_sar_signals,
+        reduce_sar_signals,
+        summarize_alignment,
+    )
+
+    rows = reduce_sar_signals([
+        _ledger_rec("AAAUSDT", True, provenance="emitted"),
+        _ledger_rec("BBBUSDT", False, provenance="suppressed"),
+        _ledger_rec("CCCUSDT", False, provenance="suppressed"),
+    ])
+    assert summarize_alignment(rows)["opposed_share"] == 2 / 3
+
+    scoped = filter_sar_signals(rows, source="emitted")
+    # Delivered rows only: one trade, agreed, so nothing was taken against the
+    # indicator in the population that reached a subscriber.
+    assert summarize_alignment(scoped)["opposed_share"] == 0.0
+
+
+def test_page_panel_moves_with_the_source_filter(monkeypatch):
+    """The route-level version — where #90 actually went wrong.
+
+    ``summarize_alignment`` was always correct; the route handed it the
+    unfiltered ledger. So the page could show 149 gate-suppressed rows under a
+    split computed over all 267 and nothing said so.
+    """
+    from app.data_sources.data_volume import DataVolumeReader
+
+    ledger = [
+        _ledger_rec("AAAUSDT", True, provenance="emitted"),
+        _ledger_rec("BBBUSDT", False, provenance="suppressed"),
+        _ledger_rec("CCCUSDT", False, provenance="suppressed"),
+        _ledger_rec("DDDUSDT", False, provenance="suppressed"),
+    ]
+    monkeypatch.setattr(DataVolumeReader, "sar_exit_candidates", lambda self: ledger)
+
+    with TestClient(app) as client:
+        _login(client)
+        # Whole ledger: 3 of 4 resolved trades were taken against the indicator.
+        assert "Opposed share: 75%" in client.get("/signals/sar").text
+        # Delivered only: the one row a subscriber saw had SAR on its side.
+        assert "Opposed share: 0%" in client.get("/signals/sar?source=emitted").text
+
+
+def test_running_rows_are_pending_not_a_missing_verdict():
+    """261 of 277 rows read "the walker refused to replay them" on 2026-07-27.
+
+    Not one of them had been refused: every RUNNING row is blank by
+    construction because the engine writes the flag in the resolve path. The
+    two causes must stay separate or the page reports a data fault that is
+    not happening.
+    """
+    from app.routes.sar_exit import reduce_sar_signals, summarize_alignment
+
+    rows = reduce_sar_signals([
+        _ledger_rec("AAAUSDT", True, provenance="emitted"),
+        _ledger_rec("BBBUSDT", None, provenance="emitted", resolved=False),
+        _ledger_rec("CCCUSDT", None, provenance="emitted", resolved=False),
+    ])
+    out = summarize_alignment(rows)
+    assert out["pending"] == 2
+    assert out["unresolved"] == 0
+    assert out["unknown"] == 2
+
+
+def test_a_finished_row_without_a_verdict_is_a_real_exclusion():
+    from app.routes.sar_exit import summarize_alignment
+
+    out = summarize_alignment([
+        _row(True, 1.0),
+        dict(_row(None, None), status="NO_DATA"),
+    ])
+    assert out["pending"] == 0
+    assert out["unresolved"] == 1
+
+
+def test_pending_is_selectable():
+    from app.routes.sar_exit import filter_sar_signals
+
+    rows = [_row(True, 1.0), _row(None, None), _row(None, None)]
+    assert len(filter_sar_signals(rows, alignment="pending")) == 2
+
+
+def test_overlapping_entries_into_one_move_are_disclosed():
+    """Three BUSDT rows carried 3/8 of the agreed bucket and one rally.
+
+    +2.23R / +2.12R / +2.72R, stamped 00:04 / 00:47 / 01:34, all exiting at
+    0.1959 — the same move counted three times. The bucket must say so.
+    """
+    from app.routes.sar_exit import summarize_alignment
+
+    out = summarize_alignment([
+        _row(True, 2.23, symbol="BUSDT", exit_price=0.1959),
+        _row(True, 2.12, symbol="BUSDT", exit_price=0.1959),
+        _row(True, 2.72, symbol="BUSDT", exit_price=0.1959),
+    ])
+    assert out["aligned"]["closed"] == 3
+    assert out["aligned"]["distinct_exits"] == 1
+
+
+def test_share_survives_verdicts_without_resolutions():
+    """Forward-compat with stamping agreement at entry.
+
+    Once the flag lands at stamp time a bucket holds unresolved rows, and every
+    rate has to keep dividing by the resolved count — the engine's denominator.
+    A None share must not reach ``format()``.
+    """
+    from app.routes.sar_exit import summarize_alignment
+
+    out = summarize_alignment([_row(True, None), _row(False, None)])
+    assert out["known"] == 2
+    assert out["known_closed"] == 0
+    assert out["opposed_share"] is None
+    assert out["aligned"]["avg_r"] is None

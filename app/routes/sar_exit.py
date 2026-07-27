@@ -395,6 +395,11 @@ def filter_sar_signals(
         out = [r for r in out if r["sar_aligned"] is True]
     elif alignment == "opposed":
         out = [r for r in out if r["sar_aligned"] is False]
+    elif alignment == "pending":
+        # Selectable on purpose: "no verdict yet" is the majority of the ledger
+        # and the owner must be able to see that population rather than infer
+        # it from a count in a footnote.
+        out = [r for r in out if r["sar_aligned"] is None]
     return out
 
 
@@ -403,24 +408,37 @@ def summarize_alignment(rows: list[dict]) -> dict:
 
     Port of the engine's ``sar_exit_shadow.summarize_sar_alignment`` — ops
     mirrors engine math, it does not invent it; if these disagree, ops is wrong.
+    The engine buckets **resolved** rows only, so every rate here divides by
+    ``closed``, not by ``n``. They coincide today (the engine writes
+    ``sar_aligned_at_entry`` in the resolve path, so a RUNNING row never carries
+    one) and would silently diverge the moment that changes — which is exactly
+    the change proposed for the engine, so the denominators are pinned now.
 
     Why the arm cannot be read as one number: it pools two structurally
     different populations. When SAR already points our way the trail rides and
     the exit measures the method. When it points the other way its level is
-    already on the wrong side of price, so the trade is stopped on the first
-    testable bar for a near-deterministic loss that says nothing about trail
-    quality — it says we took a signal against the indicator. Averaged together
-    they answer a question nobody asked, and the headline moves with the
-    alignment mix rather than with the exit. ``opposed_share`` is the number
-    that says how much of a pooled average is not about SAR at all.
+    already breached at entry, so the walk exits on the first testable bar and
+    the row records ~15 minutes of drift rather than anything about the trail.
+
+    ``distinct_exits`` counts unique (symbol, side, exit price) among the
+    resolved rows. Overlapping entries into one move resolve at the *same* exit
+    price and are not independent evidence: on 2026-07-27 three BUSDT rows
+    (+2.23R / +2.12R / +2.72R, stamped 00:04 / 00:47 / 01:34) all exited at
+    0.1959 — one rally carrying 3/8 of the agreed bucket. Disclosed rather than
+    de-duplicated: collapsing them is a judgement call, counting them silently
+    is not.
     """
     def _bucket(sel: list[dict]) -> dict:
         closed = [r for r in sel if r["r_multiple"] is not None]
         holds = [r["hold_min"] for r in closed if r.get("hold_min") is not None]
         wins = sum(1 for r in closed if r["r_multiple"] > 0)
+        exits = {
+            (r.get("symbol"), r.get("side"), r.get("exit_price")) for r in closed
+        }
         return {
             "n": len(sel),
             "closed": len(closed),
+            "distinct_exits": len(exits),
             "avg_r": (sum(r["r_multiple"] for r in closed) / len(closed)) if closed else None,
             "win_rate": (wins / len(closed)) if closed else None,
             "avg_hold_min": (sum(holds) / len(holds)) if holds else None,
@@ -428,14 +446,25 @@ def summarize_alignment(rows: list[dict]) -> dict:
 
     aligned = _bucket([r for r in rows if r["sar_aligned"] is True])
     opposed = _bucket([r for r in rows if r["sar_aligned"] is False])
-    unknown = sum(1 for r in rows if r["sar_aligned"] is None)
-    known = aligned["n"] + opposed["n"]
+    # A blank verdict has two very different causes and the page must not
+    # conflate them. A RUNNING trade is simply not resolved yet — the ordinary
+    # state of most of the ledger, and NOT evidence of anything. A row that has
+    # finished and still carries no verdict is a real exclusion: the walker
+    # refused to replay it, or it predates the flag. Calling the first kind
+    # "no verdict" reads as a data fault where there is none — precisely the
+    # false alarm to avoid after the #800 walker bug.
+    blank = [r for r in rows if r["sar_aligned"] is None]
+    pending = sum(1 for r in blank if r.get("status") == SAR_RUNNING)
+    known_closed = aligned["closed"] + opposed["closed"]
     return {
         "aligned": aligned,
         "opposed": opposed,
-        "unknown": unknown,
-        "known": known,
-        "opposed_share": (opposed["n"] / known) if known else None,
+        "pending": pending,
+        "unresolved": len(blank) - pending,
+        "unknown": len(blank),
+        "known": aligned["n"] + opposed["n"],
+        "known_closed": known_closed,
+        "opposed_share": (opposed["closed"] / known_closed) if known_closed else None,
     }
 
 
@@ -623,8 +652,22 @@ async def sar_signals(
     templates = request.app.state.templates
     ledger = request.app.state.data_volume.sar_exit_candidates()
     all_rows = reduce_sar_signals(ledger)
-    rows = filter_sar_signals(
-        all_rows, status=status, strategy=strategy, source=source, alignment=alignment
+    # The split panel and every dropdown count are measured on the population
+    # the other filters selected — everything EXCEPT alignment itself. Applying
+    # alignment here would make the panel degenerate (pick "opposed" and the
+    # agreed row reads 0) and make each dropdown option describe only itself.
+    #
+    # Measuring the panel on the *unfiltered* ledger, which is what shipped in
+    # #90, is the #88 mistake again: with Source set to "Gate-suppressed" the
+    # page showed 149 rows under a split computed over all 267, silently
+    # pooling delivered, router-dropped and gate-killed candidates. Only the
+    # delivered population can justify changing what users receive, so the
+    # panel has to move when that selector moves.
+    scoped = filter_sar_signals(all_rows, status=status, strategy=strategy, source=source)
+    rows = filter_sar_signals(scoped, alignment=alignment)
+    # Same rule for the Source counts — every other filter applied, not its own.
+    src_scope = filter_sar_signals(
+        all_rows, status=status, strategy=strategy, alignment=alignment
     )
     flash = request.session.pop("_sar_flash", None)
     # One request for the whole book, TTL-cached, ban-circuit aware, and
@@ -643,15 +686,17 @@ async def sar_signals(
         "summary": summarize_rows(rows),
         "statuses": [s for s in SAR_STATUSES if any(r["status"] == s for r in all_rows)],
         "strategies": sorted({r["strategy"] for r in all_rows}),
-        "n_emitted": sum(1 for r in all_rows if r["provenance"] == PROV_EMITTED),
-        "n_suppressed": sum(1 for r in all_rows if r["provenance"] == PROV_SUPPRESSED),
-        "n_enqueued": sum(1 for r in all_rows if r["provenance"] == PROV_ENQUEUED),
-        "n_unknown": sum(1 for r in all_rows if r["provenance"] == PROV_UNKNOWN),
+        "n_all": len(src_scope),
+        "n_emitted": sum(1 for r in src_scope if r["provenance"] == PROV_EMITTED),
+        "n_suppressed": sum(1 for r in src_scope if r["provenance"] == PROV_SUPPRESSED),
+        "n_enqueued": sum(1 for r in src_scope if r["provenance"] == PROV_ENQUEUED),
+        "n_unknown": sum(1 for r in src_scope if r["provenance"] == PROV_UNKNOWN),
         "filter_status": status,
         "filter_strategy": strategy,
         "filter_source": source,
         "filter_alignment": alignment,
-        "alignment": summarize_alignment(all_rows),
+        "alignment": summarize_alignment(scoped),
+        "alignment_scoped": bool(status or strategy or source),
         "ledger_status": reduce_ledger_status(ledger, []),
         "flash": flash,
     })
