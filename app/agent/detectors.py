@@ -10,6 +10,14 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
+#: Sentinel a probe returns when it could not run at all, as distinct from
+#: running and finding nothing wrong.  A detector that treats "no data" as
+#: "no problem" is silent in exactly the outage it exists to catch — which is
+#: what happened on 2026-07-27, when a stopped redis container made the
+#: idletime probe return "" and RedisStalenessDetector read that as healthy.
+PROBE_FAILED = "PROBE_FAILED"
+
+
 @dataclass
 class DetectorResult:
     severity: Literal["HIGH", "WARN"]
@@ -137,6 +145,75 @@ class BackgroundTaskDetector:
 
 
 # ---------------------------------------------------------------------------
+# D3b — CoreContainerDetector  (HIGH, pages immediately)
+# ---------------------------------------------------------------------------
+
+class CoreContainerDetector:
+    """The engine and redis containers must be present and running.
+
+    Added 2026-07-27. An interrupted ``docker compose`` recreate left the
+    engine ``Exited (137)`` and redis/watchdog ``Created`` for two and a half
+    hours. Nothing paged, for a reason worth keeping in mind: the *only*
+    container anyone was watching was the signing service, and every other
+    detector inferred engine health from data the api container was still
+    happily serving out of a frozen cache. Watch the containers directly —
+    it is the one check that cannot be fooled by stale data, because it
+    doesn't read any.
+
+    Deliberately does NOT require ``(healthy)`` the way the signing detector
+    does: the engine reports unhealthy for several minutes on every boot
+    while it re-seeds history (480s healthcheck grace), and paging on that
+    would train the owner to ignore this alert. Presence and a running state
+    are the property that matters here; a container that is up but wedged is
+    covered by TaskCensusDetector and the engine-disconnected path.
+    """
+
+    name = "CoreContainerDetector"
+    _CONTAINERS = ("360scalp-v2-engine", "360scalp-v2-redis")
+
+    def check(self, container_statuses: dict[str, str]) -> list[DetectorResult]:
+        if not container_statuses:
+            # docker ps itself failed — not "no containers exist". Reporting
+            # every container missing would be a lie about which thing broke.
+            return [DetectorResult(
+                severity="HIGH",
+                fingerprint="docker_ps_unavailable",
+                description=(
+                    "docker ps returned nothing — the agent cannot see the "
+                    "engine stack at all. Container-level monitoring is blind "
+                    "until this clears."
+                ),
+                raw={"containers": container_statuses},
+            )]
+
+        results: list[DetectorResult] = []
+        for name in self._CONTAINERS:
+            status = container_statuses.get(name)
+            if status is None:
+                results.append(DetectorResult(
+                    severity="HIGH",
+                    fingerprint=f"container_absent:{name}",
+                    description=f"Container '{name}' not found in docker ps.",
+                    raw={"containers": container_statuses},
+                ))
+                continue
+            if not status.lower().startswith("up"):
+                # "Exited (137) 28 minutes ago", "Created", "Restarting" —
+                # every one of these is the engine not running.
+                results.append(DetectorResult(
+                    severity="HIGH",
+                    fingerprint=f"container_down:{name}",
+                    description=(
+                        f"Container '{name}' is not running: {status!r}. "
+                        "A 'Created' or 'Exited' core container usually means "
+                        "a deploy was interrupted part-way."
+                    ),
+                    raw={"container": name, "status": status},
+                ))
+        return results
+
+
+# ---------------------------------------------------------------------------
 # D3 — SigningHealthDetector  (HIGH, pages immediately)
 # ---------------------------------------------------------------------------
 
@@ -208,7 +285,19 @@ class EngineStatusDetector:
 # ---------------------------------------------------------------------------
 
 class ApiHealthDetector:
-    """Engine /api/health must respond without error."""
+    """Engine /api/health must respond, AND must still hear the engine.
+
+    The second half is the 2026-07-27 lesson. In isolated mode the thing
+    answering /api/health is the *api* container, which caches the engine's
+    last-good state in memory and keeps serving it forever. On that day the
+    engine and redis were both dead for two and a half hours while this
+    detector saw a clean 200 and every other detector read plausible numbers
+    out of the frozen snapshot. A subscriber's screenshot was the alert.
+
+    ``engine_connected`` is the one field a freeze cannot fake: the api
+    container derives it from *when redis last answered it*, not from the
+    payload's contents. Absent (older engine build) → skip, don't guess.
+    """
 
     name = "ApiHealthDetector"
 
@@ -220,7 +309,30 @@ class ApiHealthDetector:
                 description=f"Engine /api/health error: {health['error']}",
                 raw=health,
             )]
-        return []
+
+        connected = health.get("engine_connected")
+        if connected is None or connected is True:
+            # None = pre-upgrade engine that doesn't publish the field. Stay
+            # quiet rather than page on a deploy skew; the container-status
+            # detector covers a genuinely dead engine independently.
+            return []
+
+        age = health.get("engine_state_age_seconds")
+        if isinstance(age, (int, float)):
+            detail = f"last engine state {float(age)/60.0:.1f} min old"
+        else:
+            detail = "engine has not been reachable since the API started"
+        return [DetectorResult(
+            severity="HIGH",
+            fingerprint="engine_disconnected",
+            description=(
+                f"API container is serving WITHOUT a live engine — {detail}. "
+                "Everything the app shows is last-known-good, not live: "
+                "signals, pulse and positions are all frozen. Check the "
+                "engine and redis containers."
+            ),
+            raw=health,
+        )]
 
 
 # ---------------------------------------------------------------------------
@@ -273,8 +385,22 @@ class RedisStalenessDetector:
 
     def check(self, idletime_output: str) -> list[DetectorResult]:
         line = idletime_output.strip()
-        if not line:
-            return []
+        if line == PROBE_FAILED or not line:
+            # The probe could not run — redis container stopped, docker error,
+            # timeout. Pre-2026-07-27 this returned [] and a dead redis was
+            # indistinguishable from a healthy one. An unmeasurable dependency
+            # is a HIGH, not a shrug.
+            return [DetectorResult(
+                severity="HIGH",
+                fingerprint="redis_unreachable",
+                description=(
+                    "Could not read snapshot:tickers idletime from the engine "
+                    "redis container — it is stopped, or docker exec failed. "
+                    "With redis down the engine cannot publish and the API "
+                    "serves frozen state."
+                ),
+                raw={"idletime_output": idletime_output},
+            )]
         try:
             idle_sec = int(line)
         except ValueError:

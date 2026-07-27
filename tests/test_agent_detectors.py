@@ -7,8 +7,10 @@ from __future__ import annotations
 import pytest
 
 from app.agent.detectors import (
+    PROBE_FAILED,
     ApiHealthDetector,
     BackgroundTaskDetector,
+    CoreContainerDetector,
     EngineStatusDetector,
     NakedPositionDetector,
     RedisStalenessDetector,
@@ -228,6 +230,89 @@ class TestApiHealthDetector:
         assert len(results) == 1
         assert results[0].severity == "WARN"
 
+    def test_engine_connected_true_is_silent(self):
+        d = ApiHealthDetector()
+        assert d.check({
+            "uptime_seconds": 3600, "engine_connected": True,
+            "engine_state_age_seconds": 12.0,
+        }) == []
+
+    def test_engine_disconnected_pages_high(self):
+        """The 2026-07-27 shape: a clean 200 from an api container that has
+        not heard from the engine in hours."""
+        d = ApiHealthDetector()
+        results = d.check({
+            "uptime_seconds": 10800, "version": "0.0.2",
+            "engine_connected": False, "engine_state_age_seconds": 9000.0,
+        })
+        assert len(results) == 1
+        assert results[0].severity == "HIGH"
+        assert results[0].fingerprint == "engine_disconnected"
+        assert "150.0 min" in results[0].description
+
+    def test_engine_never_reachable_reports_that_not_an_age(self):
+        d = ApiHealthDetector()
+        results = d.check({
+            "uptime_seconds": 60, "engine_connected": False,
+            "engine_state_age_seconds": None,
+        })
+        assert len(results) == 1
+        assert "has not been reachable" in results[0].description
+
+    def test_field_absent_stays_quiet(self):
+        """Pre-upgrade engine build — don't page on deploy skew."""
+        d = ApiHealthDetector()
+        assert d.check({"uptime_seconds": 3600, "version": "0.0.1"}) == []
+
+
+# ---------------------------------------------------------------------------
+# D3b — CoreContainerDetector
+# ---------------------------------------------------------------------------
+
+class TestCoreContainerDetector:
+    def test_all_up_is_silent(self):
+        d = CoreContainerDetector()
+        assert d.check({
+            "360scalp-v2-engine": "Up 2 minutes (healthy)",
+            "360scalp-v2-redis": "Up 2 minutes (healthy)",
+        }) == []
+
+    def test_the_outage_state_pages(self):
+        """Verbatim docker ps output from the 2026-07-27 incident."""
+        d = CoreContainerDetector()
+        results = d.check({
+            "360scalp-v2-engine": "Exited (137) 28 minutes ago",
+            "360scalp-v2-redis": "Created",
+            "360scalp-v2-api": "Up 3 hours (healthy)",
+        })
+        assert len(results) == 2
+        assert {r.severity for r in results} == {"HIGH"}
+        assert {r.fingerprint for r in results} == {
+            "container_down:360scalp-v2-engine",
+            "container_down:360scalp-v2-redis",
+        }
+
+    def test_absent_container_pages(self):
+        d = CoreContainerDetector()
+        results = d.check({"360scalp-v2-redis": "Up 5 minutes"})
+        assert len(results) == 1
+        assert results[0].fingerprint == "container_absent:360scalp-v2-engine"
+
+    def test_booting_engine_is_not_a_page(self):
+        """The engine reads unhealthy for minutes on every boot while it
+        re-seeds history. Paging on that trains the owner to ignore this."""
+        d = CoreContainerDetector()
+        assert d.check({
+            "360scalp-v2-engine": "Up 30 seconds (health: starting)",
+            "360scalp-v2-redis": "Up 30 seconds (healthy)",
+        }) == []
+
+    def test_empty_ps_reports_blindness_not_mass_death(self):
+        d = CoreContainerDetector()
+        results = d.check({})
+        assert len(results) == 1
+        assert results[0].fingerprint == "docker_ps_unavailable"
+
 
 # ---------------------------------------------------------------------------
 # D7 — SignalSilenceDetector
@@ -279,9 +364,25 @@ class TestRedisStalenessDetector:
         assert results[0].severity == "WARN"
         assert results[0].fingerprint == "redis_stale"
 
-    def test_empty_output(self):
+    def test_empty_output_pages_it_does_not_pass(self):
+        """This assertion used to read ``== []`` and that was the 2026-07-27 bug.
+
+        ``docker exec`` against a stopped redis container produces no stdout,
+        so the probe returned "" and the detector called it healthy. The one
+        condition it exists to catch was the one guaranteed to stay silent.
+        """
         d = RedisStalenessDetector()
-        assert d.check("") == []
+        results = d.check("")
+        assert len(results) == 1
+        assert results[0].severity == "HIGH"
+        assert results[0].fingerprint == "redis_unreachable"
+
+    def test_probe_failed_sentinel_pages(self):
+        d = RedisStalenessDetector()
+        results = d.check(PROBE_FAILED)
+        assert len(results) == 1
+        assert results[0].severity == "HIGH"
+        assert results[0].fingerprint == "redis_unreachable"
 
     def test_non_numeric(self):
         d = RedisStalenessDetector()

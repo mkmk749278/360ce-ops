@@ -18,8 +18,10 @@ import os
 from app.config import load_settings
 from app.data_sources.engine_api import EngineApiClient
 from app.agent.detectors import (
+    PROBE_FAILED,
     ApiHealthDetector,
     BackgroundTaskDetector,
+    CoreContainerDetector,
     DetectorResult,
     EngineStatusDetector,
     NakedPositionDetector,
@@ -39,8 +41,15 @@ log = logging.getLogger("agent.runner")
 # Docker helpers (direct subprocess — no engine exec, just host daemon)
 # ---------------------------------------------------------------------------
 
-async def _docker_ps_statuses(container_prefix: str = "360scalp-v2-signing") -> dict[str, str]:
-    """Return {container_name: status_string} for containers matching prefix."""
+async def _docker_ps_statuses(container_prefix: str = "360scalp-v2") -> dict[str, str]:
+    """Return {container_name: status_string} for containers matching prefix.
+
+    Prefix widened from ``360scalp-v2-signing`` to the whole stack on
+    2026-07-27.  Only the signing container was ever inspected, so on that
+    day the engine sat ``Exited (137)`` and redis/signing/watchdog sat
+    ``Created`` for two and a half hours and no detector so much as looked
+    at them.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", "ps", "-a",
@@ -62,7 +71,17 @@ async def _docker_ps_statuses(container_prefix: str = "360scalp-v2-signing") -> 
 
 
 async def _redis_idletime(container: str = "360scalp-v2-redis", key: str = "snapshot:tickers") -> str:
-    """Return OBJECT IDLETIME for key as a raw string (e.g. '12')."""
+    """Return OBJECT IDLETIME for key as a raw string (e.g. '12').
+
+    Returns the sentinel ``PROBE_FAILED`` when the probe itself could not
+    run — a stopped redis container, a docker error, a timeout.
+
+    Before 2026-07-27 every one of those returned ``""``, and the detector
+    read an empty string as "nothing to report" and passed.  So the single
+    condition this probe exists to catch — redis not answering — was the one
+    condition guaranteed to read as all-clear.  Not-measured and
+    measured-fine are different states and must not share a return value.
+    """
     try:
         proc = await asyncio.create_subprocess_exec(
             "docker", "exec", container,
@@ -70,11 +89,18 @@ async def _redis_idletime(container: str = "360scalp-v2-redis", key: str = "snap
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
-        return stdout.decode().strip()
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        out = stdout.decode().strip()
+        if proc.returncode != 0 or not out:
+            log.warning(
+                "redis idletime probe failed rc=%s stderr=%s",
+                proc.returncode, stderr.decode().strip()[:200],
+            )
+            return PROBE_FAILED
+        return out
     except Exception as exc:
         log.warning("redis idletime check failed: %s", exc)
-        return ""
+        return PROBE_FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +147,7 @@ async def run() -> None:
     d2 = BackgroundTaskDetector()
     d3 = SigningHealthDetector()
     d4 = EngineStatusDetector()
+    d3b = CoreContainerDetector()
     d6 = ApiHealthDetector()
     d7 = SignalSilenceDetector()
     d8 = RedisStalenessDetector(stale_sec=int(os.getenv("AGENT_REDIS_STALE_SEC", "45")))
@@ -137,7 +164,7 @@ async def run() -> None:
         diag_positions: list[dict] = []
         tasks: list[str] = []
         container_statuses: dict[str, str] = {}
-        redis_idletime: str = ""
+        redis_idletime: str = PROBE_FAILED
         auto_mode: dict = {}
 
         try:
@@ -182,6 +209,8 @@ async def run() -> None:
             redis_idletime = await _redis_idletime()
         except Exception as exc:
             log.warning("redis idletime check failed: %s", exc)
+            redis_idletime = PROBE_FAILED
+            cycle_ok = False
 
         # ---- Run detectors -------------------------------------------
         all_results: list[DetectorResult] = []
@@ -190,6 +219,7 @@ async def run() -> None:
             (d1, {"diag_items": diag_positions}),
             (d2, {"tasks": tasks}),
             (d3, {"container_statuses": container_statuses}),
+            (d3b, {"container_statuses": container_statuses}),
             (d4, {"pulse": pulse}),
             (d6, {"health": health}),
             (d7, {"pulse": pulse, "mode": auto_mode.get("mode") or pulse.get("mode", "off")}),
