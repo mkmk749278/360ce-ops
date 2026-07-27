@@ -66,6 +66,22 @@ class DataVolumeReader:
         follow it; reading v1 would keep the fabricated numbers on screen."""
         return self._load("sar_exit_candidates_v2.json")
 
+    def emission_controller(self) -> Any:
+        """Layer G's state, ledger and routability measurement (engine:
+        ``src/emission_controller_store.py``).
+
+        Keys: ``state`` (per-strategy overrides + verdict history),
+        ``ledger`` (durable audit of *applied* adjustments), ``pending``
+        (this cycle's would-be candidates), ``active_overrides``, and
+        ``routability`` — the live measurement of how much of the controller's
+        promotion budget goes to strategy keys the emission policy cannot read.
+
+        Every row carries a ``routable`` flag **stamped by the engine**. Ops
+        renders it and never re-derives it from a mirrored suffix list: that
+        mirror is the drift class which silently inflated the Strategy Lab
+        rollup for a week."""
+        return self._load("emission_controller_store.json")
+
     def feature_liveness(self) -> Any:
         """The engine's feature-liveness manifest (2026-07-14 incident
         response): per-feature output-vs-upstream verdicts, sustained-streak

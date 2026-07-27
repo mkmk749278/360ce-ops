@@ -40,6 +40,7 @@ from app.routes import (
     dark_signals,
     data_export,
     diag,
+    emission_controller,
     exit_backtest,
     invalidations,
     pairs,
@@ -121,6 +122,7 @@ app.include_router(invalidations.router)
 app.include_router(performance.router)
 app.include_router(raw_edge.router)
 app.include_router(strategy_lab.router)
+app.include_router(emission_controller.router)
 app.include_router(positions.router)
 app.include_router(profit.router)
 app.include_router(dark_signals.router)
