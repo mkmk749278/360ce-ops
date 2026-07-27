@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+{% block title %}Layer G — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Layer G — autonomous emission controller</h1>
+<p class="muted">
+  The outer loop of the Autonomous Portfolio: it reads the measured gate verdicts
+  and the Strategy×Context edge matrix and moves the per-strategy emission
+  overrides <strong>itself</strong>, with no human in the loop, inside a bounded
+  envelope. It has been live on the money path since S72 — this page is the first
+  surface that shows what it is doing.
+</p>
+
+{% if s.error %}
+<section class="card">
+  <h2>Store unavailable</h2>
+  <p class="neg">{{ s.error }}</p>
+  <p class="muted">
+    The engine writes <code>data/emission_controller_store.json</code> once per
+    controller cycle (default every 30&nbsp;min). Missing file = the volume is not
+    mounted (dev), or the controller has not completed a cycle since deploy.
+  </p>
+</section>
+{% else %}
+
+<section class="card">
+  <h2>Routability — is the controller tuning keys the policy can read?</h2>
+  {% if not s.measuring %}
+    <p class="neg"><strong>Not measuring.</strong></p>
+    <p class="muted">
+      The controller has published no routability block, so the numbers below
+      cannot be computed. Either the engine predates the measurement or
+      <code>emission_controller_routable_enabled</code> is off. This is
+      <em>unknown</em>, not <em>healthy</em> — an empty panel is exactly how the
+      dead-key waste stayed invisible for 279 cycles.
+    </p>
+  {% else %}
+    <table class="data-table">
+      <tbody>
+        <tr>
+          <td>Mode</td>
+          <td>
+            {% if s.enforced %}
+              <strong class="pos">ENFORCING</strong> — unroutable keys are excluded
+              from the action space and dead overrides are pruned
+            {% else %}
+              <strong>MEASURING</strong> — classification and the counterfactual run
+              live; behaviour is unchanged
+            {% endif %}
+          </td>
+        </tr>
+        <tr><td>Controller cycle</td><td>{{ s.cycle if s.cycle is not none else 'n/a' }}</td></tr>
+        <tr>
+          <td>Active overrides the policy <strong>reads</strong></td>
+          <td><strong>{{ s.overrides.live_n }}</strong> of {{ s.overrides.total_n }}</td>
+        </tr>
+        <tr>
+          <td>Active overrides that are <strong>dead keys</strong></td>
+          <td class="{% if s.overrides.unroutable_n %}neg{% else %}pos{% endif %}">
+            <strong>{{ s.overrides.unroutable_n }}</strong> of {{ s.overrides.total_n }}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    {% if s.enforced and s.overrides.unroutable_n %}
+      <p class="neg">
+        Enforcement is on yet dead overrides persist — the prune is not doing its
+        job. The engine's <code>emission_controller_routability</code> liveness
+        probe pages on this.
+      </p>
+    {% endif %}
+  {% endif %}
+</section>
+
+{% if s.measuring %}
+<section class="card">
+  <h2>Lifetime promotion budget — where the {{ s.lifetime.promotions }} promotions went</h2>
+  <p class="muted">
+    Measured over the {{ s.ledger_n }} ledger rows this page renders below. The
+    controller may promote at most a couple of overrides per cycle, so a promotion
+    spent on a key nothing reads is budget taken from a live strategy.
+  </p>
+  <table class="data-table">
+    <tbody>
+      <tr><td>Promotions to keys the policy reads</td>
+          <td class="pos"><strong>{{ s.lifetime.counts.routable }}</strong></td></tr>
+      <tr><td>Promotions to unroutable keys (measurement arms, shadow units)</td>
+          <td class="{% if s.lifetime.counts.unroutable %}neg{% endif %}">
+            <strong>{{ s.lifetime.counts.unroutable }}</strong>
+            {% if s.lifetime.promotions %}({{ "%.0f%%" % s.lifetime.wasted_pct }} of all promotions){% endif %}
+          </td></tr>
+      <tr><td>Prunes (dead overrides removed — not promotions)</td>
+          <td>{{ s.lifetime.counts.pruned }}</td></tr>
+      <tr><td>Unclassified — written before the engine stamped routability</td>
+          <td>{{ s.lifetime.counts.unclassified }}</td></tr>
+    </tbody>
+  </table>
+  {% if s.lifetime.counts.unclassified %}
+    <p class="muted">
+      {{ s.lifetime.counts.unclassified }} row(s) carry no <code>routable</code>
+      stamp because they predate the measurement, so the split above rests on
+      {{ s.lifetime.classified }} classified rows. Ops does not guess at the rest:
+      re-deriving the classification here from a mirrored suffix list is the drift
+      class that inflated the Strategy Lab rollup for a week.
+    </p>
+  {% endif %}
+
+  {% if s.lifetime.unroutable_by_key %}
+    <h3>Which dead keys consumed it</h3>
+    <table class="data-table">
+      <thead><tr><th>Strategy key</th><th>Promotions</th></tr></thead>
+      <tbody>
+        {% for name, count in s.lifetime.unroutable_by_key.items() %}
+          <tr><td><code>{{ name }}</code></td><td>{{ count }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Latest cycle — the counterfactual</h2>
+  <p class="muted">
+    One cycle only, not a window. The engine re-runs its own bounded selection over
+    routable candidates alone and diffs the result, so the cost is read off the
+    controller's real decision rather than inferred.
+  </p>
+  <table class="data-table">
+    <tbody>
+      <tr><td>Candidates the policy can read</td><td>{{ s.latest.routable_candidates if s.latest.routable_candidates is not none else 'n/a' }}</td></tr>
+      <tr><td>Candidates it cannot</td><td>{{ s.latest.unroutable_candidates if s.latest.unroutable_candidates is not none else 'n/a' }}</td></tr>
+      <tr>
+        <td>Promotions spent on unroutable keys this cycle</td>
+        <td class="{% if s.latest.promoted_unroutable %}neg{% endif %}">
+          {% if s.latest.promoted_unroutable %}
+            {% for k in s.latest.promoted_unroutable %}<code>{{ k }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+          {% else %}none{% endif %}
+        </td>
+      </tr>
+      <tr>
+        <td><strong>Live candidates that would have promoted instead</strong></td>
+        <td class="{% if s.latest.starved_routable %}neg{% endif %}">
+          {% if s.latest.starved_routable %}
+            {% for k in s.latest.starved_routable %}<code>{{ k }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+          {% else %}none{% endif %}
+        </td>
+      </tr>
+      <tr><td>Dead overrides pruned this cycle</td>
+          <td>{% if s.latest.pruned %}{{ s.latest.pruned | length }}{% else %}0{% endif %}</td></tr>
+    </tbody>
+  </table>
+  <p class="muted">
+    Both lists empty is the resting state under enforcement. While merely
+    measuring, empty means <em>this cycle</em> had no promotable candidates —
+    candidates are frequently zero — so read the standing dead-override footprint
+    above for the persistent picture, not this panel.
+  </p>
+</section>
+
+{% if s.dead_overrides %}
+<section class="card">
+  <h2>Dead overrides — stored, and read by nothing</h2>
+  <p class="muted">
+    The engine classified these keys as unreachable: the emission policy looks up
+    overrides under a live <code>SetupClass</code> value, and these are measurement
+    arms or shadow-only units. Every value here is inert.
+  </p>
+  <table class="data-table">
+    <thead><tr><th>Strategy key</th><th>Override the policy never reads</th></tr></thead>
+    <tbody>
+      {% for name, params in s.dead_overrides.items() %}
+        <tr><td><code>{{ name }}</code></td><td><code>{{ params | tojson }}</code></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted">
+    Clearing these is what <code>emission_controller_routable_live</code> does
+    (Control → Signal gating). Its side effect is that live strategies stop
+    competing with these rows for the per-cycle budget, so their overrides promote
+    sooner — an emission-timing change, which is why it is owner-gated.
+  </p>
+</section>
+{% endif %}
+{% endif %}
+
+<section class="card">
+  <h2>Active overrides the policy actually reads</h2>
+  {% if s.overrides.live %}
+    <table class="data-table">
+      <thead><tr><th>Strategy</th><th>Override</th></tr></thead>
+      <tbody>
+        {% for name, params in s.overrides.live.items() %}
+          <tr><td><code>{{ name }}</code></td><td><code>{{ params | tojson }}</code></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">
+      No live overrides — every strategy is following the global emission policy
+      params. Expected during boot grace, and after a kill-switch revert.
+    </p>
+  {% endif %}
+</section>
+
+{% if s.pending %}
+<section class="card">
+  <h2>Pending — what the controller would do but hasn't</h2>
+  <p class="muted">
+    This cycle's would-be adjustments, held back by boot grace, thin evidence, the
+    EV bar, or the per-cycle blast radius. The reason column says which.
+  </p>
+  <table class="data-table">
+    <thead>
+      <tr><th>Strategy</th><th>Param</th><th>Change</th><th>Verdict</th><th>n</th><th>Routable</th><th>Reason</th></tr>
+    </thead>
+    <tbody>
+      {% for a in s.pending %}
+        <tr>
+          <td><code>{{ a.strategy }}</code></td>
+          <td>{{ a.param }}</td>
+          <td>{{ a.old }} → {{ a.new }}</td>
+          <td>{{ a.verdict }}</td>
+          <td>{{ a.n }}</td>
+          <td>{% if a.routable is none %}<span class="muted">?</span>
+              {% elif a.routable %}<span class="pos">yes</span>
+              {% else %}<span class="neg">no</span>{% endif %}</td>
+          <td class="muted">{{ a.reason }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>Applied adjustments — the audit trail</h2>
+  <p class="muted">
+    Newest first; the durable record of what actually changed. <code>PRUNED</code>
+    rows are dead-override cleanups, not policy changes.
+  </p>
+  {% if s.ledger %}
+    <table class="data-table">
+      <thead>
+        <tr><th>Strategy</th><th>Param</th><th>Change</th><th>Status</th><th>Verdict</th><th>EV/supp (R)</th><th>n</th><th>Routable</th><th>Reason</th></tr>
+      </thead>
+      <tbody>
+        {% for a in s.ledger %}
+          <tr>
+            <td><code>{{ a.strategy }}</code></td>
+            <td>{{ a.param }}</td>
+            <td>{{ a.old }} → {{ a.new }}</td>
+            <td>{{ a.status }}</td>
+            <td>{{ a.verdict }}</td>
+            <td>{% if a.ev_per_suppression_r is not none %}{{ "%+.3f" % a.ev_per_suppression_r }}{% else %}—{% endif %}</td>
+            <td>{{ a.n }}</td>
+            <td>{% if a.routable is none %}<span class="muted">?</span>
+                {% elif a.routable %}<span class="pos">yes</span>
+                {% else %}<span class="neg">no</span>{% endif %}</td>
+            <td class="muted">{{ a.reason }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No applied adjustments yet.</p>
+  {% endif %}
+</section>
+
+<p class="muted">
+  <strong>Routability is stamped by the engine</strong>, never re-derived here — the
+  authoritative suffix list lives in <code>geometry_ab._VARIANT_SUFFIXES</code> and
+  the live key set is <code>SetupClass</code>. A “?” means the row predates the
+  stamp. Enforcement is flipped from Control → Signal gating
+  (<code>emission_controller_routable_live</code>), never from this page.
+</p>
+{% endif %}
+{% endblock %}
