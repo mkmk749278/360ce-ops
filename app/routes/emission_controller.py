@@ -63,13 +63,29 @@ def _rows(payload: Any, key: str) -> list[dict]:
 
     The engine REST/volume surface is the source of truth and this dashboard
     adapts to it, so a shape drift yields an empty section rather than a 500.
+
+    Every row is normalised to carry an **explicit** ``routable`` key. That is not
+    cosmetic: in Jinja, ``row.routable`` on a dict that lacks the key yields
+    ``Undefined``, and ``Undefined is none`` is **False** — so a
+    ``none``/truthy/else chain in the template silently lands on the else branch
+    and renders a pre-stamp row as *unroutable*. That shipped, and it asserted the
+    opposite of the truth for real strategies (``MOVER_AVWAP_SCALP``,
+    ``DIVERGENCE_CONTINUATION`` all read "no"). Normalising here fixes it once for
+    every consumer instead of relying on three template predicates staying right.
     """
     if not isinstance(payload, dict):
         return []
     value = payload.get(key)
     if not isinstance(value, list):
         return []
-    return [r for r in value if isinstance(r, dict)]
+    out = []
+    for r in value:
+        if not isinstance(r, dict):
+            continue
+        r = dict(r)
+        r["routable"] = r.get("routable")   # explicit None, never Undefined
+        out.append(r)
+    return out
 
 
 def _mapping(payload: Any, key: str) -> dict:
@@ -120,24 +136,40 @@ def classify_ledger(rows: list[dict]) -> dict:
     }
 
 
-def split_overrides(active: dict, dead: dict) -> dict:
-    """Active overrides split into the ones the policy reads and the ones it can't.
+def split_overrides(active: dict, dead: dict, *, measuring: bool = True) -> dict:
+    """Active overrides split by whether the policy can read them.
 
     ``dead`` comes from the engine's routability report, so membership is the
-    engine's judgement, not a re-derivation. An override absent from ``dead`` is
-    treated as live — failing toward "this is real" keeps ops from quietly
-    hiding a genuine override behind a classification bug here.
+    engine's judgement, not a re-derivation. While the engine *is* measuring, an
+    override absent from ``dead`` is live — failing toward "this is real" keeps ops
+    from quietly hiding a genuine override behind a classification bug here.
+
+    **When the engine is not measuring there is no basis to claim either.** The
+    first cut of this reducer had two states and defaulted to "live", so with no
+    routability block every override — including the nine known dead keys — landed
+    under a heading reading *"Active overrides the policy actually reads"*. Every
+    number on it was defensible and the sentence above it was false, which is the
+    "copy is part of the measurement" failure. So the split has three states, and
+    ``unknown`` is one of them.
     """
     live: dict[str, Any] = {}
     unroutable: dict[str, Any] = {}
+    unknown: dict[str, Any] = {}
     for name, params in sorted((active or {}).items()):
-        (unroutable if name in (dead or {}) else live)[name] = params
+        if not measuring:
+            unknown[name] = params
+        elif name in (dead or {}):
+            unroutable[name] = params
+        else:
+            live[name] = params
     return {
         "live": live,
         "unroutable": unroutable,
+        "unknown": unknown,
         "live_n": len(live),
         "unroutable_n": len(unroutable),
-        "total_n": len(live) + len(unroutable),
+        "unknown_n": len(unknown),
+        "total_n": len(live) + len(unroutable) + len(unknown),
     }
 
 
@@ -177,7 +209,9 @@ def summarise(payload: Any) -> dict:
             "pruned": routability.get("pruned") or [],
             "wasted_promotions": routability.get("wasted_promotions") or 0,
         },
-        "overrides": split_overrides(_mapping(payload, "active_overrides"), dead),
+        "overrides": split_overrides(
+            _mapping(payload, "active_overrides"), dead, measuring=measuring,
+        ),
         "dead_overrides": dict(sorted(dead.items())),
         "lifetime": classify_ledger(ledger),
         "ledger": list(reversed(ledger))[:60],   # newest first

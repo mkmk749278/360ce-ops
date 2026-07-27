@@ -182,6 +182,7 @@
 {% endif %}
 {% endif %}
 
+{% if s.measuring %}
 <section class="card">
   <h2>Active overrides the policy actually reads</h2>
   {% if s.overrides.live %}
@@ -200,6 +201,30 @@
     </p>
   {% endif %}
 </section>
+{% else %}
+<section class="card">
+  <h2>Active overrides — routability unknown</h2>
+  <p class="muted">
+    The engine has published no routability block, so <strong>this table cannot say
+    which of these the policy reads</strong>. Some are very likely dead keys — the
+    split appears here once the controller has cycled. Listing them under
+    "overrides the policy reads" without that block would assert something not
+    measured.
+  </p>
+  {% if s.overrides.unknown %}
+    <table class="data-table">
+      <thead><tr><th>Strategy</th><th>Override</th></tr></thead>
+      <tbody>
+        {% for name, params in s.overrides.unknown.items() %}
+          <tr><td><code>{{ name }}</code></td><td><code>{{ params | tojson }}</code></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">No active overrides.</p>
+  {% endif %}
+</section>
+{% endif %}
 
 {% if s.pending %}
 <section class="card">
