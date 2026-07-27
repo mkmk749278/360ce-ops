@@ -242,15 +242,36 @@ def _group_arms(records: Any) -> dict[tuple, dict[str, list[dict]]]:
     return groups
 
 
-# Status vocabulary for a SAR trade. A trailing exit has **no TP and no SL** —
-# the trail is the only way out — so the live signal statuses (TP1/TP2/SL) have
-# no analogue here and are deliberately absent. What a SAR trade can be:
+# Status vocabulary for a SAR trade.
+#
+# Rewritten 2026-07-27 for the engine's **conditional-handover** redesign. The
+# arm is no longer trail-only: when SAR opposes at entry the trade runs on its
+# live SL/TP1 and only switches to the trail if the indicator comes onside. So
+# a SAR trade CAN now end on a stop or a target, and the two new engine reasons
+# (``static_sl`` / ``static_tp1``) must have statuses of their own. Without
+# them ``_sar_status`` fell through to NO_DATA — the page would have reported
+# "couldn't resolve it" for trades that resolved perfectly well, which is the
+# panel lying about a data fault that is not happening.
 SAR_RUNNING = "RUNNING"          # stamped; its 48h window has not elapsed yet
 SAR_CLOSED_TRAIL = "CLOSED_TRAIL"   # the moving stop caught price
+SAR_CLOSED_SL = "CLOSED_SL"      # the live stop closed it before any handover
+SAR_CLOSED_TP1 = "CLOSED_TP1"    # the live target closed it before any handover
 SAR_CLOSED_WINDOW = "CLOSED_WINDOW"  # 48h passed untouched; marked to the close
 SAR_NO_DATA = "NO_DATA"          # window elapsed but candles couldn't resolve it
 
-SAR_STATUSES = (SAR_RUNNING, SAR_CLOSED_TRAIL, SAR_CLOSED_WINDOW, SAR_NO_DATA)
+SAR_STATUSES = (
+    SAR_RUNNING, SAR_CLOSED_TRAIL, SAR_CLOSED_SL, SAR_CLOSED_TP1,
+    SAR_CLOSED_WINDOW, SAR_NO_DATA,
+)
+
+# Mirrors the engine's REASON_* constants (src/suppression_audit.py). Keep in
+# step: a reason the engine writes and this map does not know reads as NO_DATA.
+_REASON_TO_STATUS = {
+    "trail": SAR_CLOSED_TRAIL,
+    "static_sl": SAR_CLOSED_SL,
+    "static_tp1": SAR_CLOSED_TP1,
+    "window": SAR_CLOSED_WINDOW,
+}
 
 # Provenance (engine: src/suppression_audit.py). The arm stamps from both
 # scanner call sites, so the ledger mixes candidates that reached subscribers
@@ -282,19 +303,17 @@ def _sar_status(rec: dict) -> str:
     if cls == "INSUFFICIENT_DATA":
         return SAR_NO_DATA
     reason = str(rec.get("trail_exit_reason") or "")
-    if reason == "window":
-        return SAR_CLOSED_WINDOW
-    if reason == "trail":
-        return SAR_CLOSED_TRAIL
-    return SAR_NO_DATA
+    return _REASON_TO_STATUS.get(reason, SAR_NO_DATA)
 
 
 def _sar_status_class(status: str) -> str:
     """Badge colour, mirroring the Feed's convention."""
     if status == SAR_RUNNING:
         return "st-active"
-    if status == SAR_CLOSED_TRAIL:
+    if status in (SAR_CLOSED_TRAIL, SAR_CLOSED_TP1):
         return "st-tp"
+    if status == SAR_CLOSED_SL:
+        return "st-sl"
     if status == SAR_CLOSED_WINDOW:
         return "st-expired"
     return "st-closed"
@@ -360,6 +379,12 @@ def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
                 # rendered as "?" and excluded from the split, never guessed
                 # into a bucket it would then skew.
                 "sar_aligned": rec.get("sar_aligned_at_entry"),
+                # Bars from entry to the moment the trail took control; None =
+                # never handed over, which means this row IS the control arm and
+                # can contribute nothing to the comparison. Explicit None test
+                # everywhere: 0 is a real handover (onside at entry) and the
+                # falsiest value there is.
+                "handover_bars": rec.get("sar_handover_bars"),
                 "r_multiple": r_mult,
                 "pnl_pct": pnl_pct,
                 "delta_r": delta_r,
@@ -414,11 +439,21 @@ def summarize_alignment(rows: list[dict]) -> dict:
     one) and would silently diverge the moment that changes — which is exactly
     the change proposed for the engine, so the denominators are pinned now.
 
-    Why the arm cannot be read as one number: it pools two structurally
-    different populations. When SAR already points our way the trail rides and
-    the exit measures the method. When it points the other way its level is
-    already breached at entry, so the walk exits on the first testable bar and
-    the row records ~15 minutes of drift rather than anything about the trail.
+    Why the arm cannot be read as one number — restated 2026-07-27 for the
+    engine's conditional-handover redesign, because the old reason stopped
+    being true. Alignment at entry now decides **which leg the trade starts
+    on**, so the buckets still describe different experiments:
+
+      aligned — the trail governed from bar one; a pure read on the method.
+      opposed — the trade started on its live SL/TP1 and switched only if SAR
+                came onside, so its avg-R is dominated by the live geometry.
+                A row that never handed over IS the control arm, bar for bar.
+
+    What this docstring used to say — that an opposed row "exits on the first
+    testable bar and records ~15 minutes of drift" — described the arm before
+    the redesign and must not be repeated in the UI: copy is part of the
+    measurement, and a panel that names a cause its numbers no longer show is
+    wrong on screen even when every figure in it is right.
 
     ``distinct_exits`` counts unique (symbol, side, exit price) among the
     resolved rows. Overlapping entries into one move resolve at the *same* exit
@@ -439,6 +474,7 @@ def summarize_alignment(rows: list[dict]) -> dict:
             "n": len(sel),
             "closed": len(closed),
             "distinct_exits": len(exits),
+            "handovers": sum(1 for r in closed if r.get("handover_bars") is not None),
             "avg_r": (sum(r["r_multiple"] for r in closed) / len(closed)) if closed else None,
             "win_rate": (wins / len(closed)) if closed else None,
             "avg_hold_min": (sum(holds) / len(holds)) if holds else None,
@@ -465,6 +501,13 @@ def summarize_alignment(rows: list[dict]) -> dict:
         "known": aligned["n"] + opposed["n"],
         "known_closed": known_closed,
         "opposed_share": (opposed["closed"] / known_closed) if known_closed else None,
+        # The population the A/B actually rests on: only a row where the trail
+        # took control can differ from the control arm at all.
+        "handovers": aligned["handovers"] + opposed["handovers"],
+        "handover_share": (
+            (aligned["handovers"] + opposed["handovers"]) / known_closed
+            if known_closed else None
+        ),
     }
 
 
