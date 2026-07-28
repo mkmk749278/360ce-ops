@@ -80,6 +80,14 @@ Two rules, both learned the hard way:
   adoption decision reads. Every count is measured with **every filter applied
   except its own**; a selector applied to its own counts makes each option describe
   only itself.
+- **Truncate after filtering, never before.** `reduce_sar_signals` defaulted to
+  `limit=300` and cut inside the reducer, ahead of `filter_sar_signals` — so every
+  filter ran on the newest 300 pairs of a ~2,000-pair ledger, roughly 4 hours of it.
+  That starves the rarest and most important population hardest: **"Delivered to
+  users" silently meant "delivered, within the newest 300"** — 4 emitted rows against
+  152 enqueued and 144 suppressed, and only the delivered ones can justify changing
+  what users receive (#97, 2026-07-28). A row cap is a *render* bound: apply it in the
+  route, after every filter, and say on screen when it bit.
 - **Disclose concentration; don't silently average it.** Overlapping entries into
   one move resolve at the same exit price and are not independent evidence — three
   BUSDT rows stamped 00:04 / 00:47 / 01:34 all exited at 0.1959 and carried 3/8 of a
@@ -91,6 +99,44 @@ Two rules, both learned the hard way:
   be true of those rows. Say whether an R is gross or net — #90 predicted a
   cost-inclusive figure and then measured a cost-free one.
 
+## Recorded vs reconstructed — the line `/track-record` must not cross
+
+Added 2026-07-28 (#98) for the owner's paper-trading problem: per-user paper books
+start empty, so a new subscriber waits a week to a month before their own book says
+anything, while the engine has recorded every closed signal all along.
+
+`/track-record` is the **recorded** surface. Every row is a signal the router
+confirmed, tracked forward in real time by `trade_monitor`, written at its terminal
+transition. The Profit tab's `free_run` / `dark_signals` / `exit_backtest` are
+**reconstructed** — they replay candles and rebuild an outcome after the fact.
+
+**Never put a reconstructed number on `/track-record`, and never merge the two into
+one figure.** The owner ruled out backfill explicitly. Counterfactuals are optimistic
+(~0.38R measured, see the engine's `CLAUDE.md`), and a reconstructed result wearing a
+track record's name is the single most dangerous artefact this repo could produce —
+it is the number a subscription decision would rest on. There is a route test
+asserting the page still says "recorded, not reconstructed"; copy is part of the
+measurement.
+
+Three rules the page carries, all ports rather than inventions:
+
+- **R, not portfolio %.** A portfolio return needs an assumed position size, and the
+  engine's `MAX_SAME_DIRECTION_GLOBAL=3` means two users on identical settings get
+  different fills — so a percentage would not be a fact about anyone.
+  `R = pnl_pct / sl_distance_pct` is the same denominator the SAR arm and the edge
+  matrix divide by, so a number here is comparable with one there.
+- **Refuse, don't clamp.** A record without a usable `stop_loss` has no R: counted in
+  the trade count, excluded from every R figure, and the shortfall stated on screen.
+  Scoring it 0R would drag the averages toward zero and make missing data read as
+  mediocre performance.
+- **Bucket by CLOSE time.** A day's PnL is the PnL realised that day; bucketing by
+  entry credits Monday with a trade that closed Thursday.
+
+`entry_regime` arrives from engine #817 and **cannot be backfilled** — the regime at
+entry is knowable only at entry — so records closed before that deploy render as their
+own `UNPLACED` bucket rather than being folded into a real regime.
+
+
 ## Data sources (one-line each)
 
 | Source | Module |
@@ -101,6 +147,7 @@ Two rules, both learned the hard way:
 | `docker exec engine python /app/scripts/diag_*` | `app/data_sources/diag_runner.py` |
 | Monitoring agent's active-alert Redis state | `app/data_sources/agent_alerts.py` |
 | Binance Futures public 1m klines (no key, read-only) | `app/data_sources/binance_klines.py` |
+| Closed-signal record — `signal_performance.json` (`/track-record`, `/performance`) | `app/data_sources/data_volume.py` |
 | "Held to stop" free-run replay (Profit tab) | `app/data_sources/free_run.py` |
 | Scaled-exit what-if simulator (Profit tab) | `app/data_sources/exit_sim.py` |
 
