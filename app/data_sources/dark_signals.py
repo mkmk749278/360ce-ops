@@ -213,33 +213,59 @@ def supertrend(
     return line, direction
 
 
-def parabolic_sar(
+def parabolic_sar_levels(
     highs: list[float],
     lows: list[float],
     step: float,
     max_step: float,
-) -> list[float | None]:
-    """Parabolic SAR (Wilder). Returns the stop-and-reverse level per bar.
+) -> tuple[list[float | None], list[float | None]]:
+    """Parabolic SAR (Wilder) → ``(published, in_force)``. Two different things.
 
-    Standard implementation: AF starts at ``step``, increments by ``step`` on
-    each new extreme up to ``max_step``, and the SAR is bounded by the prior two
-    bars' extremes so it can't penetrate the recent range.
+    ``published[i]`` is the indicator value at bar ``i`` — what a chart draws,
+    and what "which side of price is the SAR on" reads. ``in_force[i]`` is the
+    stop that was live **during** bar ``i``: projected and clamped from bars
+    ``< i`` only, so it is knowable before the bar trades. **A fill may only be
+    taken at ``in_force``.**
+
+    They agree on every bar except a reversal, and that exception is why this
+    exists (owner-caught 2026-07-28, "is it measuring accurately or not"). The
+    simulator read ``published[i]`` as the stop in force. On a flip bar that is
+    the prior trend's extreme, sitting on the far side of price, so
+    ``b.low <= stop`` was trivially true and the gap-through branch filled at
+    **the bar's open** rather than the level price actually breached — right
+    bar, wrong price.
+
+    The error was one-directional, because a flip bar normally opens on the
+    profitable side of the stop and wicks through it. Measured over 820 real 15m
+    flip events on 10 symbols: mean **+0.222%** per trail exit, flattering the
+    trade in **95%** of cases; only 1% were genuine gap-throughs where filling at
+    the open is correct.
+
+    It also skewed this page's *ranking*, not just its level: ``atr`` builds its
+    own ratcheted trail from ATR values and ``supertrend`` exits on the close, so
+    **only the SAR method carried the bias** — the one the bake-off is being
+    asked to endorse.
+
+    Ports the engine's ``sar_exit_shadow.parabolic_sar_levels``; the published
+    series is pinned to it by ``tests/test_sar_engine_contract.py``.
     """
     n = len(highs)
-    out: list[float | None] = [None] * n
+    published: list[float | None] = [None] * n
+    in_force: list[float | None] = [None] * n
     if n < 2:
-        return out
+        return published, in_force
     # Seed direction from the first two bars.
     up = highs[1] >= highs[0]
     af = step
     ep = highs[1] if up else lows[1]
     sar = lows[0] if up else highs[0]
-    out[1] = sar
+    published[1] = sar
     for i in range(2, n):
         sar = sar + af * (ep - sar)
         if up:
             # SAR can't exceed the prior two lows.
             sar = min(sar, lows[i - 1], lows[i - 2])
+            in_force[i] = sar          # clamped, pre-flip: breachable this bar
             if lows[i] < sar:
                 # Flip to down.
                 up = False
@@ -252,6 +278,7 @@ def parabolic_sar(
                     af = min(af + step, max_step)
         else:
             sar = max(sar, highs[i - 1], highs[i - 2])
+            in_force[i] = sar
             if highs[i] > sar:
                 up = True
                 sar = ep
@@ -261,8 +288,22 @@ def parabolic_sar(
                 if lows[i] < ep:
                     ep = lows[i]
                     af = min(af + step, max_step)
-        out[i] = sar
-    return out
+        published[i] = sar
+    return published, in_force
+
+
+def parabolic_sar(
+    highs: list[float],
+    lows: list[float],
+    step: float,
+    max_step: float,
+) -> list[float | None]:
+    """Parabolic SAR (Wilder) — the **published** indicator series.
+
+    A simulator wants ``parabolic_sar_levels``' second return value; the two
+    differ on reversal bars, and that difference is a fill price.
+    """
+    return parabolic_sar_levels(highs, lows, step, max_step)[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -301,7 +342,9 @@ def _stop_series(
         line, direction = supertrend(highs, lows, closes, period, mult)
         return line, direction
     if method == "sar":
-        return parabolic_sar(highs, lows, sar_step, sar_max), None
+        # The stop in force per bar — the caller fills at this series, and the
+        # published level is the prior trend's extreme on a reversal bar.
+        return parabolic_sar_levels(highs, lows, sar_step, sar_max)[1], None
     # ATR-trail (chandelier): the raw ATR series; the ratcheted stop is built
     # inside the walk because it depends on the running extreme since entry.
     return wilder_atr(highs, lows, closes, period), None
