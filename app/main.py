@@ -45,6 +45,7 @@ from app.routes import (
     invalidations,
     pairs,
     performance,
+    track_record,
     positions,
     profit,
     pulse,
@@ -120,6 +121,7 @@ app.include_router(pairs.router)
 app.include_router(diag.router)
 app.include_router(invalidations.router)
 app.include_router(performance.router)
+app.include_router(track_record.router)
 app.include_router(raw_edge.router)
 app.include_router(strategy_lab.router)
 app.include_router(emission_controller.router)
