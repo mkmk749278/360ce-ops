@@ -319,7 +319,59 @@ def _sar_status_class(status: str) -> str:
     return "st-closed"
 
 
-def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
+# How close two entries on the same (symbol, side, setup) must be to count as
+# one move rather than two independent outcomes.  **Mirrors the engine's
+# ``SAR_EXIT_SHADOW_SAME_MOVE_PCT``** (0.5) — ops ports the engine's math, it
+# does not invent it — and is displayed in the UI footer so the threshold is
+# never a hidden constant behind a headline number.
+SAME_MOVE_PCT = 0.5
+
+# The rendered table is capped; the *measurements* are not.  Applied in the
+# route AFTER every filter, never inside the reducer — see the note on
+# ``reduce_sar_signals``.
+TABLE_ROW_CAP = 500
+
+
+def distinct_moves(rows: list[dict]) -> int:
+    """How many distinct moves these rows describe (pure).
+
+    Overlapping entries into one move are not independent evidence — the
+    concentration rule this repo already carries, and the SAR feed is the worst
+    case yet seen for it. One SLXUSDT SHORT setup contributed 10 rows inside
+    2h10m at a 0.37% entry spread, 36% of an entire resolved population; the
+    verdict computed over the rows read 32% win / −0.364R, and over the moves
+    55% / +0.003R. **The sign flipped.**
+
+    Greedy single-pass clustering per (symbol, side, strategy), oldest first: a
+    row opens a new move unless it sits within ``SAME_MOVE_PCT`` of the move
+    currently open on that key. Deliberately the same rule the engine's stamp
+    gate uses, so the two agree on what "one move" means.
+
+    This is a *disclosure*, not a de-duplication: no row is dropped, and both
+    counts are shown side by side. Which one an adoption decision should use is
+    a judgement call, and a judgement call is not something a reducer should
+    make silently.
+    """
+    open_move: dict[tuple[str, str, str], float] = {}
+    moves = 0
+    for row in sorted(rows, key=lambda r: r.get("stamped_at") or 0.0):
+        key = (
+            str(row.get("symbol", "")),
+            str(row.get("side", "")),
+            str(row.get("strategy", "")),
+        )
+        entry = float(row.get("entry") or 0.0)
+        if entry <= 0:
+            continue
+        anchor = open_move.get(key)
+        if anchor is not None and abs(entry - anchor) / anchor * 100.0 < SAME_MOVE_PCT:
+            continue
+        open_move[key] = entry
+        moves += 1
+    return moves
+
+
+def reduce_sar_signals(records: Any, limit: int | None = None) -> list[dict]:
     """The SAR arm as a signal-shaped feed — one row per stamped SAR trade.
 
     Deliberately **not** the live-signal shape: a SAR trade carries no TP and no
@@ -332,6 +384,16 @@ def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
     Still-running trades are included (they are the majority for the first 48h
     after the flag goes live); their exit fields are ``None`` and the template
     renders an em-dash rather than a zero, so "not yet" never reads as "flat".
+
+    **``limit`` defaults to None, and the route does not pass one.** It used to
+    default to 300 and truncate here, which put the cut *before* every filter:
+    ``filter_sar_signals`` ran on the newest 300 pairs, so "Delivered to users"
+    showed the emitted rows inside a ~4-hour slice rather than all of them in
+    the ledger. That starves the rarest and most important population hardest —
+    the owner's export held 4 emitted rows against 152 enqueued and 144
+    suppressed, and only the emitted ones can justify changing live output
+    (owner-caught 2026-07-28). Truncation now happens in the route, after
+    filtering, and only to the rendered table — never to anything counted.
     """
     out: list[dict] = []
     for (symbol, side, strategy), arms in _group_arms(records).items():
@@ -390,7 +452,7 @@ def reduce_sar_signals(records: Any, limit: int = 300) -> list[dict]:
                 "delta_r": delta_r,
             })
     out.sort(key=lambda r: r["stamped_at"], reverse=True)
-    return out[:limit]
+    return out if limit is None else out[:limit]
 
 
 def filter_sar_signals(
@@ -521,10 +583,20 @@ def summarize_rows(rows: list[dict]) -> dict:
     closed = [r for r in rows if r["r_multiple"] is not None]
     compared = [r for r in rows if r["delta_r"] is not None]
     wins = sum(1 for r in closed if r["r_multiple"] > 0)
+    # Concentration, disclosed beside every count it could distort. A resolved
+    # population of 28 rows describing 11 moves is not 28 pieces of evidence,
+    # and on the owner's 2026-07-28 export the difference was the SIGN of the
+    # headline: 32% win / −0.364R across the rows, 55% / +0.003R across the
+    # moves. Both are shown; neither is silently chosen for the reader.
+    closed_moves = distinct_moves(closed)
     return {
         "n": len(rows),
+        "moves": distinct_moves(rows),
         "running": sum(1 for r in rows if r["status"] == SAR_RUNNING),
         "closed": len(closed),
+        "closed_moves": closed_moves,
+        # >1.0 means the average move is contributing more than one row.
+        "rows_per_move": (len(closed) / closed_moves) if closed_moves else None,
         "avg_r": (sum(r["r_multiple"] for r in closed) / len(closed)) if closed else None,
         "total_r": sum(r["r_multiple"] for r in closed) if closed else None,
         "win_rate": (wins / len(closed)) if closed else None,
@@ -720,13 +792,26 @@ async def sar_signals(
         prices = await request.app.state.binance_klines.fetch_all_prices()
     except Exception:
         prices = {}
+    # Everything above is measured on the FULL filtered population. Only the
+    # rendered table is capped, and only here — the cap used to live inside
+    # ``reduce_sar_signals`` at 300, ahead of every filter, which made
+    # "Delivered to users" mean "delivered, within the newest 300 pairs"
+    # (owner-caught 2026-07-28). ``shown``/``matched`` are handed to the
+    # template so a capped table says so instead of looking complete.
+    selected = rows
+    rows = selected[:TABLE_ROW_CAP]
     mark_running_rows(rows, prices)
     return templates.TemplateResponse("sar_signals.html", {
         "request": request,
         "active": "sar_signals",
         "rows": rows,
         "total": len(all_rows),
-        "summary": summarize_rows(rows),
+        "matched": len(selected),
+        "shown": len(rows),
+        "row_cap": TABLE_ROW_CAP,
+        "same_move_pct": SAME_MOVE_PCT,
+        # Measured on the full selection, never on the truncated table.
+        "summary": summarize_rows(selected),
         "statuses": [s for s in SAR_STATUSES if any(r["status"] == s for r in all_rows)],
         "strategies": sorted({r["strategy"] for r in all_rows}),
         "n_all": len(src_scope),
