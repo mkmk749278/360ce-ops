@@ -12,42 +12,46 @@
     {{ ledger_status.detail }}
   </p>
   <p class="muted small">These are <strong>shadow trades, not signals</strong> — none was dispatched,
-  sent to a subscriber, or opened on anyone's capital. A SAR trade has <strong>no TP and no SL</strong>:
-  the trail is its only exit, so those columns don't exist here. It closes when the moving stop catches
-  price, or gets marked to the close if 48h pass untouched.
+  sent to a subscriber, or opened on anyone's capital. The exit is a <strong>conditional
+  handover</strong> (engine change, 2026-07-27): SAR onside at entry and the trail governs from bar
+  one; SAR opposed and the trade runs on its <em>live</em> SL and TP1 until the indicator comes
+  onside, if it ever does. So a row can close on the trail, on the live stop, on the live target,
+  or be marked to the close if 48h pass untouched.
   The live signal book is under <a href="/signals">Feed</a>.</p>
 </section>
 
 <section class="card">
   <h2 class="small">SAR agreement at entry</h2>
   <p class="muted small">
-    A trailing SAR is a stop that is already somewhere when the trade opens. If the
-    indicator was pointing <strong>our way</strong>, its level sits behind the entry and
-    the trail rides — that is the exit method being measured. If it was pointing the
-    <strong>other way</strong>, its level is already breached at entry, so the walk exits
-    on the first testable bar at the next bar's open. Such a row records roughly fifteen
-    minutes of drift, not the trail: its sign is close to a coin flip and it says only
-    that we took a signal against the indicator.
-    Pooling them answers a question nobody asked, and the headline then moves with the
-    agreement mix rather than with the exit — which is why they are split here and why
-    <strong>opposed share</strong> is the number that says how much of any pooled average
-    is not about SAR at all.
+    A trailing SAR is a stop that is already somewhere when the trade opens, so agreement
+    at entry decides <strong>which exit governs</strong>. Pointing <strong>our way</strong>:
+    the level sits behind the entry and the trail rides from bar one — the exit method
+    being measured. Pointing the <strong>other way</strong>: the trade runs on its live
+    SL and TP1 instead, exactly like the control arm, and hands over to the trail only
+    <em>if</em> the indicator later comes onside. If it never does, the live geometry
+    closes the trade and this arm and the control agree exactly.
+    So the two buckets answer different questions and the pooled headline would move with
+    the agreement mix rather than with the exit — which is why they are split here.
+    <strong>Handovers</strong> is the count that matters most: a row that never handed
+    over contributes nothing to the comparison, so the A/B is decided by that population
+    alone, however large the totals look.
   </p>
   <p class="muted small">
     Measured on {% if alignment_scoped %}<strong>the rows the filters below currently
     select</strong>{% else %}<strong>the whole ledger</strong>{% endif %} — narrow
     <em>Source</em> to <em>Delivered to users</em> for the only population whose answer
     can justify changing what subscribers receive. R is <strong>gross</strong>: the walk
-    charges no fees or slippage, so an opposed row that reads flat is a real cost live.
+    charges no fees or slippage, so any row that reads flat is a real cost live.
   </p>
   {% if alignment.known %}
   <table class="tbl">
-    <thead><tr><th>At entry</th><th>Trades</th><th>Resolved</th><th>Distinct exits</th><th>Win rate</th><th>Avg R</th><th>Avg hold</th></tr></thead>
+    <thead><tr><th>At entry</th><th>Trades</th><th>Resolved</th><th>Handovers</th><th>Distinct exits</th><th>Win rate</th><th>Avg R</th><th>Avg hold</th></tr></thead>
     <tbody>
       <tr>
         <td><span class="badge st-done">SAR agreed</span></td>
         <td>{{ alignment.aligned.n }}</td>
         <td>{{ alignment.aligned.closed }}</td>
+        <td>{{ alignment.aligned.handovers }}</td>
         <td class="{% if alignment.aligned.distinct_exits < alignment.aligned.closed %}neg{% endif %}">{{ alignment.aligned.distinct_exits }}</td>
         <td>{% if alignment.aligned.win_rate is not none %}{{ "%.0f"|format(alignment.aligned.win_rate * 100) }}%{% else %}—{% endif %}</td>
         <td class="{% if alignment.aligned.avg_r is not none and alignment.aligned.avg_r > 0 %}pos{% elif alignment.aligned.avg_r is not none and alignment.aligned.avg_r < 0 %}neg{% endif %}">
@@ -58,6 +62,7 @@
         <td><span class="badge st-closed">SAR opposed</span></td>
         <td>{{ alignment.opposed.n }}</td>
         <td>{{ alignment.opposed.closed }}</td>
+        <td>{{ alignment.opposed.handovers }}</td>
         <td class="{% if alignment.opposed.distinct_exits < alignment.opposed.closed %}neg{% endif %}">{{ alignment.opposed.distinct_exits }}</td>
         <td>{% if alignment.opposed.win_rate is not none %}{{ "%.0f"|format(alignment.opposed.win_rate * 100) }}%{% else %}—{% endif %}</td>
         <td class="{% if alignment.opposed.avg_r is not none and alignment.opposed.avg_r > 0 %}pos{% elif alignment.opposed.avg_r is not none and alignment.opposed.avg_r < 0 %}neg{% endif %}">
@@ -80,6 +85,12 @@
   <p class="small">
     <strong>Opposed share: {{ "%.0f"|format(alignment.opposed_share * 100) }}%</strong>
     of resolved trades were taken against the indicator.
+    {% if alignment.handover_share is not none %}
+    <strong>Handovers: {{ alignment.handovers }}
+    ({{ "%.0f"|format(alignment.handover_share * 100) }}%)</strong> —
+    the only rows that can differ from the control arm at all. The rest ran their live
+    geometry start to finish and contribute exactly nothing to the comparison.
+    {% endif %}
   </p>
   {% else %}
   <p class="muted small">Nothing resolved yet in this selection — no share to quote.</p>
@@ -99,8 +110,8 @@
       not yet resolved, so no agreement verdict exists yet. This is the normal state of
       most of the ledger, not a fault: the engine records agreement when the walker
       resolves a trade, so an open row reads blank by construction.
-      <em>(Proposed engine change: stamp it at entry instead — it is decided the moment
-      the signal fires and needs no future candle.)</em>
+      <em>(Agreement itself is stamped at entry since #802 — what an open row is still
+      waiting for is its exit, not its verdict.)</em>
     {% endif %}
     {% if alignment.unresolved %}
       <strong>{{ alignment.unresolved }}</strong> finished row(s) carry no verdict — the

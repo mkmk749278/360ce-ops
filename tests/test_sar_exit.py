@@ -23,6 +23,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.data_sources.data_volume import DataVolumeReader  # noqa: E402
 from app.routes.sar_exit import (  # noqa: E402
+    SAR_CLOSED_SL,
+    SAR_CLOSED_TP1,
     SAR_CLOSED_TRAIL,
     SAR_CLOSED_WINDOW,
     SAR_RUNNING,
@@ -287,6 +289,47 @@ class TestSarSignalFeed:
         assert row["status"] == SAR_CLOSED_WINDOW
         assert row["status_class"] == "st-expired"
         assert row["hold_min"] == 2880.0
+
+    def test_a_live_stop_close_is_its_own_status_not_no_data(self):
+        """Conditional handover (engine 2026-07-27): a SAR trade can now end on
+        the live geometry it started behind. Before this mapping existed those
+        rows fell through to NO_DATA — the page reporting "couldn't resolve it"
+        about trades that resolved perfectly well."""
+        recs = [
+            _arm("@SARBASE", ts=1.0, cls="WOULD_LOSE"),
+            _arm("@SAREXIT", ts=1.001, cls="WOULD_LOSE", trail_exit_price=99.0,
+                 trail_exit_reason="static_sl", trail_hold_min=45.0),
+        ]
+        row = reduce_sar_signals(recs)[0]
+        assert row["status"] == SAR_CLOSED_SL
+        assert row["status_class"] == "st-sl"
+        assert row["exit_price"] == 99.0
+
+    def test_a_live_target_close_is_its_own_status(self):
+        recs = [
+            _arm("@SARBASE", ts=1.0, cls="WOULD_WIN", tp1=102.0),
+            _arm("@SAREXIT", ts=1.001, cls="WOULD_WIN", trail_exit_price=102.0,
+                 trail_exit_reason="static_tp1", trail_hold_min=60.0),
+        ]
+        row = reduce_sar_signals(recs)[0]
+        assert row["status"] == SAR_CLOSED_TP1
+        assert row["status_class"] == "st-tp"
+
+    def test_handover_bars_reach_the_row(self):
+        """None = never handed over = this row IS the control arm. 0 is a real
+        handover (onside at entry) and must survive being the falsiest value."""
+        recs = [
+            _arm("@SARBASE", ts=1.0, cls="WOULD_WIN", tp1=102.0),
+            _arm("@SAREXIT", ts=1.001, cls="WOULD_WIN", trail_exit_price=103.0,
+                 trail_exit_reason="trail", sar_handover_bars=0),
+        ]
+        assert reduce_sar_signals(recs)[0]["handover_bars"] == 0
+        recs2 = [
+            _arm("@SARBASE", ts=2.0, cls="WOULD_LOSE"),
+            _arm("@SAREXIT", ts=2.001, cls="WOULD_LOSE", trail_exit_price=99.0,
+                 trail_exit_reason="static_sl"),
+        ]
+        assert reduce_sar_signals(recs2)[0]["handover_bars"] is None
 
     def test_short_side_pnl_is_signed_from_the_short_direction(self):
         recs = [
