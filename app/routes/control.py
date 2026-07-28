@@ -364,8 +364,15 @@ async def control_close_signal(
     api = request.app.state.engine_api
     settings = request.app.state.settings
     signal_id = (signal_id or "").strip()
-    # Only ever redirect to an in-app path (no open-redirect).
-    dest = redirect_to if redirect_to.startswith("/") else "/signals"
+    # Only ever redirect to an in-app path (no open-redirect).  A single
+    # leading slash is not sufficient: "//evil.example.com" passes a bare
+    # startswith("/") check and browsers read it as protocol-relative, so the
+    # redirect leaves the app entirely.  Require exactly one leading slash.
+    dest = (
+        redirect_to
+        if redirect_to.startswith("/") and not redirect_to.startswith("//")
+        else "/signals"
+    )
 
     if not signal_id:
         request.session["_control_flash"] = {"ok": False, "text": "No signal id supplied."}
