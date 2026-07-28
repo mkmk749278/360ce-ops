@@ -26,11 +26,35 @@ def _login(client: TestClient) -> None:
     client.post("/login", data={"password": "test-token"})
 
 
+# Frozen clock for the REDUCER tests. Those call classify/days_left/phase with
+# an explicit ``now=_NOW``, so a fixed date is exactly right there: the input and
+# the clock move together and the assertion is deterministic forever.
 _NOW = datetime(2026, 7, 25, 12, 0, tzinfo=timezone.utc)
 
 
 def _iso(delta: timedelta) -> str:
     return (_NOW + delta).isoformat()
+
+
+# Wall clock for the ROUTE tests, and the distinction is not cosmetic.
+#
+# The /trials route renders through ``classify(row)`` with no ``now`` injected,
+# so it reads ``datetime.now(timezone.utc)`` — the real one. Building its
+# fixtures off the frozen ``_NOW`` gave the "still running" trial an
+# ``expires_at`` of 2026-07-28T12:00Z, which meant the row silently reclassified
+# itself from active to lapsed the moment real time passed that instant. The
+# test went red on **2026-07-28 at 12:00 UTC** on a date, not on a commit: the
+# last push to main before that was green and every run after it fails.
+#
+# A fixture whose meaning depends on when the suite happens to run is a time
+# bomb, and the failure names the wrong thing when it goes off — it reads as a
+# broken trials page. Anchor anything the route classifies to the real clock so
+# "3 days from now" stays 3 days from now.
+_REAL_NOW = datetime.now(timezone.utc)
+
+
+def _riso(delta: timedelta) -> str:
+    return (_REAL_NOW + delta).isoformat()
 
 
 _DARK_FUNNEL = {
@@ -47,7 +71,7 @@ _DARK_FUNNEL = {
     "trials": [
         {
             "user_id": 5, "tier": "auto", "days": 7,
-            "eligible_at": _iso(timedelta(days=-2)),
+            "eligible_at": _riso(timedelta(days=-2)),
             "offered_at": None, "claimed_at": None, "expires_at": None,
             "converted_at": None, "shadow": 1,
         },
@@ -68,10 +92,10 @@ _LIVE_FUNNEL = {
     "trials": [
         {
             "user_id": 5, "tier": "auto", "days": 7,
-            "eligible_at": _iso(timedelta(days=-6)),
-            "offered_at": _iso(timedelta(days=-6)),
-            "claimed_at": _iso(timedelta(days=-4)),
-            "expires_at": _iso(timedelta(days=3)),
+            "eligible_at": _riso(timedelta(days=-6)),
+            "offered_at": _riso(timedelta(days=-6)),
+            "claimed_at": _riso(timedelta(days=-4)),
+            "expires_at": _riso(timedelta(days=3)),
             "converted_at": None, "shadow": 0,
         },
     ],
