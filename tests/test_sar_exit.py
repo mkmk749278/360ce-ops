@@ -647,7 +647,11 @@ class TestSarSignalRoutes:
             _login(client)
             r = client.get("/signals/sar?status=RUNNING")
             assert r.status_code == 200
-            assert "1 of 2 rows" in r.text
+            # Reworded 2026-07-28. "1 of 2 rows" conflated "shown of matched"
+            # with "matched of ledger" — and once the table cap moved out of
+            # the reducer those became genuinely different numbers.
+            assert "1 matched" in r.text
+            assert "2 in ledger" in r.text
 
     def test_empty_ledger_renders_the_dark_hint(self, monkeypatch):
         self._stub_ledger(monkeypatch, [])
@@ -682,7 +686,7 @@ class TestSarSignalRoutes:
 
             r = client.get("/signals/sar?source=emitted")
             assert r.status_code == 200
-            assert "1 of 2 rows" in r.text
+            assert "1 matched" in r.text and "2 in ledger" in r.text
             assert "Signals we actually delivered" in r.text
             # The emitted trade made +3.0R; the suppressed one (−1.0R) must be
             # excluded, so the total is +3.00 and not +2.00.

@@ -183,7 +183,10 @@
     </select>
   </label>
   <button type="submit">Filter</button>
-  <span class="muted">{{ rows | length }} of {{ total }} rows</span>
+  <span class="muted">
+    {% if matched > shown %}showing {{ shown }} of {{ matched }} matched
+    {% else %}{{ matched }} matched{% endif %}
+    &middot; {{ total }} in ledger</span>
 </form>
 
 <div class="actions">
@@ -198,17 +201,27 @@
     {% elif filter_source == 'enqueued' %}Queued, then dropped by our own routing
     {% elif filter_source == 'suppressed' %}Candidates a gate killed
     {% else %}All stamped candidates{% endif %}
-    <span class="muted small">— {{ summary.n }} trades, {{ summary.closed }} resolved, {{ summary.running }} still running</span>
+    <span class="muted small">— {{ summary.n }} trades across {{ summary.moves }} distinct moves,
+    {{ summary.closed }} resolved, {{ summary.running }} still running</span>
   </h2>
   {% if summary.closed %}
   <div class="summary-row">
     <span class="stat"><span class="n">{{ "%+.2f"|format(summary.total_r) }}R</span> total</span>
     <span class="stat"><span class="n">{{ "%+.3f"|format(summary.avg_r) }}R</span> avg</span>
     <span class="stat"><span class="n">{{ "%.0f"|format(summary.win_rate * 100) }}%</span> win</span>
+    <span class="stat"><span class="n">{{ summary.closed_moves }}</span> distinct moves resolved</span>
     {% if summary.avg_delta_r is not none %}
     <span class="stat"><span class="n {% if summary.avg_delta_r > 0 %}pos{% elif summary.avg_delta_r < 0 %}neg{% endif %}">{{ "%+.3f"|format(summary.avg_delta_r) }}R</span> avg vs live ({{ summary.compared }} pairs)</span>
     {% endif %}
   </div>
+  {% if summary.rows_per_move and summary.rows_per_move > 1.5 %}
+  <p class="warn small"><strong>Concentrated:</strong> {{ summary.closed }} resolved rows describe only
+  {{ summary.closed_moves }} distinct moves ({{ "%.1f"|format(summary.rows_per_move) }} rows per move).
+  Re-detections of one setup at one price are not independent evidence, and the averages above weight
+  them as if they were. Two entries count as the same move when they sit within
+  {{ same_move_pct }}% of each other on the same symbol, side and setup — the same rule the engine's
+  stamp gate uses. Rows stamped before 2026-07-28 were sampled without that gate.</p>
+  {% endif %}
   <p class="muted small">Averages cover <strong>resolved</strong> trades only — a running trade has no R,
   and counting it as 0R would drag every average toward zero and make the arm look flat while it is
   simply still measuring.
