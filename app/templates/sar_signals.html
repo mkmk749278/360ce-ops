@@ -3,6 +3,8 @@
 {% block content %}
 <h1>SAR signals <span class="muted">— what a trailing 15m Parabolic SAR would have done, trade by trade</span></h1>
 
+{% include "_sar_ledger_source.html" %}
+
 <section class="card">
   <p class="small">
     {% if ledger_status.state == 'live' %}<span class="badge st-done">LIVE</span>
