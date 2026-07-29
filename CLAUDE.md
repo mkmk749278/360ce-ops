@@ -6,9 +6,15 @@ Guidance for Claude Code sessions working in this repository.
 
 This dashboard is a consumer of — and the control plane for — `mkmk749278/360-v2` (the engine). Before working here, read in order:
 
-1. `OWNER_BRIEF.md` in 360-v2 — operating contract, role boundaries, business rules
-2. `ACTIVE_CONTEXT.md` in 360-v2 — current engine state, open queue
-3. `docs/360CE_OPS_PLAN.md` in 360-v2 — design document for this app
+1. **`ARCHITECTURE.md` in 360-v2** — the whole system on one map (all four repos, the
+   three planes, state map, deployment). §1 says what this repo owns and must never do;
+   §4.6 is this repo's own subsystem entry. Read it first — the rest lands faster after.
+2. `OWNER_BRIEF.md` in 360-v2 — operating contract, role boundaries, business rules
+3. `ACTIVE_CONTEXT.md` in 360-v2 — current engine state, open queue
+4. `docs/360CE_OPS_PLAN.md` in 360-v2 — design document for this app
+
+`ARCHITECTURE.md` is **not mirrored here** — one canonical copy, by the same rule this
+repo already lives by: the fix for a drifting mirror is not a second mirror.
 
 ## Your role here
 
