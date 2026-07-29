@@ -652,39 +652,52 @@ def mark_running_rows(rows: list[dict], prices: dict[str, float]) -> list[dict]:
     return rows
 
 
-def mark_stale_rows(rows: list[dict]) -> list[dict]:
-    """Flag RUNNING rows the resolver has already left behind (pure, in place).
+#: The engine's post-entry measurement window, in seconds — 192 bars × 15m.
+#: A row still RUNNING past this should have been marked to the close, so it is
+#: the one bound that separates "not yet" from "never".
+SAR_WINDOW_SEC = 192 * 15 * 60.0
 
-    A RUNNING badge means "stamped, still inside its 48h window". Beside a
-    *live* mark it reads as an open trade — which is exactly how, on the
-    owner's 2026-07-29 export, a −44% row described a trade that had closed
-    the previous morning. 395 of 401 RUNNING rows were in that state.
 
-    The test is the ledger's own progress, not wall-clock age: a row is stale
-    when it was stamped **before the newest resolution the ledger produced**.
-    The resolver has demonstrably worked past that row's era and still left it
-    unresolved, so "not yet" is no longer a credible reading — something is
-    stopping it from ever resolving. A genuinely young row stamped after the
-    last resolution is untouched, because for that one "not yet" is honest.
+def mark_stale_rows(rows: list[dict], now_ts: float | None = None) -> list[dict]:
+    """Flag RUNNING rows that are past their window and can no longer resolve.
 
-    Deliberately not a fixed age threshold: hold times vary from 15 minutes to
-    the full window, so any constant would either flag healthy long holds or
-    miss a freeze that started recently.
+    **Rewritten 2026-07-29 — the previous rule fired on healthy rows.** It read
+    a row as stale when it was stamped *before the newest resolution the ledger
+    produced*, on the premise that "the resolver has demonstrably worked past
+    that row's era". That premise is false. A resolution timestamp is not a scan
+    cursor — it is when a **trade closed**. A scalp that entered at 02:00 and
+    exited at 02:30 says nothing whatever about a trade stamped at 01:55 that is
+    still legitimately open at 03:18.
+
+    So one early exit retro-flagged every older open row on the page. The owner
+    saw a freshly cleared ledger, 90 minutes old, rendering RUNNING + STALE on
+    every visible row while the arm was working exactly as designed.
+
+    The tell is that the old rule was self-refuting: ``newest_resolution`` is
+    None until at least one row resolves, so **the badge could only ever appear
+    on a ledger that was resolving.** A genuinely frozen ledger — the 11.6h
+    freeze this was written for — shows no STALE badge at all, because nothing
+    ever resolved to set the threshold. It flagged the healthy case and stayed
+    silent on the broken one.
+
+    The replacement is the one bound that actually separates "not yet" from
+    "never": a row past its own measurement window is overdue by definition —
+    the engine should have marked it to the close and did not. Inside the
+    window, no badge, because "not yet" is the honest reading and a badge that
+    fires on healthy rows teaches the owner to ignore it.
+
+    Freeze detection is not this function's job and never was: ``#828`` gave the
+    engine a ``sar_resolution_progress`` probe that pages on zero verdicts
+    against a non-empty backlog, which is the measurement a freeze actually
+    needs. ``reduce_ledger_freshness`` below reports the same thing on screen.
     """
-    resolutions = [
-        r["stamped_at"] + (float(r["hold_min"]) * 60.0)
-        for r in rows
-        if r.get("status") != SAR_RUNNING
-        and r.get("hold_min") is not None
-        and r.get("stamped_at")
-    ]
-    newest_resolution = max(resolutions) if resolutions else None
+    now = now_ts if now_ts is not None else time.time()
     for row in rows:
+        stamped = row.get("stamped_at")
         row["stale"] = bool(
             row.get("status") == SAR_RUNNING
-            and newest_resolution is not None
-            and row.get("stamped_at")
-            and row["stamped_at"] < newest_resolution
+            and stamped
+            and (now - float(stamped)) > SAR_WINDOW_SEC
         )
     return rows
 
@@ -734,9 +747,10 @@ def reduce_ledger_freshness(rows: list[dict], now_ts: float) -> dict:
         )
     elif stale_running:
         state, detail = "stalling", (
-            f"{stale_running} of {len(running)} running rows were stamped "
-            "before the last resolution, so the resolver has worked past them "
-            "and left them unresolved."
+            f"{stale_running} of {len(running)} running rows are past their "
+            "48h window and were never marked to the close. Those records can "
+            "no longer resolve — check resolver candle coverage for their "
+            "symbols."
         )
     return {
         "state": state,

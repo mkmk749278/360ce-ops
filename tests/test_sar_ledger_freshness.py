@@ -15,9 +15,17 @@ Two contracts here, and the second is the subtle one:
 
 * the page states the pipeline's freshness *before* any of its numbers, because
   every number is an average over whatever the pipeline last managed to write;
-* staleness is judged on **the ledger's own progress**, not wall-clock age. Hold
-  times legitimately run from 15 minutes to the full 48h window, so any fixed
-  age threshold either flags healthy long holds or misses a fresh freeze.
+* a row is flagged only when it is **past its own 48h window** and can no
+  longer resolve. The first rule tried "stamped before the ledger's newest
+  resolution", reading a resolution as evidence the resolver had moved past
+  older rows — but a resolution is when a *trade closed*, not a scan position,
+  so one fast scalp retro-flagged every older open row (owner-caught the same
+  day, on a ledger 90 minutes past a clear). Worse, that rule needed a
+  resolution to exist before it could flag anything, so a genuinely frozen
+  ledger — the case it was written for — was the one case it could never
+  report. Freeze detection lives in the engine's `sar_resolution_progress`
+  probe (#828) and in `reduce_ledger_freshness` below, which read the
+  pipeline rather than individual rows.
 """
 from __future__ import annotations
 
@@ -70,55 +78,84 @@ def _pair(ts: float, *, symbol: str, resolved: bool, hold_min: float = 90.0):
     ]
 
 
-def _rows(ledger):
-    """Drive the real reducer — never hand-write its row shape."""
+def _rows(ledger, now=None):
+    """Drive the real reducer — never hand-write its row shape.
+
+    ``now`` is threaded explicitly. The fixtures below anchor at epoch
+    1_000_000 while ``mark_stale_rows`` read the real clock, so every fixture
+    row was 55 years old the moment the rule started measuring age — the same
+    frozen-fixture-vs-live-clock trap session 89 paid for on the trials page.
+    """
     rows = reduce_sar_signals(ledger)
-    mark_stale_rows(rows)
+    mark_stale_rows(rows, now_ts=now)
     return rows
 
 
-class TestStaleRowsAreJudgedOnLedgerProgress:
-    def test_a_running_row_stamped_before_the_last_verdict_is_stale(self):
-        """The resolver has demonstrably worked past this row's era and still
-        left it unresolved, so "not yet" is no longer a credible reading."""
-        now = 1_000_000.0
-        ledger = (
-            _pair(now - 6 * HOUR, symbol="STUCKUSDT", resolved=False)
-            + _pair(now - 3 * HOUR, symbol="DONEUSDT", resolved=True, hold_min=30.0)
-        )
-        rows = _rows(ledger)
-        stuck = [r for r in rows if r["symbol"] == "STUCKUSDT"]
+class TestOnlyOverdueRowsAreFlagged:
+    """Rewritten 2026-07-29 — the rule this class used to pin was inverted.
 
+    It read a RUNNING row as stale when it was stamped *before the ledger's
+    newest resolution*, on the premise that the resolver had "worked past" it.
+    A resolution timestamp is not a scan cursor: it is when a trade closed, so
+    one fast scalp retro-flagged every older open row. The owner saw a
+    90-minute-old ledger render RUNNING + STALE on every visible row.
+
+    `test_nothing_is_stale_when_the_ledger_has_never_resolved_anything` below is
+    kept, because its *assertion* is still right — but note what it used to
+    protect: under the old rule a ledger that had never resolved anything could
+    never flag a row, no matter how long dead. That is the freeze the badge
+    existed for, and the badge was structurally blind to it.
+    """
+
+    def test_a_running_row_past_its_window_is_flagged(self):
+        now = 1_000_000.0
+        ledger = _pair(now - 60 * HOUR, symbol="STUCKUSDT", resolved=False)
+        rows = _rows(ledger, now)
+        stuck = [r for r in rows if r["symbol"] == "STUCKUSDT"]
         assert stuck, "the reducer must still emit the unresolved row"
         assert all(r["stale"] for r in stuck)
 
-    def test_a_running_row_stamped_after_the_last_verdict_is_not_stale(self):
-        """For this one "not yet" is honest — nothing has resolved past it."""
+    def test_an_older_open_row_is_not_flagged_because_a_newer_one_resolved(self):
+        """The regression itself.
+
+        DONEUSDT enters later and exits fast; STILLOPENUSDT entered earlier and
+        is still legitimately inside its window. The old rule flagged the
+        second because of the first.
+        """
+        now = 1_000_000.0
+        ledger = (
+            _pair(now - 6 * HOUR, symbol="STILLOPENUSDT", resolved=False)
+            + _pair(now - 3 * HOUR, symbol="DONEUSDT", resolved=True, hold_min=30.0)
+        )
+        rows = _rows(ledger, now)
+        still_open = [r for r in rows if r["symbol"] == "STILLOPENUSDT"]
+        assert still_open
+        assert not any(r["stale"] for r in still_open)
+
+    def test_a_young_running_row_is_not_flagged(self):
         now = 1_000_000.0
         ledger = (
             _pair(now - 6 * HOUR, symbol="DONEUSDT", resolved=True, hold_min=30.0)
             + _pair(now - 1 * HOUR, symbol="YOUNGUSDT", resolved=False)
         )
-        rows = _rows(ledger)
+        rows = _rows(ledger, now)
         young = [r for r in rows if r["symbol"] == "YOUNGUSDT"]
-
         assert young
         assert not any(r["stale"] for r in young)
 
     def test_nothing_is_stale_when_the_ledger_has_never_resolved_anything(self):
-        """A brand-new ledger has produced no verdict to be "passed over" by.
-        Flagging these would report a freeze on an arm that just started."""
+        """A brand-new ledger has produced no verdict, and nothing is overdue."""
         now = 1_000_000.0
-        rows = _rows(_pair(now - 2 * HOUR, symbol="NEWUSDT", resolved=False))
+        rows = _rows(_pair(now - 2 * HOUR, symbol="NEWUSDT", resolved=False), now)
         assert not any(r["stale"] for r in rows)
 
     def test_a_resolved_row_is_never_stale(self):
         now = 1_000_000.0
         ledger = (
-            _pair(now - 6 * HOUR, symbol="OLDUSDT", resolved=True, hold_min=15.0)
+            _pair(now - 60 * HOUR, symbol="OLDUSDT", resolved=True, hold_min=15.0)
             + _pair(now - 2 * HOUR, symbol="NEWUSDT", resolved=True, hold_min=15.0)
         )
-        rows = _rows(ledger)
+        rows = _rows(ledger, now)
         assert not any(r["stale"] for r in rows)
 
 
@@ -129,7 +166,7 @@ class TestLedgerFreshness:
             _pair(now - 20 * 60, symbol="AUSDT", resolved=True, hold_min=5.0)
             + _pair(now - 10 * 60, symbol="BUSDT", resolved=False)
         )
-        f = reduce_ledger_freshness(_rows(ledger), now)
+        f = reduce_ledger_freshness(_rows(ledger, now), now)
         assert f["state"] == "live"
 
     def test_stamping_that_stopped_is_reported(self):
@@ -137,7 +174,7 @@ class TestLedgerFreshness:
         2026-07-29 it dispatched 12 during the silence."""
         now = 1_000_000.0
         ledger = _pair(now - 11.6 * HOUR, symbol="AUSDT", resolved=True, hold_min=30.0)
-        f = reduce_ledger_freshness(_rows(ledger), now)
+        f = reduce_ledger_freshness(_rows(ledger, now), now)
 
         assert f["state"] == "stalled"
         assert "stamped" in f["detail"].lower()
@@ -151,7 +188,7 @@ class TestLedgerFreshness:
             _pair(now - 12 * HOUR, symbol="OLDUSDT", resolved=True, hold_min=15.0)
             + _pair(now - 60, symbol="FRESHUSDT", resolved=False)
         )
-        f = reduce_ledger_freshness(_rows(ledger), now)
+        f = reduce_ledger_freshness(_rows(ledger, now), now)
 
         assert f["state"] == "stalled"
         assert "resolved" in f["detail"].lower()
@@ -162,7 +199,7 @@ class TestLedgerFreshness:
         verdict, no resolutions is the correct amount of resolutions."""
         now = 1_000_000.0
         ledger = _pair(now - 60, symbol="AUSDT", resolved=True, hold_min=15.0)
-        f = reduce_ledger_freshness(_rows(ledger), now)
+        f = reduce_ledger_freshness(_rows(ledger, now), now)
         assert f["state"] != "stalled"
 
     def test_an_empty_ledger_is_not_a_stall(self):
