@@ -843,6 +843,12 @@ def _build_view(vol) -> dict:
         "totals": reduce_totals(pairs),
         "status": reduce_ledger_status(ledger, pairs),
         "min_sample": EDGE_MIN_SAMPLES,
+        # Which file these numbers came from, when it was last written, and
+        # whether the engine has already moved to a newer ledger version.
+        # Rendered, not just carried: ops read the abandoned v2 file for nine
+        # hours after #822 bumped the engine to v3, and every number on this
+        # page described a population the engine had discarded.
+        "ledger_source": vol.sar_ledger_provenance(),
     }
 
 
@@ -937,6 +943,7 @@ async def sar_signals(
         "filter_strategy": strategy,
         "filter_source": source,
         "filter_alignment": alignment,
+        "ledger_source": request.app.state.data_volume.sar_ledger_provenance(),
         "alignment": summarize_alignment(scoped),
         "alignment_scoped": bool(status or strategy or source),
         "ledger_status": reduce_ledger_status(ledger, []),

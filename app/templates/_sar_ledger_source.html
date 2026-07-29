@@ -1,0 +1,41 @@
+{# Which SAR ledger file the page above is measured on.
+
+   Included by every page that reads the shadow ledger. It exists because the
+   engine restarts this ledger on a NEW path whenever a defect makes the
+   existing rows evidence of a bug rather than of an exit method (v1→v2 #800,
+   v2→v3 #822), leaving the old file on disk. Ops missed the v3 bump and read
+   the abandoned v2 file for nine hours: a complete, confident page built
+   entirely from rows the engine had discarded, with a Clear button that
+   correctly emptied v3 while the page re-read the orphan and never changed.
+
+   An orphaned file is worse than a missing one — a missing path shows an
+   error, an orphan shows data. So the file is named on screen, its mtime is
+   stated rather than inferred from numbers that stop moving, and a newer
+   version appearing on the volume is called out loudly. #}
+{% if ledger_source %}
+{% if ledger_source.newer_version %}
+<section class="card">
+  <p class="small"><span class="badge sev-high">WRONG LEDGER</span>
+  This page is reading <code>{{ ledger_source.file }}</code>, but the engine has
+  moved on to <code>{{ ledger_source.newer_file }}</code>. Every number below
+  describes an <strong>abandoned population</strong> — the engine bumps this path
+  when it decides the old rows measure a bug rather than an exit method, so these
+  rows are precisely the ones it discarded. Clearing the ledger will not change
+  them: the clear empties the engine's current file, not this one.
+  <strong>Do not read a verdict off this page until ops is pointed at
+  v{{ ledger_source.newer_version }}</strong>
+  (<code>SAR_LEDGER_VERSION</code> in <code>app/data_sources/data_volume.py</code>).</p>
+</section>
+{% elif not ledger_source.exists %}
+<section class="card">
+  <p class="small"><span class="badge sev-high">NO LEDGER</span>
+  <code>{{ ledger_source.file }}</code> is not on the data volume. The arm has
+  either never stamped or the engine writes a different path — check
+  <code>SAR_EXIT_SHADOW_PATH</code> on the engine before reading anything below
+  as a measurement.</p>
+</section>
+{% else %}
+<p class="muted small">Measured on <code>{{ ledger_source.file }}</code>{% if ledger_source.modified_at %},
+last written {{ ledger_source.modified_at }}{% endif %}.</p>
+{% endif %}
+{% endif %}
