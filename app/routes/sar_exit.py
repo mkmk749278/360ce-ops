@@ -34,6 +34,7 @@ All reducers are pure module-top functions, unit-testable without the app.
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -263,6 +264,15 @@ SAR_STATUSES = (
     SAR_RUNNING, SAR_CLOSED_TRAIL, SAR_CLOSED_SL, SAR_CLOSED_TP1,
     SAR_CLOSED_WINDOW, SAR_NO_DATA,
 )
+
+# How long the pipeline may go silent before the page says so, in seconds.
+#
+# The engine's audit loop runs every 5 minutes and a healthy ledger resolved
+# 6-25 records an hour on the owner's own export, so an hour of total silence
+# is far outside normal and cannot be a quiet market: the stall banner only
+# fires when rows are actually waiting. Chosen well above the loop period so a
+# single skipped cycle, or a mover with a genuinely long hold, never trips it.
+_STALL_SEC = 3600.0
 
 # Mirrors the engine's REASON_* constants (src/suppression_audit.py). Keep in
 # step: a reason the engine writes and this map does not know reads as NO_DATA.
@@ -642,6 +652,102 @@ def mark_running_rows(rows: list[dict], prices: dict[str, float]) -> list[dict]:
     return rows
 
 
+def mark_stale_rows(rows: list[dict]) -> list[dict]:
+    """Flag RUNNING rows the resolver has already left behind (pure, in place).
+
+    A RUNNING badge means "stamped, still inside its 48h window". Beside a
+    *live* mark it reads as an open trade — which is exactly how, on the
+    owner's 2026-07-29 export, a −44% row described a trade that had closed
+    the previous morning. 395 of 401 RUNNING rows were in that state.
+
+    The test is the ledger's own progress, not wall-clock age: a row is stale
+    when it was stamped **before the newest resolution the ledger produced**.
+    The resolver has demonstrably worked past that row's era and still left it
+    unresolved, so "not yet" is no longer a credible reading — something is
+    stopping it from ever resolving. A genuinely young row stamped after the
+    last resolution is untouched, because for that one "not yet" is honest.
+
+    Deliberately not a fixed age threshold: hold times vary from 15 minutes to
+    the full window, so any constant would either flag healthy long holds or
+    miss a freeze that started recently.
+    """
+    resolutions = [
+        r["stamped_at"] + (float(r["hold_min"]) * 60.0)
+        for r in rows
+        if r.get("status") != SAR_RUNNING
+        and r.get("hold_min") is not None
+        and r.get("stamped_at")
+    ]
+    newest_resolution = max(resolutions) if resolutions else None
+    for row in rows:
+        row["stale"] = bool(
+            row.get("status") == SAR_RUNNING
+            and newest_resolution is not None
+            and row.get("stamped_at")
+            and row["stamped_at"] < newest_resolution
+        )
+    return rows
+
+
+def reduce_ledger_freshness(rows: list[dict], now_ts: float) -> dict:
+    """Is the ledger still stamping and still resolving? — read before anything.
+
+    Every other number on this page is an average over whatever the pipeline
+    last managed to write. When stamping and resolving stop, those averages do
+    not empty out or go stale-looking — they simply keep describing a frozen
+    population, beside live prices, indefinitely.
+
+    On 2026-07-29 the newest stamp was 11.6h old and the newest resolution
+    11.6h old at export, while ``current_price`` was accurate to 0.18% —
+    verified against real Binance candles. The page looked completely alive.
+    So the two ages are computed separately and shown before the data: a live
+    price feed is not evidence that the measurement is running.
+    """
+    stamps = [r["stamped_at"] for r in rows if r.get("stamped_at")]
+    resolutions = [
+        r["stamped_at"] + (float(r["hold_min"]) * 60.0)
+        for r in rows
+        if r.get("status") != SAR_RUNNING
+        and r.get("hold_min") is not None
+        and r.get("stamped_at")
+    ]
+    running = [r for r in rows if r.get("status") == SAR_RUNNING]
+    stale_running = sum(1 for r in running if r.get("stale"))
+    stamp_age = (now_ts - max(stamps)) if stamps else None
+    resolve_age = (now_ts - max(resolutions)) if resolutions else None
+
+    state, detail = "live", "Stamping and resolving."
+    if not rows:
+        state, detail = "empty", "No rows in this window."
+    elif stamp_age is not None and stamp_age > _STALL_SEC:
+        state, detail = "stalled", (
+            "No candidate has been stamped for "
+            f"{stamp_age / 3600.0:.1f}h. The engine can be dispatching signals "
+            "while this arm stamps nothing — check the SAR stamp path and the "
+            "fail-open counters, not the price feed."
+        )
+    elif resolve_age is not None and resolve_age > _STALL_SEC and running:
+        state, detail = "stalled", (
+            f"Nothing has resolved for {resolve_age / 3600.0:.1f}h while "
+            f"{len(running)} rows await a verdict. Records are not advancing — "
+            "check resolver candle freshness."
+        )
+    elif stale_running:
+        state, detail = "stalling", (
+            f"{stale_running} of {len(running)} running rows were stamped "
+            "before the last resolution, so the resolver has worked past them "
+            "and left them unresolved."
+        )
+    return {
+        "state": state,
+        "detail": detail,
+        "stamp_age_sec": stamp_age,
+        "resolve_age_sec": resolve_age,
+        "running": len(running),
+        "stale_running": stale_running,
+    }
+
+
 def reduce_ledger_status(records: Any, pairs: list[dict]) -> dict:
     """Is the arm actually producing? — the honest state of the measurement.
 
@@ -767,6 +873,14 @@ async def sar_signals(
     templates = request.app.state.templates
     ledger = request.app.state.data_volume.sar_exit_candidates()
     all_rows = reduce_sar_signals(ledger)
+    # Staleness and freshness are properties of the PIPELINE, so both are
+    # measured on the whole ledger and never on the filtered selection — the
+    # opposite of the panel rule below, and deliberately so. "Has the resolver
+    # stopped?" is not a question about the rows a dropdown selected, and
+    # scoping it would let a filter hide a freeze. Marked on ``all_rows`` so
+    # the flag survives filtering and truncation into the rendered table.
+    mark_stale_rows(all_rows)
+    freshness = reduce_ledger_freshness(all_rows, time.time())
     # The split panel and every dropdown count are measured on the population
     # the other filters selected — everything EXCEPT alignment itself. Applying
     # alignment here would make the panel degenerate (pick "opposed" and the
@@ -826,6 +940,7 @@ async def sar_signals(
         "alignment": summarize_alignment(scoped),
         "alignment_scoped": bool(status or strategy or source),
         "ledger_status": reduce_ledger_status(ledger, []),
+        "freshness": freshness,
         "flash": flash,
     })
 
