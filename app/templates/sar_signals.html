@@ -207,7 +207,7 @@
     {% if freshness.stamp_age_sec is not none %}<strong>{{ "%.1f"|format(freshness.stamp_age_sec / 3600.0) }}h ago</strong>{% else %}—{% endif %}
     &middot; last resolution
     {% if freshness.resolve_age_sec is not none %}<strong>{{ "%.1f"|format(freshness.resolve_age_sec / 3600.0) }}h ago</strong>{% else %}—{% endif %}
-    &middot; {{ freshness.stale_running }} of {{ freshness.running }} running rows already passed over.
+    &middot; {{ freshness.stale_running }} of {{ freshness.running }} running rows are past their 48h window.
     Measured on the whole ledger, not the current filter — a freeze is a property of the pipeline, and
     scoping it to a dropdown would let a filter hide it.
   </p>
@@ -329,7 +329,7 @@
       </td>
       <td class="mono">{% if r.exit_price %}{{ "%.6g"|format(r.exit_price) }}{% else %}—{% endif %}</td>
       <td data-sort="{{ r.status }}"><span class="badge {{ r.status_class }}">{{ r.status }}</span>{% if r.stale %}
-        <span class="badge st-closed" title="Stamped before the ledger's last resolution — the resolver has worked past this row and left it unresolved. Its mark is live; its status is not a verdict.">STALE</span>{% endif %}</td>
+        <span class="badge st-closed" title="Past its 48h measurement window and still unresolved — the engine should have marked it to the close. Its mark is live; its status is not a verdict. A row still inside its window carries no badge: not-yet is honest.">OVERDUE</span>{% endif %}</td>
       <td class="small">
         {% if r.sar_aligned is true %}<span class="badge st-done">agreed</span>
         {% elif r.sar_aligned is false %}<span class="badge st-closed">opposed</span>
