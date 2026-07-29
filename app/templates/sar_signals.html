@@ -194,6 +194,33 @@
   <a class="btn" href="/sar-exit">A/B summary</a>
 </div>
 
+{% if freshness and freshness.state in ('stalled', 'stalling') %}
+<section class="card">
+  <p class="{% if freshness.state == 'stalled' %}warn{% else %}muted{% endif %}">
+    <strong>{% if freshness.state == 'stalled' %}This ledger is not running.{% else %}This ledger is falling behind.{% endif %}</strong>
+    {{ freshness.detail }}
+  </p>
+  <p class="muted small">
+    Last stamp
+    {% if freshness.stamp_age_sec is not none %}<strong>{{ "%.1f"|format(freshness.stamp_age_sec / 3600.0) }}h ago</strong>{% else %}—{% endif %}
+    &middot; last resolution
+    {% if freshness.resolve_age_sec is not none %}<strong>{{ "%.1f"|format(freshness.resolve_age_sec / 3600.0) }}h ago</strong>{% else %}—{% endif %}
+    &middot; {{ freshness.stale_running }} of {{ freshness.running }} running rows already passed over.
+    Measured on the whole ledger, not the current filter — a freeze is a property of the pipeline, and
+    scoping it to a dropdown would let a filter hide it.
+  </p>
+  <p class="muted small">
+    A <code>RUNNING</code> badge beside a live price reads as an open trade. On 2026-07-29 that is
+    exactly what it was not: 395 of 401 running rows described trades that had already closed — checked
+    against real candles, DEXEUSDT had hit its stop <strong>1 minute</strong> after entry and sat here
+    for 19.2h at &minus;14%, and 37 rows were past &minus;5R. The price feed stayed live throughout, so
+    the page never looked broken. Rows the resolver has passed over are marked
+    <span class="badge st-closed">STALE</span> below; their marks are current but their status is not a
+    verdict, and none of them belongs in an adoption decision.
+  </p>
+</section>
+{% endif %}
+
 {% if summary.n %}
 <section class="card">
   <h2>
@@ -212,8 +239,18 @@
     <span class="stat"><span class="n">{{ summary.closed_moves }}</span> distinct moves resolved</span>
     {% if summary.avg_delta_r is not none %}
     <span class="stat"><span class="n {% if summary.avg_delta_r > 0 %}pos{% elif summary.avg_delta_r < 0 %}neg{% endif %}">{{ "%+.3f"|format(summary.avg_delta_r) }}R</span> avg vs live ({{ summary.compared }} pairs)</span>
+    {% else %}
+    <span class="stat"><span class="n neg">0</span> comparable pairs</span>
     {% endif %}
   </div>
+  {% if summary.avg_delta_r is none %}
+  <p class="warn small"><strong>The A/B is not readable.</strong> &ldquo;vs live&rdquo; needs
+  <em>both</em> arms of a pair resolved, and no pair on this page has that — so the one number this arm
+  exists to produce, the trail's R minus the live geometry's R on the same entry, has nothing behind it.
+  The R and win-rate figures beside it describe the <code>@SAREXIT</code> arm on its own; they are not a
+  comparison, and nothing here can justify changing an exit. Blank is a missing control arm, not a
+  measured zero.</p>
+  {% endif %}
   {% if summary.rows_per_move and summary.rows_per_move > 1.5 %}
   <p class="warn small"><strong>Concentrated:</strong> {{ summary.closed }} resolved rows describe only
   {{ summary.closed_moves }} distinct moves ({{ "%.1f"|format(summary.rows_per_move) }} rows per move).
@@ -289,7 +326,8 @@
         {% if r.unrealized_pct is defined %}{{ "%+.2f"|format(r.unrealized_pct) }}%{% else %}—{% endif %}
       </td>
       <td class="mono">{% if r.exit_price %}{{ "%.6g"|format(r.exit_price) }}{% else %}—{% endif %}</td>
-      <td data-sort="{{ r.status }}"><span class="badge {{ r.status_class }}">{{ r.status }}</span></td>
+      <td data-sort="{{ r.status }}"><span class="badge {{ r.status_class }}">{{ r.status }}</span>{% if r.stale %}
+        <span class="badge st-closed" title="Stamped before the ledger's last resolution — the resolver has worked past this row and left it unresolved. Its mark is live; its status is not a verdict.">STALE</span>{% endif %}</td>
       <td class="small">
         {% if r.sar_aligned is true %}<span class="badge st-done">agreed</span>
         {% elif r.sar_aligned is false %}<span class="badge st-closed">opposed</span>
@@ -311,6 +349,10 @@
 </table>
 <p class="muted small">
   <strong>RUNNING</strong> — stamped, still inside its 48h measurement window (no exit yet, so R and PnL are blank rather than zero).
+  <strong>STALE</strong> — RUNNING, but stamped <em>before</em> the newest verdict this ledger produced: the resolver has
+  demonstrably worked past it and still left it unresolved, so &ldquo;not yet&rdquo; is no longer a credible reading. The mark
+  is live, the status is not. Judged on the ledger's own progress rather than a fixed age, because hold times legitimately
+  run from 15 minutes to the full window.
   <strong>CLOSED_TRAIL</strong> — the moving stop caught price.
   <strong>CLOSED_WINDOW</strong> — 48h passed without the trail firing; marked to the window's close.
   <strong>vs live</strong> — this trade's R minus what the live geometry (its paired <code>@SARBASE</code> arm) made on the same entry;
