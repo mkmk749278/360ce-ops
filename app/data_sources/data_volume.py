@@ -35,6 +35,15 @@ SAR_LEDGER_FILE = f"sar_exit_candidates_v{SAR_LEDGER_VERSION}.json"
 
 _SAR_LEDGER_RE = re.compile(r"^sar_exit_candidates_v(\d+)\.json$")
 
+#: The **live** SAR mechanism's arm ledger (engine ``src/sar_live_shadow.py``,
+#: ``SarLiveLedger.DEFAULT_PATH``). Versioned in the filename for the same
+#: reason the replay ledger is: a schema bump gets a new file rather than
+#: reinterpreting rows written under different rules.
+SAR_LIVE_VERSION = 1
+SAR_LIVE_FILE = f"sar_live_arms_v{SAR_LIVE_VERSION}.json"
+
+_SAR_LIVE_RE = re.compile(r"^sar_live_arms_v(\d+)\.json$")
+
 
 class DataVolumeReader:
     def __init__(self, settings: Settings) -> None:
@@ -139,6 +148,69 @@ class DataVolumeReader:
             if newest > SAR_LEDGER_VERSION:
                 info["newer_version"] = newest
                 info["newer_file"] = f"sar_exit_candidates_v{newest}.json"
+        except OSError:
+            pass
+        return info
+
+    # -- Live SAR exit mechanism (engine: src/sar_live_shadow.py) --------- #
+
+    def sar_live_arms(self) -> Any:
+        """The live SAR mechanism's arms — open and resolved.
+
+        Engine writes ``data/sar_live_arms_v1.json`` from inside the monitor
+        loop; the row keys are pinned on the producing side by
+        ``tests/test_sar_live_contract.py`` there. Shape::
+
+            {"schema": 1, "written_at": <epoch>,
+             "open": [<arm>, ...], "resolved": [<arm>, ...]}
+
+        Unlike ``sar_exit_candidates`` this is **not** a replay. Each arm was
+        stepped forward bar by bar while the trade was open, so an ``open`` row
+        carries the stop the mechanism would have had parked *right now* rather
+        than a level reconstructed afterwards.
+        """
+        return self._load(SAR_LIVE_FILE)
+
+    def sar_live_provenance(self) -> dict[str, Any]:
+        """Which live-arm file we are reading, and when the engine last wrote it.
+
+        Same three questions as :meth:`sar_ledger_provenance`, for the same
+        reason — ops read an orphaned SAR ledger for nine hours after #822 and
+        every number on screen described a discarded population. A live panel
+        makes that worse, not better: a frozen file still renders as a page full
+        of open trades with plausible stops.
+
+        ``age_sec`` is the one number the live tab must lead with. The arms
+        advance on bar closes (5m / 15m), and the engine flushes at most every
+        15s, so a file older than a couple of minutes means the monitor loop is
+        not stepping them — not that the market is quiet.
+        """
+        info: dict[str, Any] = {
+            "file": SAR_LIVE_FILE,
+            "version": SAR_LIVE_VERSION,
+            "exists": False,
+            "modified_at": None,
+            "age_sec": None,
+            "newer_version": None,
+            "newer_file": None,
+        }
+        try:
+            path = self._dir / SAR_LIVE_FILE
+            if path.exists():
+                info["exists"] = True
+                mtime = path.stat().st_mtime
+                info["modified_at"] = datetime.fromtimestamp(
+                    mtime, tz=timezone.utc
+                ).strftime("%Y-%m-%d %H:%M UTC")
+                info["age_sec"] = max(0.0, datetime.now(timezone.utc).timestamp() - mtime)
+            newest = SAR_LIVE_VERSION
+            for entry in self._dir.iterdir():
+                m = _SAR_LIVE_RE.match(entry.name)
+                if m and int(m.group(1)) > newest:
+                    newest = int(m.group(1))
+            if newest > SAR_LIVE_VERSION:
+                info["newer_version"] = newest
+                info["newer_file"] = f"sar_live_arms_v{newest}.json"
         except OSError:
             pass
         return info

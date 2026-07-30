@@ -1,0 +1,268 @@
+{% extends "base.html" %}
+{% block title %}SAR live — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>SAR live <span class="muted">— the exit mechanism as it runs, stepped bar by bar while the trade is open</span></h1>
+
+<section class="card">
+  <p class="small">
+    {% if live_state.state == 'live' %}<span class="badge st-done">LIVE</span>
+    {% elif live_state.state == 'idle' %}<span class="badge st-partial">IDLE</span>
+    {% elif live_state.state == 'frozen' %}<span class="badge sev-high">FROZEN</span>
+    {% elif live_state.state == 'orphan' %}<span class="badge sev-high">ORPHAN</span>
+    {% else %}<span class="badge sev-high">UNAVAILABLE</span>{% endif %}
+    {{ live_state.detail }}
+  </p>
+  <p class="muted small">
+    Reading <code>{{ provenance.file }}</code>{% if provenance.modified_at %}, last written
+    <strong>{{ provenance.modified_at }}</strong>{% if provenance.age_sec is not none %}
+    ({{ "%.0f"|format(provenance.age_sec) }}s ago){% endif %}{% endif %}.
+  </p>
+</section>
+
+<section class="card">
+  <p class="muted small">
+    This is <strong>not a replay</strong>. Every arm here was advanced inside the engine's monitor
+    loop while the trade was open, so an open row carries the stop the mechanism <em>would have
+    parked right now</em> — not a level reconstructed after the outcome was known. That is the one
+    thing neither <a href="/signals/sar">SAR signals</a> (a 48h replay) nor
+    <a href="/dark-signals">Dark signals</a> (a kline replay after the engine already closed the
+    trade) can show, and it is what a rollout decision actually needs.
+  </p>
+  <p class="muted small">
+    <strong>The mechanism.</strong> At generation, if SAR already agrees with the signal it governs
+    from bar one and the original SL and TP1 are never used — the trade exits when SAR flips. If SAR
+    opposes, the original SL and TP1 stay live until SAR comes onside; at that moment they are
+    cancelled and SAR takes over. If SAR never comes onside, the trade closes on its original stop,
+    or in full at TP1. Measured on <strong>5m and 15m as independent arms</strong> on the same
+    signals, so the timeframe question and the mechanism question share one window.
+  </p>
+  <p class="muted small">
+    <strong>These arms place no orders and change no exit.</strong> Live exits still run on the
+    signal's SL/TP and the FSM. Nothing on this page has touched anyone's capital.
+  </p>
+</section>
+
+<section class="card">
+  <h2 class="small">Two fills, and why neither is called “the” result</h2>
+  <p class="muted small">
+    “Close at market when SAR flips” leaves no resting stop between bars, which would breach the
+    never-a-naked-position rule the moment it went live — so the arm models a stop <strong>parked at
+    the SAR level and amended each bar</strong>, and records both prices:
+    <strong>Fill&nbsp;@level</strong> is that stop being touched intrabar (a gap through it fills at
+    the bar's open — worse, never better); <strong>Fill&nbsp;@confirm</strong> is waiting for the bar
+    to close and exiting at market. <strong>Confirm cost</strong> is the difference. That number has
+    never been measured anywhere in this system, and picking one fill before it is known would be
+    choosing the answer rather than measuring it.
+  </p>
+  <p class="muted small">
+    R divides by the <strong>SL distance at entry</strong> even on arms where SAR governed and that
+    stop was never used, so a number here is comparable with the edge matrix and
+    <a href="/track-record">Track record</a>. Figures are <strong>gross</strong> — no fees, no
+    funding — so a row reading flat is a real cost live.
+  </p>
+</section>
+
+<nav class="card">
+  <a class="btn {% if tab != 'resolved' %}btn-primary{% endif %}"
+     href="/signals/sar-live?tab=live">Live ({{ n_live }})</a>
+  <a class="btn {% if tab == 'resolved' %}btn-primary{% endif %}"
+     href="/signals/sar-live?tab=resolved">Resolved ({{ n_resolved }})</a>
+  <a class="btn" href="/signals/sar-live/export.csv?tab={{ tab }}&timeframe={{ filter_timeframe }}&governor={{ filter_governor }}&alignment={{ filter_alignment }}&status={{ filter_status }}">Export CSV</a>
+</nav>
+
+<form class="card" method="get" action="/signals/sar-live">
+  <input type="hidden" name="tab" value="{{ tab }}">
+  <label class="small">Timeframe
+    <select name="timeframe" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for tf in timeframes %}
+      <option value="{{ tf }}" {% if filter_timeframe == tf %}selected{% endif %}>{{ tf }} ({{ n_tf.get(tf, 0) }})</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="small">Governor
+    <select name="governor" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for g in governors %}
+      <option value="{{ g }}" {% if filter_governor == g %}selected{% endif %}>{{ g }} ({{ n_gov.get(g, 0) }})</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="small">SAR at entry
+    <select name="alignment" onchange="this.form.submit()">
+      <option value="">All</option>
+      <option value="agreed" {% if filter_alignment == 'agreed' %}selected{% endif %}>Agreed ({{ n_agreed }})</option>
+      <option value="opposed" {% if filter_alignment == 'opposed' %}selected{% endif %}>Opposed ({{ n_opposed }})</option>
+    </select>
+  </label>
+  {% if tab == 'resolved' %}
+  <label class="small">Status
+    <select name="status" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for s in statuses %}
+      <option value="{{ s }}" {% if filter_status == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  <noscript><button class="btn" type="submit">Apply</button></noscript>
+</form>
+
+{% if tab == 'resolved' %}
+<section class="card">
+  <h2 class="small">Verdict — measured on the {{ summary.measurable }} rows this selection resolved</h2>
+  {% if summary.measurable == 0 %}
+  <p class="muted small">Nothing has resolved in this selection yet. A mechanism cannot be judged
+  from open trades, so this stays blank rather than borrowing a number from the live tab.</p>
+  {% else %}
+  <table class="tbl">
+    <thead><tr><th>Fill</th><th>Trades</th><th>Win rate</th><th>Avg R</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Stop touched intrabar <span class="muted">(@level)</span></td>
+        <td>{{ summary.n_r }}</td>
+        <td>{% if summary.win_rate_level is not none %}{{ "%.0f"|format(summary.win_rate_level * 100) }}%{% else %}—{% endif %}</td>
+        <td class="{% if summary.avg_r_level is not none and summary.avg_r_level > 0 %}pos{% elif summary.avg_r_level is not none and summary.avg_r_level < 0 %}neg{% endif %}">
+          {% if summary.avg_r_level is not none %}{{ "%+.3f"|format(summary.avg_r_level) }}R{% else %}—{% endif %}</td>
+      </tr>
+      <tr>
+        <td>Confirmed flip, market out <span class="muted">(@confirm)</span></td>
+        <td>{{ summary.n_r }}</td>
+        <td>{% if summary.win_rate_confirm is not none %}{{ "%.0f"|format(summary.win_rate_confirm * 100) }}%{% else %}—{% endif %}</td>
+        <td class="{% if summary.avg_r_confirm is not none and summary.avg_r_confirm > 0 %}pos{% elif summary.avg_r_confirm is not none and summary.avg_r_confirm < 0 %}neg{% endif %}">
+          {% if summary.avg_r_confirm is not none %}{{ "%+.3f"|format(summary.avg_r_confirm) }}R{% else %}—{% endif %}</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="muted small">
+    Average confirm cost:
+    <strong class="{% if summary.avg_confirm_slippage_pct is not none and summary.avg_confirm_slippage_pct < 0 %}neg{% endif %}">
+      {% if summary.avg_confirm_slippage_pct is not none %}{{ "%+.3f"|format(summary.avg_confirm_slippage_pct) }}%{% else %}—{% endif %}</strong>
+    per trade — what waiting for the bar to close costs against filling at the parked stop.
+    Exits: {{ summary.by_exit.sar_flip }} on a SAR flip, {{ summary.by_exit.static_sl }} on the
+    original stop, {{ summary.by_exit.static_tp1 }} on TP1.
+    {{ summary.handovers }} of {{ summary.measurable }} handed over to SAR at some point — an arm
+    that never handed over contributes nothing to the exit comparison, however large the total looks.
+    {% if summary.no_r %}<br><strong>{{ summary.no_r }}</strong> resolved rows carry no usable R (no
+    SL distance at entry): counted in the trade count, excluded from every R figure above rather than
+    scored 0R.{% endif %}
+    {% if summary.insufficient %}<br><strong>{{ summary.insufficient }}</strong> arms stopped
+    measuring without a verdict (insufficient data or a bar that rolled out of the window). They are
+    excluded from the rates above — that is “we do not know”, not a loss.{% endif %}
+    {% if summary.ambiguous %}<br><strong>{{ summary.ambiguous }}</strong> closed on a bar that
+    touched both SL and TP1; OHLC cannot order two touches inside one bar, so those were resolved
+    pessimistically and are flagged in the table.{% endif %}
+  </p>
+  {% endif %}
+</section>
+
+{% if by_timeframe|length > 1 %}
+<section class="card">
+  <h2 class="small">5m vs 15m — same signals, different arms</h2>
+  <table class="tbl">
+    <thead><tr><th>Timeframe</th><th>Resolved</th><th>Handovers</th><th>Win @level</th><th>Avg R @level</th><th>Avg R @confirm</th><th>Confirm cost</th></tr></thead>
+    <tbody>
+      {% for tf in by_timeframe %}
+      <tr>
+        <td><strong>{{ tf.timeframe }}</strong></td>
+        <td>{{ tf.measurable }}</td>
+        <td>{{ tf.handovers }}</td>
+        <td>{% if tf.win_rate_level is not none %}{{ "%.0f"|format(tf.win_rate_level * 100) }}%{% else %}—{% endif %}</td>
+        <td class="{% if tf.avg_r_level is not none and tf.avg_r_level > 0 %}pos{% elif tf.avg_r_level is not none and tf.avg_r_level < 0 %}neg{% endif %}">
+          {% if tf.avg_r_level is not none %}{{ "%+.3f"|format(tf.avg_r_level) }}R{% else %}—{% endif %}</td>
+        <td class="{% if tf.avg_r_confirm is not none and tf.avg_r_confirm > 0 %}pos{% elif tf.avg_r_confirm is not none and tf.avg_r_confirm < 0 %}neg{% endif %}">
+          {% if tf.avg_r_confirm is not none %}{{ "%+.3f"|format(tf.avg_r_confirm) }}R{% else %}—{% endif %}</td>
+        <td>{% if tf.avg_confirm_slippage_pct is not none %}{{ "%+.3f"|format(tf.avg_confirm_slippage_pct) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Reported per timeframe, never pooled — they are two experiments on the same
+  signals, so a pooled headline would move with the timeframe mix instead of the mechanism.</p>
+</section>
+{% endif %}
+{% endif %}
+
+<section class="card">
+  <h2 class="small">
+    {% if tab == 'resolved' %}Resolved arms{% else %}Running arms{% endif %}
+    <span class="muted">— {{ shown }} of {{ matched }}</span>
+  </h2>
+  {% if shown < matched %}
+  <p class="muted small">Table capped at {{ row_cap }} rows; every count and summary above is
+  measured on all {{ matched }}. Export CSV for the full selection.</p>
+  {% endif %}
+  {% if not rows %}
+  <p class="muted small">
+    {% if live_state.state == 'unavailable' %}The arm file is not on the volume — see the banner above.
+    {% elif tab == 'resolved' %}No arms have resolved in this selection yet.
+    {% else %}No arms are running. With no open signals there is nothing for the mechanism to do.{% endif %}
+  </p>
+  {% else %}
+  <div style="overflow-x:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Side</th><th>TF</th><th>Setup</th>
+        <th>SAR@entry</th><th>Governor</th><th>Entry</th>
+        {% if tab == 'resolved' %}
+        <th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th>R @level</th><th>R @confirm</th><th>Confirm cost</th><th>Bars</th>
+        {% else %}
+        <th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>MFE</th><th>Bars</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><strong>{{ r.symbol }}</strong></td>
+        <td class="{% if r.side == 'LONG' %}pos{% else %}neg{% endif %}">{{ r.side }}</td>
+        <td>{{ r.timeframe }}</td>
+        <td class="small muted">{{ r.setup_class }}</td>
+        <td>{% if r.aligned_at_entry is true %}<span class="badge st-done">agreed</span>
+            {% elif r.aligned_at_entry is false %}<span class="badge st-open">opposed</span>
+            {% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.governor == 'SAR' %}<span class="badge st-done">SAR</span>
+            {% elif r.governor == 'GEOMETRY' %}<span class="badge st-partial">SL/TP</span>
+            {% else %}<span class="muted">—</span>{% endif %}
+            {% if r.ambiguous_bar %}<span class="badge sev-high" title="SL and TP1 both touched in one bar; resolved pessimistically">ambig</span>{% endif %}</td>
+        <td>{{ r.entry }}</td>
+        {% if tab == 'resolved' %}
+        <td class="small">{{ r.exit_reason or '—' }}</td>
+        <td>{% if r.fill_level is not none %}{{ "%.6g"|format(r.fill_level) }}{% else %}—{% endif %}</td>
+        <td>{% if r.fill_confirm is not none %}{{ "%.6g"|format(r.fill_confirm) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.r_level is not none and r.r_level > 0 %}pos{% elif r.r_level is not none and r.r_level < 0 %}neg{% endif %}">
+          {% if r.r_level is not none %}{{ "%+.2f"|format(r.r_level) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.r_confirm is not none and r.r_confirm > 0 %}pos{% elif r.r_confirm is not none and r.r_confirm < 0 %}neg{% endif %}">
+          {% if r.r_confirm is not none %}{{ "%+.2f"|format(r.r_confirm) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.confirm_slippage_pct is not none and r.confirm_slippage_pct < 0 %}neg{% endif %}">
+          {% if r.confirm_slippage_pct is not none %}{{ "%+.3f"|format(r.confirm_slippage_pct) }}%{% else %}—{% endif %}</td>
+        <td>{{ r.bars_seen }}</td>
+        {% else %}
+        <td>{% if r.current_price is not none %}{{ "%.6g"|format(r.current_price) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.unrealized_pct is not none and r.unrealized_pct > 0 %}pos{% elif r.unrealized_pct is not none and r.unrealized_pct < 0 %}neg{% endif %}">
+          {% if r.unrealized_pct is not none %}{{ "%+.2f"|format(r.unrealized_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if r.governor == 'SAR' and r.sar_stop is not none %}{{ "%.6g"|format(r.sar_stop) }}
+            {% elif r.governor == 'GEOMETRY' %}<span class="muted" title="SAR has not taken over; the original stop is still live">{{ r.stop_loss }}</span>
+            {% else %}—{% endif %}</td>
+        <td>{% if r.get('stop_distance_pct') is not none %}{{ "%.2f"|format(r.get('stop_distance_pct')) }}%{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.mfe_pct is not none %}{{ "%.2f"|format(r.mfe_pct) }}%{% else %}—{% endif %}</td>
+        <td>{{ r.bars_seen }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if tab != 'resolved' %}
+  <p class="muted small">
+    <strong>Dist. to stop</strong> is how far price sits from the parked SAR level — the only
+    column on any SAR surface that says “this mechanism is about to act”. It is blank while the
+    original SL/TP is still governing, because distance-to-SAR means nothing before the handover.
+    Realized columns stay empty on this tab by construction: an unrealized number in a realized
+    column is how a still-open trade gets read as a finished one.
+  </p>
+  {% endif %}
+  {% endif %}
+</section>
+{% endblock %}
