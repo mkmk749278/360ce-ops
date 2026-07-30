@@ -72,9 +72,13 @@ RESOLVED_STATUSES = (
 )
 
 #: How stale the arm file may be before the live tab stops claiming to be live.
-#: Arms advance on 5m/15m bar closes and the engine flushes at most every 15s,
-#: so anything past two minutes means the monitor loop is not stepping them —
-#: a quiet market cannot cause this.
+#:
+#: This is only meaningful because the engine writes on a **60s heartbeat**, not
+#: merely when an arm changes. The first cut flushed on change alone, so an open
+#: trade with no bar close in the window went untouched and this threshold fired
+#: on a perfectly healthy engine — FROZEN at 2.1 minutes with two arms running
+#: and `bars_seen: 0` (owner-caught 2026-07-30, the same hour UNAVAILABLE was).
+#: 2x the heartbeat: one missed write is jitter, two is the loop stopping.
 LIVE_STALE_SEC = 120.0
 
 
@@ -253,8 +257,10 @@ def reduce_live_state(
             "state": "unavailable",
             "detail": (
                 f"{provenance.get('file')} is not on the data volume. The engine "
-                "writes it from the monitor loop — check SAR_LIVE_SHADOW_ENABLED "
-                "and the engine container, not this page."
+                "writes it on a 60s heartbeat from the monitor loop — even with "
+                "no signals open — so it should appear within a minute of an "
+                "engine start. Past that, check SAR_LIVE_SHADOW_ENABLED and the "
+                "engine container, not this page."
             ),
         }
     if provenance.get("newer_version"):
@@ -271,9 +277,10 @@ def reduce_live_state(
             "state": "frozen",
             "detail": (
                 f"The arm file has not been written for {age / 60.0:.1f} minutes. "
-                "Arms advance on bar closes and flush within 15s, so the monitor "
-                "loop is not stepping them. Live prices below are still real — "
-                "a working price feed is not evidence the measurement is running."
+                "The engine writes it every 60s from the monitor loop whether or "
+                "not an arm changed, so this means the loop is not running — not "
+                "that the market is quiet. Live prices below are still real: a "
+                "working price feed is not evidence the measurement is running."
             ),
         }
     if not live_rows:

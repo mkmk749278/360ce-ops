@@ -253,7 +253,10 @@ def test_a_frozen_arm_file_is_reported_as_frozen_not_live():
         live,
     )
     assert state["state"] == "frozen"
-    assert "not stepping them" in state["detail"]
+    # The copy must name the heartbeat, because that is what makes a stale file
+    # mean "the loop stopped" rather than "no bar closed recently".
+    assert "every 60s" in state["detail"]
+    assert "not that the market is quiet" in state["detail"]
 
 
 def test_a_current_file_with_open_arms_is_live():
@@ -451,3 +454,12 @@ def test_table_cap_is_applied_after_filtering_and_declared():
     assert r.status_code == 200
     assert f"capped at {TABLE_ROW_CAP} rows" in r.text
     assert f"of {TABLE_ROW_CAP + 50}" in r.text
+
+
+def test_unavailable_copy_says_how_long_to_wait_before_it_is_a_fault():
+    """The engine heartbeats every 60s even with no arms, so 'missing' is only a
+    fault past that. Copy that names a cause must be true of the case it names."""
+    state = reduce_live_state({"exists": False, "file": "sar_live_arms_v1.json"}, [])
+    assert state["state"] == "unavailable"
+    assert "heartbeat" in state["detail"]
+    assert "no signals open" in state["detail"]
