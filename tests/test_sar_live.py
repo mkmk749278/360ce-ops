@@ -35,6 +35,7 @@ from app.routes.sar_live import (  # noqa: E402
     mark_distance_to_stop,
     reduce_arms,
     reduce_live_state,
+    summarize_by_risk,
     summarize_by_timeframe,
     summarize_resolved,
 )
@@ -306,6 +307,8 @@ READ_BY_THIS_PAGE = frozenset({
     "sar_stop", "status", "exit_reason", "closed_at",
     "fill_level", "fill_confirm", "pnl_level_pct", "pnl_confirm_pct",
     "r_level", "r_confirm", "confirm_slippage_pct", "mfe_pct", "ambiguous_bar",
+    "sar_risk_pct", "max_sar_risk_pct", "handover_risk_pct",
+    "handover_wider_than_sl",
 })
 
 
@@ -463,3 +466,78 @@ def test_unavailable_copy_says_how_long_to_wait_before_it_is_a_fault():
     assert state["state"] == "unavailable"
     assert "heartbeat" in state["detail"]
     assert "no signals open" in state["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# Risk split — "timed badly" and "risked more" are different findings
+# --------------------------------------------------------------------------- #
+
+
+def test_arms_carry_the_risk_their_sar_stop_actually_took():
+    live, _ = _rows()
+    by_key = {(r["symbol"], r["timeframe"]): r for r in live}
+    wide = by_key[("RUNUSDT", "15m")]
+    tight = by_key[("RUNUSDT", "5m")]
+    # Same signal, same entry, opposite verdicts — which is the whole point of
+    # running 5m and 15m as independent arms.
+    assert wide["handover_wider_than_sl"] is True
+    assert tight["handover_wider_than_sl"] is False
+    assert wide["handover_risk_pct"] > wide["sl_distance_pct"]
+    assert tight["handover_risk_pct"] < tight["sl_distance_pct"]
+
+
+def test_the_verdict_splits_on_whether_the_stop_exceeded_the_designed_sl():
+    _live, resolved = _rows()
+    split = summarize_by_risk(resolved)
+    assert set(split) == {"wider", "inside", "unknown"}
+    # Every resolved row lands in exactly one bucket — no double count, no drop.
+    assert sum(split[k]["n"] for k in split) == len(resolved)
+
+
+def test_never_handed_over_is_its_own_bucket_not_folded_into_either():
+    """An arm with no SAR risk to compare is not the same as one with a narrow
+    stop — folding it in would make 'inside' describe two different things."""
+    _live, resolved = _rows()
+    split = summarize_by_risk(resolved)
+    never = [r for r in resolved if r.get("handover_wider_than_sl") is None]
+    assert split["unknown"]["n"] == len(never)
+    assert split["unknown"]["avg_risk_pct"] is None
+
+
+def test_each_bucket_reports_the_risk_it_actually_took():
+    _live, resolved = _rows()
+    split = summarize_by_risk(resolved)
+    for key in ("wider", "inside"):
+        rows = [
+            r for r in resolved
+            if r.get("handover_wider_than_sl") is (key == "wider")
+            and r.get("handover_risk_pct") is not None
+        ]
+        if not rows:
+            continue
+        expected = sum(r["handover_risk_pct"] for r in rows) / len(rows)
+        assert split[key]["avg_risk_pct"] == pytest.approx(expected)
+
+
+def test_live_tab_renders_the_sar_risk_column_and_flags_the_wide_arm():
+    with _client() as client:
+        r = client.get("/signals/sar-live")
+    assert r.status_code == 200
+    assert "SAR risk" in r.text
+    assert ">wider<" in r.text          # the 15m RUNUSDT arm is badged
+
+
+def test_resolved_tab_explains_why_the_risk_split_exists():
+    with _client() as client:
+        r = client.get("/signals/sar-live?tab=resolved")
+    assert r.status_code == 200
+    assert "sized for" in r.text
+    # Copy is part of the measurement: the page must say this changes nothing.
+    assert "the mechanism is unchanged" in r.text
+
+
+def test_csv_export_carries_the_risk_stamps():
+    with _client() as client:
+        r = client.get("/signals/sar-live/export.csv")
+    assert "handover_wider_than_sl" in r.text
+    assert "max_sar_risk_pct" in r.text

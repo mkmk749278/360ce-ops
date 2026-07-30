@@ -45,7 +45,6 @@ Rules this page inherits, all paid for elsewhere in this repo
 """
 from __future__ import annotations
 
-import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
@@ -225,6 +224,38 @@ def summarize_resolved(rows: list[dict]) -> dict:
     }
 
 
+def summarize_by_risk(rows: list[dict]) -> dict:
+    """Split the verdict by whether SAR's stop was wider than the designed SL.
+
+    When SAR agrees at entry it governs and the signal's own stop is never used,
+    so the arm can end up carrying **more** risk than the evaluator sized the
+    trade for — the first two live arms did exactly that on one signal (MUUUSDT
+    SHORT: 5m at 1.60%, 15m at 3.77%, against a designed 3.00%).
+
+    That matters for reading the R's, not just for safety. R divides by the SL
+    distance at entry, so a wider-stop arm mechanically produces larger losses
+    per stop-out, and a pooled average would blend "the exit timed badly" with
+    "the exit risked more". These are different findings and the page must not
+    hand the owner one wearing the other's name.
+
+    ``unknown`` is its own bucket rather than folded into either: an arm that
+    never handed over has no SAR risk to compare, which is not the same as
+    having had a narrow one.
+    """
+    buckets: dict[str, list[dict]] = {"wider": [], "inside": [], "unknown": []}
+    for r in rows:
+        flag = r.get("handover_wider_than_sl")
+        key = "wider" if flag is True else "inside" if flag is False else "unknown"
+        buckets[key].append(r)
+    out = {k: summarize_resolved(v) for k, v in buckets.items()}
+    for key, rows_ in buckets.items():
+        risks = [_f(r.get("handover_risk_pct")) for r in rows_]
+        risks = [x for x in risks if x is not None]
+        out[key]["avg_risk_pct"] = (sum(risks) / len(risks)) if risks else None
+        out[key]["bucket"] = key
+    return out
+
+
 def summarize_by_timeframe(rows: list[dict]) -> list[dict]:
     """The 5m-vs-15m question, answered on the same population.
 
@@ -240,9 +271,7 @@ def summarize_by_timeframe(rows: list[dict]) -> list[dict]:
     return out
 
 
-def reduce_live_state(
-    provenance: dict, live_rows: list[dict], now_ts: Optional[float] = None
-) -> dict:
+def reduce_live_state(provenance: dict, live_rows: list[dict]) -> dict:
     """Is this tab actually live? — read before any number on it.
 
     A frozen arm file renders as a page full of open trades with plausible
@@ -250,7 +279,8 @@ def reduce_live_state(
     ledger looked healthy on 2026-07-29 while its newest resolution was 11.6h
     old. So the file's own age is stated first, separately from the prices.
     """
-    now = time.time() if now_ts is None else now_ts
+    # Age comes from the file's mtime (data_volume), not a clock read here: the
+    # question is how long ago the engine wrote, and only the file knows that.
     age = provenance.get("age_sec")
     if not provenance.get("exists"):
         return {
@@ -358,6 +388,10 @@ async def sar_live(
         # Summaries measured on the full selection, never the truncated table.
         "summary": summarize_resolved(selected),
         "by_timeframe": summarize_by_timeframe(selected),
+        "by_risk": summarize_by_risk(selected),
+        "n_wider": sum(
+            1 for r in scoped_align if r.get("handover_wider_than_sl") is True
+        ),
         "timeframes": sorted({r["timeframe"] for r in base if r.get("timeframe")}),
         "governors": sorted({r["governor"] for r in base if r.get("governor")}),
         "statuses": sorted({r["status"] for r in base if r.get("status")}),
@@ -389,6 +423,8 @@ _ARM_COLS = [
     "r_level", "r_confirm", "confirm_slippage_pct",
     "mfe_pct", "current_price", "unrealized_pct", "stop_distance_pct",
     "ambiguous_bar",
+    "sar_risk_pct", "max_sar_risk_pct", "handover_risk_pct",
+    "handover_wider_than_sl",
 ]
 
 
