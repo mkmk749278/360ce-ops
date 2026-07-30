@@ -541,3 +541,32 @@ def test_csv_export_carries_the_risk_stamps():
         r = client.get("/signals/sar-live/export.csv")
     assert "handover_wider_than_sl" in r.text
     assert "max_sar_risk_pct" in r.text
+
+
+def test_an_arm_written_before_the_risk_stamps_still_renders():
+    """Cross-repo ordering: arms persisted by the previous engine build have no
+    risk keys and stay in the ledger until they resolve. The tab must render
+    them with the column blank, not 500 on a missing key."""
+    legacy = json.loads(json.dumps(FIXTURE))
+    for row in legacy["open"] + legacy["resolved"]:
+        for key in ("sar_risk_pct", "max_sar_risk_pct",
+                    "handover_risk_pct", "handover_wider_than_sl"):
+            row.pop(key, None)
+    with _client(payload=legacy) as client:
+        r = client.get("/signals/sar-live")
+        assert r.status_code == 200
+        assert "RUNUSDT" in r.text
+        assert ">wider<" not in r.text        # nothing to flag, nothing invented
+        rr = client.get("/signals/sar-live?tab=resolved")
+    assert rr.status_code == 200
+
+
+def test_the_risk_split_treats_a_legacy_arm_as_unknown_not_inside():
+    """No stamp is 'we do not know', which is not the same as 'it was narrow'."""
+    _live, resolved = _rows()
+    legacy = [{k: v for k, v in r.items() if k != "handover_wider_than_sl"}
+              for r in resolved]
+    split = summarize_by_risk(legacy)
+    assert split["unknown"]["n"] == len(legacy)
+    assert split["inside"]["n"] == 0
+    assert split["wider"]["n"] == 0
