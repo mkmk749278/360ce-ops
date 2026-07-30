@@ -105,6 +105,42 @@ Two rules, both learned the hard way:
   be true of those rows. Say whether an R is gross or net — #90 predicted a
   cost-inclusive figure and then measured a cost-free one.
 
+## Replayed vs live — what `/signals/sar-live` shows that no other page can
+
+Added 2026-07-30 (#106) alongside engine #832. Every measurement surface in this repo
+before it was a **replay**: a candidate is stamped, and a resolver scores it later.
+That answers *"would this have been profitable"* and says nothing about whether the
+mechanism is **operable** — whether the level can be computed in time, parked, and
+acted on before the outcome is known.
+
+It also inherits the resolver's health, which is not a theoretical risk: on
+2026-07-30 `/signals/sar` had 8 of 19 rows unresolved and **all four of the window's
+winners were among them**, so the −0.682R on screen was a fact about a starved refresh
+budget. A loss-selected sample is worse than no sample, because it looks like an answer.
+
+`/signals/sar-live` reads arms the engine stepped forward inside its monitor loop, so
+an open row carries the stop the mechanism *would have parked right now*. Three rules
+specific to it:
+
+- **The file's age leads the page, before any number on it.** A frozen arm file renders
+  as a book of open trades beside accurate live prices — exactly how the replay ledger
+  looked healthy on 2026-07-29 with an 11.6h-old newest resolution. **A working price
+  feed is not evidence the measurement is running.**
+- **Missing, empty and stale are three different states, and the engine's 60s heartbeat
+  is what separates them.** File missing = the monitor loop is not running the arms;
+  current and empty = running, nothing open (the quiet case, *not* a fault); stale =
+  the loop stopped stepping. The first cut of the engine ledger wrote only on change,
+  so an idle engine produced no file and this page reported a fault that was not
+  happening — this repo's own *"blank needs a cause before it gets a caption"* rule,
+  broken one repo over and caught by the owner minutes after deploy.
+- **Both fills are shown and neither is called the result.** `@level` is the parked stop
+  touched intrabar; `@confirm` is the flip confirmed at the close and exited at market.
+  Their difference is the cost of confirmation. There is deliberately no blended `avg_r`
+  and a test asserts the key does not exist — collapsing them before that cost is known
+  is choosing the answer, and the one you would choose is the flattering one.
+  Timeframes (5m/15m) are reported separately for the same reason: pooled, the headline
+  moves with the timeframe mix instead of the mechanism.
+
 ## Recorded vs reconstructed — the line `/track-record` must not cross
 
 Added 2026-07-28 (#98) for the owner's paper-trading problem: per-user paper books
@@ -154,6 +190,7 @@ own `UNPLACED` bucket rather than being folded into a real regime.
 | Monitoring agent's active-alert Redis state | `app/data_sources/agent_alerts.py` |
 | Binance Futures public 1m klines (no key, read-only) | `app/data_sources/binance_klines.py` |
 | Closed-signal record — `signal_performance.json` (`/track-record`, `/performance`) | `app/data_sources/data_volume.py` |
+| Live SAR mechanism arms — `sar_live_arms_v1.json` (`/signals/sar-live`) | `app/data_sources/data_volume.py` |
 | "Held to stop" free-run replay (Profit tab) | `app/data_sources/free_run.py` |
 | Scaled-exit what-if simulator (Profit tab) | `app/data_sources/exit_sim.py` |
 

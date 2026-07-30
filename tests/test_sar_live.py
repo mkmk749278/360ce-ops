@@ -35,6 +35,7 @@ from app.routes.sar_live import (  # noqa: E402
     mark_distance_to_stop,
     reduce_arms,
     reduce_live_state,
+    summarize_by_risk,
     summarize_by_timeframe,
     summarize_resolved,
 )
@@ -253,7 +254,10 @@ def test_a_frozen_arm_file_is_reported_as_frozen_not_live():
         live,
     )
     assert state["state"] == "frozen"
-    assert "not stepping them" in state["detail"]
+    # The copy must name the heartbeat, because that is what makes a stale file
+    # mean "the loop stopped" rather than "no bar closed recently".
+    assert "every 60s" in state["detail"]
+    assert "not that the market is quiet" in state["detail"]
 
 
 def test_a_current_file_with_open_arms_is_live():
@@ -303,6 +307,8 @@ READ_BY_THIS_PAGE = frozenset({
     "sar_stop", "status", "exit_reason", "closed_at",
     "fill_level", "fill_confirm", "pnl_level_pct", "pnl_confirm_pct",
     "r_level", "r_confirm", "confirm_slippage_pct", "mfe_pct", "ambiguous_bar",
+    "sar_risk_pct", "max_sar_risk_pct", "handover_risk_pct",
+    "handover_wider_than_sl",
 })
 
 
@@ -451,3 +457,116 @@ def test_table_cap_is_applied_after_filtering_and_declared():
     assert r.status_code == 200
     assert f"capped at {TABLE_ROW_CAP} rows" in r.text
     assert f"of {TABLE_ROW_CAP + 50}" in r.text
+
+
+def test_unavailable_copy_says_how_long_to_wait_before_it_is_a_fault():
+    """The engine heartbeats every 60s even with no arms, so 'missing' is only a
+    fault past that. Copy that names a cause must be true of the case it names."""
+    state = reduce_live_state({"exists": False, "file": "sar_live_arms_v1.json"}, [])
+    assert state["state"] == "unavailable"
+    assert "heartbeat" in state["detail"]
+    assert "no signals open" in state["detail"]
+
+
+# --------------------------------------------------------------------------- #
+# Risk split — "timed badly" and "risked more" are different findings
+# --------------------------------------------------------------------------- #
+
+
+def test_arms_carry_the_risk_their_sar_stop_actually_took():
+    live, _ = _rows()
+    by_key = {(r["symbol"], r["timeframe"]): r for r in live}
+    wide = by_key[("RUNUSDT", "15m")]
+    tight = by_key[("RUNUSDT", "5m")]
+    # Same signal, same entry, opposite verdicts — which is the whole point of
+    # running 5m and 15m as independent arms.
+    assert wide["handover_wider_than_sl"] is True
+    assert tight["handover_wider_than_sl"] is False
+    assert wide["handover_risk_pct"] > wide["sl_distance_pct"]
+    assert tight["handover_risk_pct"] < tight["sl_distance_pct"]
+
+
+def test_the_verdict_splits_on_whether_the_stop_exceeded_the_designed_sl():
+    _live, resolved = _rows()
+    split = summarize_by_risk(resolved)
+    assert set(split) == {"wider", "inside", "unknown"}
+    # Every resolved row lands in exactly one bucket — no double count, no drop.
+    assert sum(split[k]["n"] for k in split) == len(resolved)
+
+
+def test_never_handed_over_is_its_own_bucket_not_folded_into_either():
+    """An arm with no SAR risk to compare is not the same as one with a narrow
+    stop — folding it in would make 'inside' describe two different things."""
+    _live, resolved = _rows()
+    split = summarize_by_risk(resolved)
+    never = [r for r in resolved if r.get("handover_wider_than_sl") is None]
+    assert split["unknown"]["n"] == len(never)
+    assert split["unknown"]["avg_risk_pct"] is None
+
+
+def test_each_bucket_reports_the_risk_it_actually_took():
+    _live, resolved = _rows()
+    split = summarize_by_risk(resolved)
+    for key in ("wider", "inside"):
+        rows = [
+            r for r in resolved
+            if r.get("handover_wider_than_sl") is (key == "wider")
+            and r.get("handover_risk_pct") is not None
+        ]
+        if not rows:
+            continue
+        expected = sum(r["handover_risk_pct"] for r in rows) / len(rows)
+        assert split[key]["avg_risk_pct"] == pytest.approx(expected)
+
+
+def test_live_tab_renders_the_sar_risk_column_and_flags_the_wide_arm():
+    with _client() as client:
+        r = client.get("/signals/sar-live")
+    assert r.status_code == 200
+    assert "SAR risk" in r.text
+    assert ">wider<" in r.text          # the 15m RUNUSDT arm is badged
+
+
+def test_resolved_tab_explains_why_the_risk_split_exists():
+    with _client() as client:
+        r = client.get("/signals/sar-live?tab=resolved")
+    assert r.status_code == 200
+    assert "sized for" in r.text
+    # Copy is part of the measurement: the page must say this changes nothing.
+    assert "the mechanism is unchanged" in r.text
+
+
+def test_csv_export_carries_the_risk_stamps():
+    with _client() as client:
+        r = client.get("/signals/sar-live/export.csv")
+    assert "handover_wider_than_sl" in r.text
+    assert "max_sar_risk_pct" in r.text
+
+
+def test_an_arm_written_before_the_risk_stamps_still_renders():
+    """Cross-repo ordering: arms persisted by the previous engine build have no
+    risk keys and stay in the ledger until they resolve. The tab must render
+    them with the column blank, not 500 on a missing key."""
+    legacy = json.loads(json.dumps(FIXTURE))
+    for row in legacy["open"] + legacy["resolved"]:
+        for key in ("sar_risk_pct", "max_sar_risk_pct",
+                    "handover_risk_pct", "handover_wider_than_sl"):
+            row.pop(key, None)
+    with _client(payload=legacy) as client:
+        r = client.get("/signals/sar-live")
+        assert r.status_code == 200
+        assert "RUNUSDT" in r.text
+        assert ">wider<" not in r.text        # nothing to flag, nothing invented
+        rr = client.get("/signals/sar-live?tab=resolved")
+    assert rr.status_code == 200
+
+
+def test_the_risk_split_treats_a_legacy_arm_as_unknown_not_inside():
+    """No stamp is 'we do not know', which is not the same as 'it was narrow'."""
+    _live, resolved = _rows()
+    legacy = [{k: v for k, v in r.items() if k != "handover_wider_than_sl"}
+              for r in resolved]
+    split = summarize_by_risk(legacy)
+    assert split["unknown"]["n"] == len(legacy)
+    assert split["inside"]["n"] == 0
+    assert split["wider"]["n"] == 0

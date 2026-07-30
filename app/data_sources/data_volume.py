@@ -180,10 +180,17 @@ class DataVolumeReader:
         makes that worse, not better: a frozen file still renders as a page full
         of open trades with plausible stops.
 
-        ``age_sec`` is the one number the live tab must lead with. The arms
-        advance on bar closes (5m / 15m), and the engine flushes at most every
-        15s, so a file older than a couple of minutes means the monitor loop is
-        not stepping them — not that the market is quiet.
+        ``age_sec`` is the one number the live tab must lead with, and it is
+        only meaningful because the engine writes on a **60s heartbeat** rather
+        than only when an arm changes. That is what separates the three states a
+        reader needs: file missing = the monitor loop is not running the arms;
+        current but empty = running with nothing open (the quiet case); stale =
+        the loop stopped stepping. The engine's first cut wrote only on change,
+        so an idle engine produced no file at all and this page reported a fault
+        that was not happening (owner-caught 2026-07-30, minutes after deploy).
+
+        So: a file older than a couple of minutes means the loop is not stepping
+        the arms — never that the market is quiet.
         """
         info: dict[str, Any] = {
             "file": SAR_LIVE_FILE,
