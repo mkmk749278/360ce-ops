@@ -52,6 +52,7 @@ from app.routes import (
     raw_edge,
     referrals,
     sar_exit,
+    sar_live,
     signal_detail,
     signals,
     strategy_lab,
@@ -116,6 +117,7 @@ app.include_router(signals.router)
 # otherwise swallow `/signals/sar` and treat "sar" as a signal id. Same reason
 # `/signals/export.csv` sits on the signals router registered above.
 app.include_router(sar_exit.router)
+app.include_router(sar_live.router)
 app.include_router(signal_detail.router)
 app.include_router(pairs.router)
 app.include_router(diag.router)
