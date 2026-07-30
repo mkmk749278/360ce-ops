@@ -7,11 +7,20 @@
   <p class="small">
     {% if live_state.state == 'live' %}<span class="badge st-done">LIVE</span>
     {% elif live_state.state == 'idle' %}<span class="badge st-partial">IDLE</span>
+    {% elif live_state.state == 'partial' %}<span class="badge st-partial">PARTLY STALLED</span>
+    {% elif live_state.state == 'stalled' %}<span class="badge sev-high">ARMS STALLED</span>
     {% elif live_state.state == 'frozen' %}<span class="badge sev-high">FROZEN</span>
     {% elif live_state.state == 'orphan' %}<span class="badge sev-high">ORPHAN</span>
     {% else %}<span class="badge sev-high">UNAVAILABLE</span>{% endif %}
     {{ live_state.detail }}
   </p>
+  {% if live_state.counts and live_state.counts.no_bars_yet %}
+  <p class="muted small">
+    {{ live_state.counts.no_bars_yet }} of {{ live_state.counts.running }} running arms have
+    consumed <strong>zero</strong> bars since entry. On a fresh arm that is normal for one bar
+    width; sustained, it means the arm is holding the level it was born with.
+  </p>
+  {% endif %}
   <p class="muted small">
     Reading <code>{{ provenance.file }}</code>{% if provenance.modified_at %}, last written
     <strong>{{ provenance.modified_at }}</strong>{% if provenance.age_sec is not none %}
@@ -23,7 +32,10 @@
   <p class="muted small">
     This is <strong>not a replay</strong>. Every arm here was advanced inside the engine's monitor
     loop while the trade was open, so an open row carries the stop the mechanism <em>would have
-    parked right now</em> — not a level reconstructed after the outcome was known. That is the one
+    parked right now</em> — <strong>as long as the row says it is still advancing</strong>. An arm
+    whose symbol has stopped receiving klines keeps the stop it last computed, and the price beside
+    it is still live, so a stalled row would otherwise read as a fresh one. Check
+    <strong>Last advance</strong> before <strong>Dist. to stop</strong>. That is the one
     thing neither <a href="/signals/sar">SAR signals</a> (a 48h replay) nor
     <a href="/dark-signals">Dark signals</a> (a kline replay after the engine already closed the
     trade) can show, and it is what a rollout decision actually needs.
@@ -244,7 +256,7 @@
         {% if tab == 'resolved' %}
         <th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th>R @level</th><th>R @confirm</th><th>Confirm cost</th><th>Bars</th>
         {% else %}
-        <th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>SAR risk</th><th>MFE</th><th>Bars</th>
+        <th>Last advance</th><th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>SAR risk</th><th>MFE</th><th>Bars</th>
         {% endif %}
       </tr>
     </thead>
@@ -275,13 +287,26 @@
           {% if r.confirm_slippage_pct is not none %}{{ "%+.3f"|format(r.confirm_slippage_pct) }}%{% else %}—{% endif %}</td>
         <td>{{ r.bars_seen }}</td>
         {% else %}
+        {# Freshness of the measurement leads the live columns, ahead of any
+           number derived from the parked stop — a stalled arm's dist-to-stop is
+           a comparison between a live price and an old level (#108). #}
+        <td class="small">
+          {% if r.get('advance_age_sec') is not none %}
+            <span class="{% if r.get('is_stalled') %}neg{% endif %}">{{ "%.0f"|format(r.get('advance_age_sec') / 60.0) }}m ago</span>
+          {% else %}<span class="muted" title="the engine has not stamped last_advance_at on this arm — it predates the freshness stamps">unknown</span>{% endif %}
+          {% if r.get('is_stalled') %}<span class="badge sev-high" title="the newest closed bar for this symbol is bars behind the clock, so this arm's stop has not been recomputed since — the price beside it is live, the stop is not">stalled{% if r.get('bars_behind') is not none %} {{ "%.0f"|format(r.get('bars_behind')) }}b{% endif %}</span>{% endif %}
+          {% if r.get('stall_reason') == 'no_series' %}<span class="badge sev-high" title="the store has no candles for this symbol/timeframe at all — the symbol has almost certainly rotated out of the scan universe">no candles</span>{% endif %}
+        </td>
         <td>{% if r.current_price is not none %}{{ "%.6g"|format(r.current_price) }}{% else %}—{% endif %}</td>
         <td class="{% if r.unrealized_pct is not none and r.unrealized_pct > 0 %}pos{% elif r.unrealized_pct is not none and r.unrealized_pct < 0 %}neg{% endif %}">
           {% if r.unrealized_pct is not none %}{{ "%+.2f"|format(r.unrealized_pct) }}%{% else %}—{% endif %}</td>
         <td>{% if r.governor == 'SAR' and r.sar_stop is not none %}{{ "%.6g"|format(r.sar_stop) }}
             {% elif r.governor == 'GEOMETRY' %}<span class="muted" title="SAR has not taken over; the original stop is still live">{{ r.stop_loss }}</span>
             {% else %}—{% endif %}</td>
-        <td>{% if r.get('stop_distance_pct') is not none %}{{ "%.2f"|format(r.get('stop_distance_pct')) }}%{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.get('stop_distance_pct') is not none %}
+              <span class="{% if r.get('stop_crossed') %}neg{% endif %}">{{ "%.2f"|format(r.get('stop_distance_pct')) }}%</span>
+              {% if r.get('stop_crossed') %}<span class="badge sev-high" title="price is already through the parked stop and the arm has not acted on it — the mechanism would have exited by now, so this arm is not being stepped">crossed</span>{% endif %}
+            {% else %}<span class="muted">—</span>{% endif %}</td>
         {# .get() throughout: arms persisted before the risk stamps shipped do
            not carry these keys, and they stay in the ledger until they resolve.
            A direct dereference would 500 the tab on exactly those rows. #}
@@ -304,6 +329,16 @@
     original SL/TP is still governing, because distance-to-SAR means nothing before the handover.
     Realized columns stay empty on this tab by construction: an unrealized number in a realized
     column is how a still-open trade gets read as a finished one.
+  </p>
+  <p class="muted small">
+    <strong>Last advance</strong> is when the arm last consumed a closed bar — not when the file was
+    written, and not when the price was fetched. Those are three different clocks and only this one
+    says the stop beside it is current. A <span class="badge sev-high">stalled</span> row's
+    <em>Dist. to stop</em> compares a live price against a level computed bars ago, and
+    <span class="badge sev-high">crossed</span> means price is already through that level with the
+    arm still open — a mechanism that had actually been stepped would have exited. The engine retires
+    a stalled arm as <code>INSUFFICIENT / candle_feed_stalled</code> once the gap in its bars is
+    unrecoverable, so it is excluded from the verdict rather than scored across bars nobody saw.
   </p>
   {% endif %}
   {% endif %}

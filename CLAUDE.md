@@ -126,6 +126,18 @@ specific to it:
   as a book of open trades beside accurate live prices — exactly how the replay ledger
   looked healthy on 2026-07-29 with an 11.6h-old newest resolution. **A working price
   feed is not evidence the measurement is running.**
+- **…and the file's age is not the arm's age (#108).** The first cut graded liveness on
+  the file's mtime alone, then fetched the live Binance price itself and printed it
+  beside whatever stop the row happened to hold, under the words *"the stop the
+  mechanism would have parked right now"*. On 2026-07-30 the file was **18 seconds old
+  and correct** while two KORUUSDT arms in it had consumed **zero** bars in 2h19m — one
+  with a parked stop the price had already crossed by 5.45%. The page reported "LIVE — 3
+  arms running, stepped inside the monitor loop." **A surface cannot grade its own
+  liveness on a clock it supplies**: the rule above, broken from the other side, by us.
+  Freshness is per-arm — the engine stamps `last_advance_at`, `bars_behind` and
+  `stalled`, this page leads every open row with them, and a negative distance-to-stop
+  is badged `crossed` rather than printed as one more percentage, because it is a
+  contradiction (the level was breached and the arm did not act), not a near miss.
 - **Missing, empty and stale are three different states, and the engine's 60s heartbeat
   is what separates them.** File missing = the monitor loop is not running the arms;
   current and empty = running, nothing open (the quiet case, *not* a fault); stale =
@@ -191,6 +203,7 @@ own `UNPLACED` bucket rather than being folded into a real regime.
 | Binance Futures public 1m klines (no key, read-only) | `app/data_sources/binance_klines.py` |
 | Closed-signal record — `signal_performance.json` (`/track-record`, `/performance`) | `app/data_sources/data_volume.py` |
 | Live SAR mechanism arms — `sar_live_arms_v1.json` (`/signals/sar-live`) | `app/data_sources/data_volume.py` |
+| Live-arm freshness test fixture — real engine output, regenerate with 360-v2 `scripts/gen_ops_sar_live_fixture.py` | `tests/fixtures_sar_live_freshness.json` |
 | "Held to stop" free-run replay (Profit tab) | `app/data_sources/free_run.py` |
 | Scaled-exit what-if simulator (Profit tab) | `app/data_sources/exit_sim.py` |
 

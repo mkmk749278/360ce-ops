@@ -16,6 +16,22 @@ Neither had ever computed a stop while a position was open. These arms do:
 each one is stepped forward bar by bar inside the monitor loop, so an open row
 carries the stop the mechanism *would have parked right now*.
 
+…provided it is actually still being stepped, which the first cut of this page
+took on faith (#108). The engine advanced arms only while their signal was in
+the router's active set, and only when the store's candles moved — so a closed
+signal, or a mover that rotated out of the scan universe, left an arm RUNNING
+with a frozen stop, and this page painted a **live Binance price** next to it
+under the words "right now". KORUUSDT SHORT read that way for 2h19m with
+``bars_seen: 0``, its parked 5m stop already blown through by 5.45%: the exact
+sentence this module's own docstring warns about — *a working price feed is not
+evidence the measurement is running* — except the price feed was ours.
+
+So freshness is now per-arm, not per-file. The engine stamps ``last_advance_at``
+(when the arm last consumed a bar), ``bars_behind`` (how far its newest closed
+bar lags the clock) and ``stalled``; this page leads every open row with them and
+counts stepping arms apart from stalled ones. The file's mtime says the *loop* is
+alive; only the arm can say the *arm* is.
+
 Two tabs, because they answer different questions
 -------------------------------------------------
 **Live** (default) — arms currently running. Which leg is governing, where the
@@ -45,6 +61,7 @@ Rules this page inherits, all paid for elsewhere in this repo
 """
 from __future__ import annotations
 
+import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
@@ -79,6 +96,14 @@ RESOLVED_STATUSES = (
 #: and `bars_seen: 0` (owner-caught 2026-07-30, the same hour UNAVAILABLE was).
 #: 2x the heartbeat: one missed write is jitter, two is the loop stopping.
 LIVE_STALE_SEC = 120.0
+
+#: How far behind an arm's newest closed bar may sit before the row is called
+#: stalled here. Mirrors the engine's ``SAR_LIVE_SHADOW_STALL_BARS`` default and
+#: is only a *fallback*: the engine stamps ``stalled`` itself and that stamp
+#: wins, because ops ports the engine's math rather than inventing it. This
+#: exists so arms persisted before the engine stamped anything still render
+#: honestly instead of reading as fresh.
+STALL_BARS = 3.0
 
 
 def _f(value: Any) -> Optional[float]:
@@ -139,6 +164,64 @@ def filter_arms(
     return out
 
 
+def is_stalled(row: dict) -> bool:
+    """Is this arm's stop older than the bar it claims to be parked on?
+
+    The engine's own ``stalled`` stamp is authoritative when present. The
+    ``bars_behind`` fallback covers arms written before the engine stamped
+    either — those rows are exactly the ones that were rendering as fresh, so
+    treating a missing stamp as "healthy" would preserve the bug for the whole
+    population that has it.
+    """
+    if row.get("stalled") is True:
+        return True
+    behind = _f(row.get("bars_behind"))
+    return behind is not None and behind > STALL_BARS
+
+
+def mark_freshness(rows: list[dict], *, now: float) -> list[dict]:
+    """Stamp how long ago each open arm was last *advanced*, in seconds.
+
+    Not the same question as how long ago the file was written, and that
+    difference is the whole of #108: the file was 18s old and correct while the
+    arms in it had not moved for two hours. ``last_advance_at`` is the engine's,
+    written when a bar was actually consumed; the age is derived here because
+    only the reader knows "now".
+
+    ``advance_age_sec`` is None — not 0 — when the engine never stamped it. That
+    is an unknown, and the template must not be able to print it as "just now".
+    """
+    for row in rows:
+        if row.get("status") != STATUS_RUNNING:
+            continue
+        row.setdefault("stalled", None)
+        advanced_at = _f(row.get("last_advance_at"))
+        row["advance_age_sec"] = (
+            None if advanced_at is None else max(0.0, now - advanced_at)
+        )
+        row["is_stalled"] = is_stalled(row)
+    return rows
+
+
+def count_live_freshness(rows: list[dict]) -> dict:
+    """Split the running arms into the ones being stepped and the ones frozen.
+
+    "3 arms running" was true of the owner's 2026-07-30 page and told them
+    nothing: two of the three had consumed zero bars since entry. The headline
+    now carries both numbers because the second one is the one that invalidates
+    the first.
+    """
+    running = [r for r in rows if r.get("status") == STATUS_RUNNING]
+    stalled = [r for r in running if is_stalled(r)]
+    never = [r for r in running if not int(_f(r.get("bars_seen")) or 0)]
+    return {
+        "running": len(running),
+        "stalled": len(stalled),
+        "stepping": len(running) - len(stalled),
+        "no_bars_yet": len(never),
+    }
+
+
 def mark_distance_to_stop(rows: list[dict], prices: dict[str, float]) -> list[dict]:
     """Add the live mark and how far price sits from the parked stop.
 
@@ -147,11 +230,19 @@ def mark_distance_to_stop(rows: list[dict], prices: dict[str, float]) -> list[di
     its own keys — never into a realized column, and never into ``sar_stop``,
     which is the engine's value and must stay the engine's value.
 
+    A negative distance is not a near-miss, it is a **contradiction**: for a
+    SHORT the parked stop sits above price, so price above the stop means the
+    level was crossed and the arm did not act on it. Flagged as
+    ``stop_crossed`` rather than printed as a slightly negative percentage —
+    that is the state the owner spotted on KORUUSDT (−5.45%, arm still RUNNING),
+    and on the old page it was one unremarkable number in a row of numbers.
+
     A missing price leaves the row alone: the columns blank, the page renders.
     """
     for row in rows:
         if row.get("status") != STATUS_RUNNING:
             continue
+        row.setdefault("stop_crossed", False)
         # Present-but-None, not absent: the column has a defined meaning
         # ("we could not compute it") and the template must not have to
         # distinguish a missing key from an unknown value.
@@ -171,6 +262,7 @@ def mark_distance_to_stop(rows: list[dict], prices: dict[str, float]) -> list[di
             continue
         gap = (price - stop) if is_long else (stop - price)
         row["stop_distance_pct"] = gap / price * 100.0
+        row["stop_crossed"] = gap < 0
     return rows
 
 
@@ -321,9 +413,43 @@ def reduce_live_state(provenance: dict, live_rows: list[dict]) -> dict:
                 "nothing to run. This is the quiet case, not a fault."
             ),
         }
+    # A current file proves the monitor loop is writing. It does not prove any
+    # individual arm is advancing, and those are different claims — the whole of
+    # #108. So the headline is graded on the arms, not the file.
+    counts = count_live_freshness(live_rows)
+    if counts["stalled"] and counts["stalled"] >= counts["running"]:
+        return {
+            "state": "stalled",
+            "counts": counts,
+            "detail": (
+                f"The loop is writing, but all {counts['running']} running arms "
+                "are stalled: their newest closed bar is bars behind, so the "
+                "parked stops below were computed then and have not moved since. "
+                "Prices are live and the stops are not — do not read a "
+                "distance-to-stop on this page while that is true. A symbol that "
+                "rotated out of the scan universe stops receiving klines; the "
+                "engine retires such an arm as INSUFFICIENT once the gap is "
+                "unrecoverable rather than scoring it."
+            ),
+        }
+    if counts["stalled"]:
+        return {
+            "state": "partial",
+            "counts": counts,
+            "detail": (
+                f"{counts['stepping']} of {counts['running']} arms are advancing; "
+                f"{counts['stalled']} are stalled and carry a stop from an older "
+                "bar. Stalled rows are badged in the table — their "
+                "distance-to-stop is not a live number."
+            ),
+        }
     return {
         "state": "live",
-        "detail": f"{len(live_rows)} arms running, stepped inside the monitor loop.",
+        "counts": counts,
+        "detail": (
+            f"{counts['running']} arms running and advancing, stepped inside the "
+            "monitor loop."
+        ),
     }
 
 
@@ -373,6 +499,7 @@ async def sar_live(
     # Truncate here, after every filter — never in a reducer. The cap is a
     # render bound and the template says when it bit.
     rows = selected[:TABLE_ROW_CAP]
+    mark_freshness(rows, now=time.time())
     mark_distance_to_stop(rows, prices)
 
     return templates.TemplateResponse("sar_live.html", {
@@ -425,6 +552,11 @@ _ARM_COLS = [
     "ambiguous_bar",
     "sar_risk_pct", "max_sar_risk_pct", "handover_risk_pct",
     "handover_wider_than_sl",
+    # Freshness of the measurement (#108). The owner's 2026-07-30 export had no
+    # column that could have shown a 2h19m-old stop, so the CSV read as healthy
+    # too — an export is a surface, and it inherits the same rule.
+    "last_advance_at", "advance_age_sec", "bars_behind", "stalled",
+    "stall_reason", "is_stalled", "stop_crossed",
 ]
 
 
@@ -449,6 +581,7 @@ async def sar_live_export_csv(
         prices = await request.app.state.binance_klines.fetch_all_prices()
     except Exception:
         prices = {}
+    mark_freshness(rows, now=time.time())
     mark_distance_to_stop(rows, prices)
     data = [[r.get(c) for c in _ARM_COLS] for r in rows]
     return csv_response("sar_live_arms", _ARM_COLS, data)
