@@ -161,6 +161,51 @@
 </section>
 
 <section class="card">
+  <h2>Why is this path silent? <span class="muted small">(per setup: which gate stops it)</span></h2>
+  {% if path_silence %}
+  <p class="muted small">
+    The gate table below pools every setup into one row, so it cannot answer the question
+    the delivered book poses. In the last 100 delivered signals <strong>76% were
+    MOVER_*</strong>; <code>SR_FLIP_RETEST</code> shipped one signal in nine days,
+    <code>RANGE_FADE</code> and <code>MEAN_REVERT</code> zero. The reason is per path, and
+    it splits three ways — the detector never fires, the regime setup-compat gate confines
+    it, or its counterfactuals measure negative and the gate is doing its job.
+    <strong><code>MOVER_TREND_PULLBACK</code> takes zero <code>setup_compat:regime_*</code>
+    rejects</strong>, because a mover is defined by its own move rather than by the
+    market's state — it is the one path legal in every regime, which is why it is the one
+    path with volume.
+  </p>
+  <table class="data-table">
+    <thead>
+      <tr><th>Setup</th><th>Suppressions</th><th>Gates</th><th>Dominant gate</th><th>Share</th><th>Classified</th><th>WOULD_WIN%</th></tr>
+    </thead>
+    <tbody>
+    {% for r in path_silence %}
+      <tr>
+        <td class="mono">{{ r.setup_class }}
+          {% if r.pre_scoring_only %}<span class="badge st-open" title="every suppression of this path happened before scoring — it is not being killed by a confidence or context gate, it never got that far">pre-scoring only</span>{% endif %}
+        </td>
+        <td>{{ r.n }}</td>
+        <td>{{ r.gate_count }}</td>
+        <td class="mono small">{{ r.top_gate }}</td>
+        <td>{{ "%.0f"|format(r.top_gate_share) }}%</td>
+        <td>{{ r.classified }}</td>
+        <td>{% if r.would_win_pct is not none %}{{ "%.1f"|format(r.would_win_pct) }}%{% else %}<span class="muted" title="nothing has classified for this path yet — not the same as none of them would have won">—</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    A blank WOULD_WIN% means <em>nothing has classified yet</em>, which is a different
+    statement from <em>none of them would have won</em> — printing 0.0% there would read
+    as the second.
+  </p>
+  {% else %}
+  <p class="muted">No suppressed candidates stamped yet.</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h2>Suppression gate audit <span class="muted small">(would the blocked candidates have won?)</span></h2>
   {% if gates.by_gate %}
   <table class="data-table">
@@ -170,7 +215,9 @@
     <tbody>
     {% for gate, g in gates.by_gate.items() | sort %}
       <tr>
-        <td class="mono">{{ gate }}</td>
+        <td class="mono">{{ gate }}
+          {% if g.pre_scoring %}<span class="badge st-open" title="fires before the scoring engine — these rows carry the evaluator's confidence, never a scored one, and the engine keeps them out of the edge matrix so Layer C cannot route on them">pre-scoring</span>{% endif %}
+        </td>
         <td>{{ g.n }}</td>
         <td>{{ "%.1f"|format(g.would_win_pct) }}%</td>
         <td>{{ "%.1f"|format(g.saved_r) }}</td>
@@ -182,6 +229,19 @@
     </tbody>
   </table>
   <p class="muted small">{{ gates.classified }} classified · {{ gates.pending }} pending (awaiting forward window)</p>
+  <p class="muted small">
+    Rows badged <span class="badge st-open">pre-scoring</span> come from
+    <code>setup_compat</code> and <code>execution</code>, which fire <em>before</em> the
+    scoring engine. Until 2026-07-31 they were the only live gates with no row here at
+    all — they suppressed <strong>37,782 candidates in one window</strong> with no
+    WOULD_WIN%, no EV and no verdict, while every other gate was ranked beside them. Read
+    them as a <strong>separate experiment</strong>, not a rival to the rows above: their
+    candidates carry the evaluator's confidence rather than a scored one, so the two
+    populations are selected differently. They are also excluded from the
+    Strategy×Context edge matrix by the engine, which means nothing here can change what
+    a subscriber receives. Each gate holds a bounded per-gate sample, so a rate is
+    measured on what the ring held — not on every suppression the gate made.
+  </p>
   {% else %}
   <p class="muted">No classified suppressed candidates yet ({{ gates.pending }} pending).
   Candidates classify after their validity window of real candles accumulates.</p>
