@@ -22,10 +22,22 @@
   <p class="muted small">
     <strong>These are real signals, not counterfactuals.</strong> Each row went through the
     <em>whole</em> scanner chain — scoring, MTF, min_confidence, the context floors,
-    level_still_in_play, staleness — with only <code>setup_compat</code> or
-    <code>execution</code> overridden for its path. That is what separates this page from
+    level_still_in_play, staleness — with only <code>setup_compat</code>,
+    <code>execution</code> or <code>evaluator</code> overridden for its path. That is what
+    separates this page from
     <a href="/strategy-lab">the suppression audit</a>, where a gate killed a candidate and a
     resolver scored it afterwards.
+  </p>
+  <p class="muted small">
+    <strong>The <code>evaluator</code> override is different in kind</strong>, and only
+    <code>sr_flip_long_disabled</code> uses it. The other two are gate-chain rejections; this
+    one fires <em>inside</em> the SR_FLIP evaluator, long before the chain. So the candidate is
+    not published there — it is <em>carried</em>, finishes the evaluator, runs every gate above,
+    and is diverted at the same single enqueue site. Were it published where the disable
+    fires, the first sentence of this page would be false for those rows. SR_FLIP longs have
+    been off since 2026-06-29 on a measured −21.8% (19% win); these rows are how that verdict
+    gets re-earned on outcomes rather than a candidate count, and the long side stays out of
+    the live feed either way.
   </p>
   <p class="muted small">
     <strong>They are not what a user would have seen.</strong> The router applies a second
