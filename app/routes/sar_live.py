@@ -58,6 +58,31 @@ Rules this page inherits, all paid for elsewhere in this repo
 * **Copy is part of the measurement.** The page states that both fills are
   shown and what the difference means, because a single "SAR result" would be a
   choice this data does not support making yet.
+
+An arm can be born a replay, and this page has to say so (#836)
+---------------------------------------------------------------
+The sentence at the top of this page is *"this is not a replay"*, and on
+2026-07-31 it was false for one of the rows under it. An arm anchors to the
+newest closed bar the store holds at creation; nothing checked that the bar was
+**current**. For a promoted mover — REST re-seed only, no WS klines — ACHUSDT's
+15m series was ~40h stale, so the arm read SAR-at-entry off a 40h-old bar and
+its first advance walked 39.5 hours of history in a single pass, stamping a
+fresh ``last_advance_at`` on every bar of it. The row published as a
+forward-stepped fill, and every freshness column #108 added read healthy,
+because by then it *was* fresh.
+
+The engine now refuses to open such an arm and stamps ``anchor_bars_behind`` /
+``first_step_bars`` on every one it does. This page grades on those stamps, runs
+its own bars-vs-lifetime check on rows written before them, and **excludes a
+replayed arm from every R** — counted, named, never averaged in.
+
+Both denominators, for the same reason as both fills (#836)
+------------------------------------------------------------
+R divides by the SL distance at entry. When SAR governs, that stop is cancelled
+and SAR's own was **wider on 14 of 27 handovers** in the owner's window (mean
+1.25x, max 2.81x), so the reported R exaggerates a loss taken at 2.7x the
+designed risk. ``r_level_risk`` divides by the risk actually parked. Neither is
+"the" R, exactly as neither fill is "the" fill.
 """
 from __future__ import annotations
 
@@ -104,6 +129,37 @@ LIVE_STALE_SEC = 120.0
 #: exists so arms persisted before the engine stamped anything still render
 #: honestly instead of reading as fresh.
 STALL_BARS = 3.0
+
+
+#: Bar widths, for the reader-side anchor check on rows the engine never
+#: stamped. Mirrors the engine's ``_INTERVAL_SECONDS`` for the timeframes this
+#: page runs; a timeframe absent here makes the check refuse rather than guess.
+_TF_SECONDS = {
+    "1m": 60.0, "3m": 180.0, "5m": 300.0, "15m": 900.0,
+    "30m": 1800.0, "1h": 3600.0, "4h": 14400.0,
+}
+
+#: Did this arm start life on a bar that was current?
+#:
+#: ``clean``       the arm stepped forward from a current anchor
+#: ``replayed``    the engine's own stamps say it walked history at open
+#: ``suspect``     no engine stamp, and the reader-side check says it did
+#: ``unverified``  neither could be evaluated — an unknown, not a pass
+ANCHOR_CLEAN = "clean"
+ANCHOR_REPLAYED = "replayed"
+ANCHOR_SUSPECT = "suspect"
+ANCHOR_UNVERIFIED = "unverified"
+
+#: Verdicts whose rows are excluded from every R figure. They are still counted,
+#: exactly as ``INSUFFICIENT`` is: the row measured *something*, but not this
+#: mechanism running forward, and averaging it in would let a replay set the
+#: number an adoption decision reads.
+ANCHOR_EXCLUDED = (ANCHOR_REPLAYED, ANCHOR_SUSPECT)
+
+#: Slack on the reader-side check. An arm cannot consume more bars than have
+#: closed since it opened, plus one for the bar it anchored to and one for
+#: rounding. Anything beyond that is history, not stepping.
+ANCHOR_BAR_SLACK = 2.0
 
 
 def _f(value: Any) -> Optional[float]:
@@ -266,6 +322,133 @@ def mark_distance_to_stop(rows: list[dict], prices: dict[str, float]) -> list[di
     return rows
 
 
+def anchor_verdict(row: dict, *, now: float) -> tuple[str, bool, Optional[float]]:
+    """Was this arm ever actually stepped forward, or was it born a replay?
+
+    Returns ``(verdict, engine_stamped, replay_bars)``.
+
+    An arm anchors to "the newest closed bar the store holds right now" and
+    steps from there. Engine #836: when that bar was *itself* hours old — a
+    promoted mover on REST re-seed with no WS klines — the arm read its
+    SAR-at-entry off a stale bar and its first advance walked the whole gap in
+    one pass, stamping a fresh ``last_advance_at`` on every bar of it. ACHUSDT
+    15m consumed **158 bars in ten bars of life** and published as a live fill,
+    on the page whose first sentence is "this is not a replay". That sentence is
+    this page's, so checking it is this page's job.
+
+    The engine's own stamps win where they exist: ``first_step_bars`` is 1 on a
+    genuinely live arm and larger only if it walked history, and
+    ``anchor_bars_behind`` says how stale the anchor was. Rows written before
+    #836 carry neither — and those are precisely the rows that have the bug — so
+    a missing stamp must not read as a pass. They get a **reader-side** check
+    instead: ``bars_seen`` against the arm's own lifetime in bars. It is a
+    second computation of the engine's quantity, never an overwrite of it, and
+    it is reported under its own name so the owner can see which arms were
+    verified by the producer and which by the reader.
+    """
+    first_step = _f(row.get("first_step_bars"))
+    behind = _f(row.get("anchor_bars_behind"))
+    stamped = "first_step_bars" in row or "anchor_bars_behind" in row
+    if first_step is not None and first_step > 1:
+        return ANCHOR_REPLAYED, True, first_step
+    if behind is not None and behind > STALL_BARS:
+        return ANCHOR_REPLAYED, True, behind
+    if stamped:
+        return ANCHOR_CLEAN, True, first_step
+
+    width = _TF_SECONDS.get(str(row.get("timeframe") or ""))
+    opened = _f(row.get("opened_at"))
+    ended = _f(row.get("closed_at")) or _f(row.get("last_advance_at")) or now
+    bars_seen = _f(row.get("bars_seen"))
+    if not width or opened is None or bars_seen is None or ended <= opened:
+        # Cannot be evaluated either way. That is an unknown, and an unknown
+        # reported as "clean" is how the bug this check exists for survived.
+        return ANCHOR_UNVERIFIED, False, None
+    lifetime_bars = (ended - opened) / width
+    if bars_seen > lifetime_bars + ANCHOR_BAR_SLACK:
+        return ANCHOR_SUSPECT, False, bars_seen - lifetime_bars
+    return ANCHOR_CLEAN, False, None
+
+
+def mark_anchor_integrity(rows: list[dict], *, now: float) -> list[dict]:
+    """Stamp each row's anchor verdict. Must run before any summary reads it."""
+    for row in rows:
+        verdict, stamped, replay_bars = anchor_verdict(row, now=now)
+        row["anchor_verdict"] = verdict
+        row["anchor_engine_stamped"] = stamped
+        row["anchor_replay_bars"] = replay_bars
+    return rows
+
+
+def count_anchor_verdicts(rows: list[dict]) -> dict:
+    """How many arms in this selection can be trusted to have stepped forward.
+
+    Reported on the page whether or not any row failed. A panel that appears
+    only when something is wrong teaches the owner that its absence means
+    "checked and fine", when it equally means "the check stopped running".
+    """
+    counts = {
+        key: sum(1 for r in rows if r.get("anchor_verdict") == key)
+        for key in (ANCHOR_CLEAN, ANCHOR_REPLAYED, ANCHOR_SUSPECT, ANCHOR_UNVERIFIED)
+    }
+    counts["total"] = len(rows)
+    counts["excluded"] = counts[ANCHOR_REPLAYED] + counts[ANCHOR_SUSPECT]
+    counts["engine_stamped"] = sum(
+        1 for r in rows if r.get("anchor_engine_stamped") is True
+    )
+    counts["worst_replay_bars"] = max(
+        (_f(r.get("anchor_replay_bars")) or 0.0
+         for r in rows if r.get("anchor_verdict") in ANCHOR_EXCLUDED),
+        default=None,
+    )
+    return counts
+
+
+def _risk_denominator(row: dict) -> Optional[float]:
+    """The risk this arm actually parked, in percent — or None.
+
+    R on this page divides by the SL distance at entry, which keeps it
+    comparable with the edge matrix and Track record. But when SAR governs, that
+    stop is **cancelled**, and on the owner's 2026-07-31 window SAR's own stop
+    was wider than it on 14 of 27 handovers (mean 1.25x, max 2.81x). Dividing a
+    loss taken at 2.7x the designed risk by the designed risk reports −1.90R for
+    what was −0.71R of the capital actually exposed.
+
+    Neither denominator is wrong and this page publishes both, for the same
+    reason it publishes both fills: where two readings are defensible, choosing
+    one before the gap is known is choosing the answer.
+
+    ``handover_risk_pct`` is the entry-to-SAR-stop distance stamped at handover.
+    An arm that never handed over ran on its original stop, so its designed SL
+    *is* the risk it took — the two R's coincide and that is a fact, not a
+    fallback.
+    """
+    handed_over = row.get("handover_at") is not None
+    risk = _f(row.get("handover_risk_pct"))
+    if handed_over and risk is not None and risk > 0:
+        return risk
+    sl = _f(row.get("sl_distance_pct"))
+    return sl if sl and sl > 0 else None
+
+
+def mark_risk_adjusted_r(rows: list[dict]) -> list[dict]:
+    """Add R measured against the risk actually parked, beside the reported R.
+
+    Written into its own keys. ``r_level`` / ``r_confirm`` are the engine's and
+    stay the engine's — ops ports the engine's math, and a denominator swap that
+    overwrote the original would make the two repos disagree about a field name
+    they share.
+    """
+    for row in rows:
+        denom = _risk_denominator(row)
+        for src, dst in (("pnl_level_pct", "r_level_risk"),
+                         ("pnl_confirm_pct", "r_confirm_risk")):
+            pnl = _f(row.get(src))
+            row[dst] = None if (denom is None or pnl is None) else pnl / denom
+        row["risk_denominator_pct"] = denom
+    return rows
+
+
 def summarize_resolved(rows: list[dict]) -> dict:
     """The verdict, on both fills, refusing rather than averaging over blanks.
 
@@ -281,11 +464,21 @@ def summarize_resolved(rows: list[dict]) -> dict:
     performance.
     """
     closed = [r for r in rows if r.get("status") in RESOLVED_STATUSES]
-    measurable = [r for r in closed if r.get("status") != STATUS_INSUFFICIENT]
+    scored = [r for r in closed if r.get("status") != STATUS_INSUFFICIENT]
+    # An arm that walked history at open measured a replay, not this mechanism
+    # running forward (#836). Counted, excluded from every R — the same
+    # treatment INSUFFICIENT already gets, and for the same reason: it is "we
+    # cannot say", not a result.
+    replayed = [r for r in scored if r.get("anchor_verdict") in ANCHOR_EXCLUDED]
+    measurable = [r for r in scored if r.get("anchor_verdict") not in ANCHOR_EXCLUDED]
     r_level = [_f(r.get("r_level")) for r in measurable]
     r_confirm = [_f(r.get("r_confirm")) for r in measurable]
     r_level = [x for x in r_level if x is not None]
     r_confirm = [x for x in r_confirm if x is not None]
+    r_level_risk = [_f(r.get("r_level_risk")) for r in measurable]
+    r_confirm_risk = [_f(r.get("r_confirm_risk")) for r in measurable]
+    r_level_risk = [x for x in r_level_risk if x is not None]
+    r_confirm_risk = [x for x in r_confirm_risk if x is not None]
     slip = [_f(r.get("confirm_slippage_pct")) for r in measurable]
     slip = [x for x in slip if x is not None]
     wins_level = sum(1 for x in r_level if x > 0)
@@ -300,10 +493,21 @@ def summarize_resolved(rows: list[dict]) -> dict:
         "insufficient": sum(
             1 for r in closed if r.get("status") == STATUS_INSUFFICIENT
         ),
+        "replayed": len(replayed),
+        "unverified": sum(
+            1 for r in measurable if r.get("anchor_verdict") == ANCHOR_UNVERIFIED
+        ),
         "no_r": len(measurable) - len(r_level),
         "n_r": len(r_level),
+        "n_r_risk": len(r_level_risk),
         "avg_r_level": _avg(r_level),
         "avg_r_confirm": _avg(r_confirm),
+        # Same fills, divided by the risk the arm actually parked rather than
+        # the SL it cancelled. Win rates are deliberately not repeated: a
+        # positive denominator cannot change a sign, so they are identical and
+        # printing them twice would imply two populations.
+        "avg_r_level_risk": _avg(r_level_risk),
+        "avg_r_confirm_risk": _avg(r_confirm_risk),
         "win_rate_level": (wins_level / len(r_level)) if r_level else None,
         "win_rate_confirm": (wins_confirm / len(r_confirm)) if r_confirm else None,
         "avg_confirm_slippage_pct": _avg(slip),
@@ -496,10 +700,17 @@ async def sar_live(
     except Exception:
         prices = {}
 
+    # Stamped on the FULL selection, before any summary reads it — the summaries
+    # below are measured on `selected`, not on the truncated table, and a row
+    # excluded from the verdict has to be excluded wherever it is counted.
+    now = time.time()
+    mark_anchor_integrity(selected, now=now)
+    mark_risk_adjusted_r(selected)
+
     # Truncate here, after every filter — never in a reducer. The cap is a
     # render bound and the template says when it bit.
     rows = selected[:TABLE_ROW_CAP]
-    mark_freshness(rows, now=time.time())
+    mark_freshness(rows, now=now)
     mark_distance_to_stop(rows, prices)
 
     return templates.TemplateResponse("sar_live.html", {
@@ -519,6 +730,7 @@ async def sar_live(
         "n_wider": sum(
             1 for r in scoped_align if r.get("handover_wider_than_sl") is True
         ),
+        "anchor": count_anchor_verdicts(selected),
         "timeframes": sorted({r["timeframe"] for r in base if r.get("timeframe")}),
         "governors": sorted({r["governor"] for r in base if r.get("governor")}),
         "statuses": sorted({r["status"] for r in base if r.get("status")}),
@@ -552,6 +764,14 @@ _ARM_COLS = [
     "ambiguous_bar",
     "sar_risk_pct", "max_sar_risk_pct", "handover_risk_pct",
     "handover_wider_than_sl",
+    # R against the risk actually parked, beside the engine's R against the SL
+    # the trade was sized for. Both, never one (#836).
+    "risk_denominator_pct", "r_level_risk", "r_confirm_risk",
+    # Anchor integrity — whether the arm stepped forward or walked history at
+    # open. An export is a surface and inherits the page's rules: the CSV that
+    # first showed the 158-bar arm had no column that could have said so.
+    "anchor_bars_behind", "first_step_bars",
+    "anchor_verdict", "anchor_engine_stamped", "anchor_replay_bars",
     # Freshness of the measurement (#108). The owner's 2026-07-30 export had no
     # column that could have shown a 2h19m-old stop, so the CSV read as healthy
     # too — an export is a surface, and it inherits the same rule.
@@ -581,7 +801,10 @@ async def sar_live_export_csv(
         prices = await request.app.state.binance_klines.fetch_all_prices()
     except Exception:
         prices = {}
-    mark_freshness(rows, now=time.time())
+    now = time.time()
+    mark_anchor_integrity(rows, now=now)
+    mark_risk_adjusted_r(rows)
+    mark_freshness(rows, now=now)
     mark_distance_to_stop(rows, prices)
     data = [[r.get(c) for c in _ARM_COLS] for r in rows]
     return csv_response("sar_live_arms", _ARM_COLS, data)

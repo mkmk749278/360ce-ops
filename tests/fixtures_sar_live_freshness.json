@@ -3,6 +3,7 @@
   {
    "aligned_at_entry": true,
    "ambiguous_bar": false,
+   "anchor_bars_behind": 0.0,
    "arm_id": "BRKDN-C74F2BE4:5m",
    "bars_behind": 10.0,
    "bars_seen": 0,
@@ -13,6 +14,7 @@
    "exit_reason": null,
    "fill_confirm": null,
    "fill_level": null,
+   "first_step_bars": null,
    "governor": "SAR",
    "handover_at": 1700360000.0,
    "handover_bar_ms": 1700359700000.0,
@@ -51,6 +53,7 @@
   {
    "aligned_at_entry": true,
    "ambiguous_bar": false,
+   "anchor_bars_behind": 0.0,
    "arm_id": "BRKDN-C74F2BE4:15m",
    "bars_behind": 3.3333333333333335,
    "bars_seen": 0,
@@ -61,6 +64,7 @@
    "exit_reason": null,
    "fill_confirm": null,
    "fill_level": null,
+   "first_step_bars": null,
    "governor": "SAR",
    "handover_at": 1700360000.0,
    "handover_bar_ms": 1700359100000.0,
@@ -99,6 +103,7 @@
   {
    "aligned_at_entry": true,
    "ambiguous_bar": false,
+   "anchor_bars_behind": 0.0,
    "arm_id": "MVRTP-F22476CD:15m",
    "bars_behind": 0.3333333333333333,
    "bars_seen": 3,
@@ -109,6 +114,7 @@
    "exit_reason": null,
    "fill_confirm": null,
    "fill_level": null,
+   "first_step_bars": 1,
    "governor": "SAR",
    "handover_at": 1700360000.0,
    "handover_bar_ms": 1700359100000.0,
@@ -147,5 +153,5 @@
  ],
  "resolved": [],
  "schema": 1,
- "written_at": 1785409428.3737485
+ "written_at": 1785476049.4312546
 }
