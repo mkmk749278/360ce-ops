@@ -52,6 +52,7 @@ from app.routes import (
     raw_edge,
     referrals,
     sar_exit,
+    dark_signals_live,
     sar_live,
     signal_detail,
     signals,
@@ -118,6 +119,7 @@ app.include_router(signals.router)
 # `/signals/export.csv` sits on the signals router registered above.
 app.include_router(sar_exit.router)
 app.include_router(sar_live.router)
+app.include_router(dark_signals_live.router)
 app.include_router(signal_detail.router)
 app.include_router(pairs.router)
 app.include_router(diag.router)
