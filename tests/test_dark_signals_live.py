@@ -521,6 +521,31 @@ def test_the_page_names_why_a_row_could_not_be_dated():
     assert "unverified" in r.text and "no_timestamps" in r.text
 
 
+def test_the_page_names_the_evaluator_override_and_why_it_is_carried():
+    """Copy is part of the measurement. The page's first sentence claims every
+    row cleared the whole chain; the SR_FLIP long disable fires inside the
+    evaluator, so the page must say the candidate is carried rather than
+    published there — otherwise that claim is false for those rows."""
+    client = _client(payload=_payload([
+        _row(setup="SR_FLIP_RETEST", gate="evaluator:sr_flip_long_disabled"),
+    ]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert "evaluator" in r.text
+    assert "carried" in r.text
+    assert "sr_flip_long_disabled" in r.text
+
+
+def test_an_evaluator_gate_filters_like_any_other():
+    rows = [
+        _row(setup="SR_FLIP_RETEST", gate="evaluator:sr_flip_long_disabled"),
+        _row(setup="MEAN_REVERT", gate="setup_compat:regime_STRONG_TREND"),
+    ]
+    assert len(filter_rows(rows, gate="evaluator:sr_flip_long_disabled")) == 1
+    assert len(filter_rows(rows, setup="SR_FLIP_RETEST")) == 1
+
 # --------------------------------------------------------------------------- #
 # Regular exit vs SAR exit — two outcomes on the same entries
 #
