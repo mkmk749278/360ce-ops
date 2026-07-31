@@ -468,3 +468,53 @@ def test_the_export_carries_the_mark_and_the_freshness():
     for col in ("unrealized_pct", "unrealized_r", "resolve_age_sec",
                 "resolve_misses", "freshness", "level_crossed"):
         assert col in header
+
+
+def test_a_row_advanced_on_an_undatable_window_is_unverified_not_current():
+    """Owner-caught 2026-07-31: the engine's snapshot dropped `open_time`, so
+    after a restart it could advance a row but not date the bars it read.
+    `last_resolved_at` says when the RESOLVER ran — printing it as the row's
+    freshness answers a question nobody asked."""
+    from app.routes.dark_signals_live import mark_freshness
+
+    now = 1_700_000_600.0
+    row = _open_row(last_resolved_at=now - 60.0, stalled=None,
+                    window_undated_reason="no_timestamps")
+    (row,) = mark_freshness([row], now=now)
+    assert row["freshness"] == "unverified"
+    assert row["is_stalled"] is False
+    assert row["unverified_reason"] == "no_timestamps"
+
+
+def test_an_undated_row_is_kept_out_of_the_still_measured_population():
+    from app.routes.dark_signals_live import (
+        mark_freshness, mark_live_pnl, summarize_open,
+    )
+
+    now = 1_700_000_600.0
+    rows = [_open_row(last_resolved_at=now - 60.0,
+                      window_undated_reason="stamp_before_timestamps")]
+    mark_freshness(rows, now=now)
+    mark_live_pnl(rows, {"AAAUSDT": 103.0})
+    panel = summarize_open(rows)
+    assert panel["unverified"] == 1 and panel["stalled"] == 0
+    assert panel["all_marked"]["n"] == 1
+    assert panel["still_measured"]["n"] == 0, (
+        "an undated row is being advanced, but nothing can say its bars are "
+        "current — it cannot back the population that claims they are"
+    )
+
+
+def test_the_page_names_why_a_row_could_not_be_dated():
+    # A live clock: the route grades freshness against real "now", so a row
+    # stamped in 2023 would read stalled-by-age before the undated branch runs.
+    import time as _t
+
+    client = _client(payload=_payload([_open_row(
+        emitted_at=_t.time() - 600.0, last_resolved_at=_t.time() - 60.0,
+        window_undated_reason="no_timestamps")]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert "unverified" in r.text and "no_timestamps" in r.text
