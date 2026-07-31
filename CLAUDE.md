@@ -145,6 +145,29 @@ specific to it:
   so an idle engine produced no file and this page reported a fault that was not
   happening — this repo's own *"blank needs a cause before it gets a caption"* rule,
   broken one repo over and caught by the owner minutes after deploy.
+- **An arm can be born a replay, and the page that says "this is not a replay" owns
+  checking it (#109, engine #836).** An arm anchors to the newest closed bar the store
+  holds at creation, and nothing checked that the bar was *current*. For a promoted
+  mover — REST re-seed only, no WS klines — ACHUSDT's 15m series was ~40h stale, so the
+  arm read SAR-at-entry off a 40h-old bar and its first advance walked 39.5 hours of
+  history in one pass. **Every freshness column #108 added read healthy on it**, because
+  by the time it was written the arm genuinely was fresh — freshness answers "is this
+  stop current", never "was this row earned". The engine now stamps `anchor_bars_behind`
+  / `first_step_bars`; this page grades on them, runs a bars-vs-lifetime check on rows
+  written before them, and **excludes a replayed arm from every R** — counted, named,
+  never averaged in. Two corollaries: a **missing stamp is not a pass** (the rows
+  without one are exactly the rows with the bug, so they get `unverified`, its own
+  bucket), and the panel **renders whether or not anything failed** — a check that
+  appears only when it trips teaches the reader that its absence means "fine" when it
+  equally means the check stopped running.
+- **Where two denominators are defensible, publish both (#109).** R divides by the SL
+  distance at entry — but when SAR governs, that stop is *cancelled*, and SAR's own was
+  wider than it on 14 of 27 handovers in the owner's window (mean 1.25×, max 2.81×). The
+  same loss reads −1.90R against the designed risk and −0.71R against the risk actually
+  parked. `r_level_risk` sits beside `r_level` and neither is called "the" R; the win
+  rate is stated **once**, because a positive denominator cannot change a sign and
+  printing it twice would imply two populations. Exactly the both-fills rule below, one
+  denominator over.
 - **Both fills are shown and neither is called the result.** `@level` is the parked stop
   touched intrabar; `@confirm` is the flip confirmed at the close and exited at market.
   Their difference is the cost of confirmation. There is deliberately no blended `avg_r`

@@ -67,10 +67,61 @@
     choosing the answer rather than measuring it.
   </p>
   <p class="muted small">
-    R divides by the <strong>SL distance at entry</strong> even on arms where SAR governed and that
-    stop was never used, so a number here is comparable with the edge matrix and
-    <a href="/track-record">Track record</a>. Figures are <strong>gross</strong> — no fees, no
-    funding — so a row reading flat is a real cost live.
+    <strong>R is reported against two denominators, and neither is called “the” R.</strong>
+    <strong>R</strong> divides by the <strong>SL distance at entry</strong>, which keeps it
+    comparable with the edge matrix and <a href="/track-record">Track record</a> — but when SAR
+    governs, that stop is <em>cancelled</em>, and SAR's own has been wider than it on more than half
+    of all handovers. <strong>R @risk</strong> divides by the risk the arm actually parked. A loss
+    taken at 2.7× the designed risk reads −1.90R against the design and −0.71R against the exposure;
+    both are true and quoting one silently picks the answer. Figures are <strong>gross</strong> — no
+    fees, no funding — so a row reading flat is a real cost live.
+  </p>
+</section>
+
+<section class="card">
+  <h2 class="small">Did these arms step forward, or walk history?</h2>
+  <p class="muted small">
+    An arm anchors to the newest closed bar the store holds when it opens. If that bar is
+    <em>itself</em> hours old — a promoted mover on REST re-seed with no WS klines — the arm reads
+    SAR-at-entry off a stale bar and its first advance walks the whole gap in one pass, stamping a
+    fresh <em>Last advance</em> on every bar of it. ACHUSDT 15m did exactly that on 2026-07-31:
+    <strong>158 bars consumed in ten bars of life</strong>, published as a live fill under the
+    sentence “this is not a replay”. The engine now refuses to open an arm on a stale anchor; this
+    panel grades what is already in the ledger.
+  </p>
+  <table class="tbl">
+    <thead><tr><th>Anchor</th><th>Arms</th><th>Verified by</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="badge st-done">stepped forward</span> anchored to a current bar</td>
+        <td>{{ anchor.clean }}</td>
+        <td class="muted small">{{ anchor.engine_stamped }} of {{ anchor.total }} carry the engine's own stamps</td>
+      </tr>
+      <tr>
+        <td><span class="badge sev-high">replayed</span> walked history at open <span class="muted">— engine-stamped</span></td>
+        <td>{{ anchor.replayed }}</td>
+        <td class="muted small">{% if anchor.worst_replay_bars %}worst: {{ "%.0f"|format(anchor.worst_replay_bars) }} bars in one advance{% else %}—{% endif %}</td>
+      </tr>
+      <tr>
+        <td><span class="badge sev-high">suspect</span> no engine stamp, and bars seen exceed the arm's own lifetime</td>
+        <td>{{ anchor.suspect }}</td>
+        <td class="muted small">reader-side check, on rows written before the engine stamped this</td>
+      </tr>
+      <tr>
+        <td><span class="badge st-partial">unverified</span> neither check could run</td>
+        <td>{{ anchor.unverified }}</td>
+        <td class="muted small">an unknown — <em>not</em> a pass</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="muted small">
+    <strong>Replayed</strong> and <strong>suspect</strong> arms are excluded from every R below —
+    counted, named, never averaged in, exactly as <code>INSUFFICIENT</code> is. They measured
+    something; they did not measure this mechanism running forward.
+    <strong>Unverified</strong> arms stay in: refusing to score a row we have no evidence
+    <em>against</em> would empty the population, so the count is stated instead.
+    This panel renders whether or not anything failed — a check that appears only when it trips
+    teaches you that its absence means “fine”, when it equally means the check stopped running.
   </p>
 </section>
 
@@ -128,7 +179,7 @@
   from open trades, so this stays blank rather than borrowing a number from the live tab.</p>
   {% else %}
   <table class="tbl">
-    <thead><tr><th>Fill</th><th>Trades</th><th>Win rate</th><th>Avg R</th></tr></thead>
+    <thead><tr><th>Fill</th><th>Trades</th><th>Win rate</th><th>Avg R <span class="muted">÷ designed SL</span></th><th>Avg R @risk <span class="muted">÷ risk parked</span></th></tr></thead>
     <tbody>
       <tr>
         <td>Stop touched intrabar <span class="muted">(@level)</span></td>
@@ -136,6 +187,8 @@
         <td>{% if summary.win_rate_level is not none %}{{ "%.0f"|format(summary.win_rate_level * 100) }}%{% else %}—{% endif %}</td>
         <td class="{% if summary.avg_r_level is not none and summary.avg_r_level > 0 %}pos{% elif summary.avg_r_level is not none and summary.avg_r_level < 0 %}neg{% endif %}">
           {% if summary.avg_r_level is not none %}{{ "%+.3f"|format(summary.avg_r_level) }}R{% else %}—{% endif %}</td>
+        <td class="{% if summary.avg_r_level_risk is not none and summary.avg_r_level_risk > 0 %}pos{% elif summary.avg_r_level_risk is not none and summary.avg_r_level_risk < 0 %}neg{% endif %}">
+          {% if summary.avg_r_level_risk is not none %}{{ "%+.3f"|format(summary.avg_r_level_risk) }}R{% else %}—{% endif %}</td>
       </tr>
       <tr>
         <td>Confirmed flip, market out <span class="muted">(@confirm)</span></td>
@@ -143,9 +196,18 @@
         <td>{% if summary.win_rate_confirm is not none %}{{ "%.0f"|format(summary.win_rate_confirm * 100) }}%{% else %}—{% endif %}</td>
         <td class="{% if summary.avg_r_confirm is not none and summary.avg_r_confirm > 0 %}pos{% elif summary.avg_r_confirm is not none and summary.avg_r_confirm < 0 %}neg{% endif %}">
           {% if summary.avg_r_confirm is not none %}{{ "%+.3f"|format(summary.avg_r_confirm) }}R{% else %}—{% endif %}</td>
+        <td class="{% if summary.avg_r_confirm_risk is not none and summary.avg_r_confirm_risk > 0 %}pos{% elif summary.avg_r_confirm_risk is not none and summary.avg_r_confirm_risk < 0 %}neg{% endif %}">
+          {% if summary.avg_r_confirm_risk is not none %}{{ "%+.3f"|format(summary.avg_r_confirm_risk) }}R{% else %}—{% endif %}</td>
       </tr>
     </tbody>
   </table>
+  <p class="muted small">
+    Win rate is stated once: a positive denominator cannot change a sign, so it is identical under
+    both R's and printing it twice would imply two populations.
+    {% if summary.n_r_risk != summary.n_r %}<strong>{{ summary.n_r_risk }}</strong> of
+    {{ summary.n_r }} rows carry a usable risk denominator; the rest are excluded from
+    <em>R @risk</em> only.{% endif %}
+  </p>
   <p class="muted small">
     Average confirm cost:
     <strong class="{% if summary.avg_confirm_slippage_pct is not none and summary.avg_confirm_slippage_pct < 0 %}neg{% endif %}">
@@ -158,6 +220,14 @@
     {% if summary.no_r %}<br><strong>{{ summary.no_r }}</strong> resolved rows carry no usable R (no
     SL distance at entry): counted in the trade count, excluded from every R figure above rather than
     scored 0R.{% endif %}
+    {% if summary.replayed %}<br><strong>{{ summary.replayed }}</strong> resolved arms walked
+    history at open instead of stepping forward from a current bar: excluded from every R above and
+    broken out in the anchor panel. Their fills describe a replay, which is the one thing this page
+    exists not to be.{% endif %}
+    {% if summary.unverified %}<br><strong>{{ summary.unverified }}</strong> rows predate the
+    engine's anchor stamps and could not be checked either way. They are <em>included</em> above —
+    excluding rows we have no evidence against would empty the population — so read the verdict
+    knowing that.{% endif %}
     {% if summary.insufficient %}<br><strong>{{ summary.insufficient }}</strong> arms stopped
     measuring without a verdict (insufficient data or a bar that rolled out of the window). They are
     excluded from the rates above — that is “we do not know”, not a loss.{% endif %}
@@ -254,7 +324,7 @@
         <th>Symbol</th><th>Side</th><th>TF</th><th>Setup</th>
         <th>SAR@entry</th><th>Governor</th><th>Entry</th>
         {% if tab == 'resolved' %}
-        <th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th>R @level</th><th>R @confirm</th><th>Confirm cost</th><th>Bars</th>
+        <th>Anchor</th><th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th>R @level</th><th>R @confirm</th><th>R @level, risk</th><th>Confirm cost</th><th>Bars</th>
         {% else %}
         <th>Last advance</th><th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>SAR risk</th><th>MFE</th><th>Bars</th>
         {% endif %}
@@ -276,6 +346,16 @@
             {% if r.ambiguous_bar %}<span class="badge sev-high" title="SL and TP1 both touched in one bar; resolved pessimistically">ambig</span>{% endif %}</td>
         <td>{{ r.entry }}</td>
         {% if tab == 'resolved' %}
+        {# The anchor verdict leads the realized columns for the same reason
+           Last advance leads the live ones: a fill computed over bars the arm
+           walked through after it was created is not a result, and nothing
+           else in the row can say so. #}
+        <td class="small">
+          {% if r.get('anchor_verdict') == 'replayed' %}<span class="badge sev-high" title="the engine's own stamps say this arm consumed history in its first advance — its fills describe a replay and are excluded from every R above">replayed{% if r.get('anchor_replay_bars') %} {{ "%.0f"|format(r.get('anchor_replay_bars')) }}b{% endif %}</span>
+          {% elif r.get('anchor_verdict') == 'suspect' %}<span class="badge sev-high" title="no engine stamp, and this arm consumed more bars than closed in its own lifetime — excluded from every R above">suspect</span>
+          {% elif r.get('anchor_verdict') == 'unverified' %}<span class="badge st-partial" title="written before the engine stamped anchor freshness, and its lifetime could not be reconstructed — an unknown, not a pass; still counted in the R's above">unverified</span>
+          {% else %}<span class="badge st-done" title="anchored to a current bar and stepped forward">stepped</span>{% endif %}
+        </td>
         <td class="small">{{ r.exit_reason or '—' }}</td>
         <td>{% if r.fill_level is not none %}{{ "%.6g"|format(r.fill_level) }}{% else %}—{% endif %}</td>
         <td>{% if r.fill_confirm is not none %}{{ "%.6g"|format(r.fill_confirm) }}{% else %}—{% endif %}</td>
@@ -283,6 +363,10 @@
           {% if r.r_level is not none %}{{ "%+.2f"|format(r.r_level) }}{% else %}—{% endif %}</td>
         <td class="{% if r.r_confirm is not none and r.r_confirm > 0 %}pos{% elif r.r_confirm is not none and r.r_confirm < 0 %}neg{% endif %}">
           {% if r.r_confirm is not none %}{{ "%+.2f"|format(r.r_confirm) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.get('r_level_risk') is not none and r.get('r_level_risk') > 0 %}pos{% elif r.get('r_level_risk') is not none and r.get('r_level_risk') < 0 %}neg{% endif %}">
+          {% if r.get('r_level_risk') is not none %}{{ "%+.2f"|format(r.get('r_level_risk')) }}
+            <span class="muted small" title="the risk this arm actually parked — the SAR stop at handover, or the original SL when it never handed over">/ {{ "%.2f"|format(r.get('risk_denominator_pct')) }}%</span>
+          {% else %}—{% endif %}</td>
         <td class="{% if r.confirm_slippage_pct is not none and r.confirm_slippage_pct < 0 %}neg{% endif %}">
           {% if r.confirm_slippage_pct is not none %}{{ "%+.3f"|format(r.confirm_slippage_pct) }}%{% else %}—{% endif %}</td>
         <td>{{ r.bars_seen }}</td>

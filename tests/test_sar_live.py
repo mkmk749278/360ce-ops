@@ -26,13 +26,20 @@ os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test")
 
 from app.routes.sar_live import (  # noqa: E402
+    ANCHOR_CLEAN,
+    ANCHOR_REPLAYED,
+    ANCHOR_SUSPECT,
+    ANCHOR_UNVERIFIED,
     GOV_GEOMETRY,
     GOV_SAR,
     LIVE_STALE_SEC,
     STATUS_INSUFFICIENT,
     STATUS_RUNNING,
+    count_anchor_verdicts,
     filter_arms,
+    mark_anchor_integrity,
     mark_distance_to_stop,
+    mark_risk_adjusted_r,
     reduce_arms,
     reduce_live_state,
     summarize_by_risk,
@@ -724,3 +731,207 @@ def test_the_csv_export_carries_the_freshness_columns():
     for col in ("last_advance_at", "advance_age_sec", "bars_behind",
                 "stalled", "is_stalled", "stop_crossed"):
         assert col in header
+
+
+# --------------------------------------------------------------------------- #
+# Anchor integrity — an arm can be born a replay (#836)
+# --------------------------------------------------------------------------- #
+#
+# Rows here are **real engine output with the one field under test changed**.
+# Nothing invents a row shape: the keys, types and neighbours all come from the
+# fixture the engine wrote, and only the value the check reads is moved.
+
+
+def _resolved_row():
+    _live, resolved = _rows()
+    return next(
+        dict(r) for r in resolved
+        if r["status"] != STATUS_INSUFFICIENT and r.get("r_level") is not None
+    )
+
+
+def test_an_engine_stamped_replay_is_named_and_excluded_from_every_R():
+    """ACHUSDT 15m: 158 bars consumed in ten bars of life, published as a live
+    fill. Its R describes a replay and must not reach the verdict."""
+    clean, replayed = _resolved_row(), _resolved_row()
+    replayed["arm_id"] = "REPLAYED:15m"
+    replayed["first_step_bars"] = 158
+    replayed["anchor_bars_behind"] = 0.0
+    clean["first_step_bars"] = 1
+    clean["anchor_bars_behind"] = 0.0
+
+    rows = mark_anchor_integrity([clean, replayed], now=1_700_200_000.0)
+    assert rows[0]["anchor_verdict"] == ANCHOR_CLEAN
+    assert rows[1]["anchor_verdict"] == ANCHOR_REPLAYED
+    assert rows[1]["anchor_engine_stamped"] is True
+
+    s = summarize_resolved(rows)
+    assert s["n"] == 2 and s["replayed"] == 1
+    assert s["measurable"] == 1
+    assert s["avg_r_level"] == pytest.approx(clean["r_level"])
+
+
+def test_a_stale_anchor_is_a_replay_even_before_the_arm_advances():
+    """The harm starts at the anchor, not at the first step: SAR-at-entry was
+    already read off the stale bar."""
+    row = _resolved_row()
+    row["first_step_bars"] = None
+    row["anchor_bars_behind"] = 158.0
+    mark_anchor_integrity([row], now=1_700_200_000.0)
+    assert row["anchor_verdict"] == ANCHOR_REPLAYED
+    assert row["anchor_replay_bars"] == pytest.approx(158.0)
+
+
+def test_a_legacy_row_that_out_ran_its_own_lifetime_is_suspect():
+    """Rows written before the engine stamped anything are exactly the rows
+    that have the bug, so a missing stamp must not read as a pass."""
+    row = _resolved_row()
+    row.pop("first_step_bars", None)
+    row.pop("anchor_bars_behind", None)
+    row["timeframe"] = "15m"
+    row["opened_at"] = 1_700_000_000.0
+    row["closed_at"] = 1_700_000_000.0 + 10 * 900.0   # ten 15m bars of life
+    row["bars_seen"] = 158
+    mark_anchor_integrity([row], now=1_700_200_000.0)
+    assert row["anchor_verdict"] == ANCHOR_SUSPECT
+    assert row["anchor_engine_stamped"] is False
+    assert summarize_resolved([row])["replayed"] == 1
+
+
+def test_a_legacy_row_within_its_lifetime_passes_but_says_who_checked_it():
+    row = _resolved_row()
+    row.pop("first_step_bars", None)
+    row.pop("anchor_bars_behind", None)
+    row["timeframe"] = "15m"
+    row["opened_at"] = 1_700_000_000.0
+    row["closed_at"] = 1_700_000_000.0 + 10 * 900.0
+    row["bars_seen"] = 9
+    mark_anchor_integrity([row], now=1_700_200_000.0)
+    assert row["anchor_verdict"] == ANCHOR_CLEAN
+    # Verified by the reader, not by the producer — the panel reports both.
+    assert row["anchor_engine_stamped"] is False
+
+
+def test_a_row_neither_check_can_evaluate_is_unverified_not_clean():
+    """An unknown reported as a pass is how the bug this check exists for
+    survived a whole export."""
+    row = _resolved_row()
+    row.pop("first_step_bars", None)
+    row.pop("anchor_bars_behind", None)
+    row["timeframe"] = "2h"          # no width mirrored for it — refuse
+    mark_anchor_integrity([row], now=1_700_200_000.0)
+    assert row["anchor_verdict"] == ANCHOR_UNVERIFIED
+    # Unverified stays IN the R's: excluding rows we have no evidence against
+    # would empty the population. The count is stated instead.
+    s = summarize_resolved([row])
+    assert s["unverified"] == 1 and s["replayed"] == 0 and s["measurable"] == 1
+
+
+def test_the_anchor_panel_counts_every_row_exactly_once():
+    _live, resolved = _rows()
+    rows = mark_anchor_integrity([dict(r) for r in resolved], now=1_700_200_000.0)
+    counts = count_anchor_verdicts(rows)
+    assert counts["total"] == len(rows)
+    assert (
+        counts[ANCHOR_CLEAN] + counts[ANCHOR_REPLAYED]
+        + counts[ANCHOR_SUSPECT] + counts[ANCHOR_UNVERIFIED]
+    ) == len(rows)
+
+
+# --------------------------------------------------------------------------- #
+# Both denominators — R against the SL, and R against the risk actually parked
+# --------------------------------------------------------------------------- #
+
+
+def _handed_over_row():
+    _live, resolved = _rows()
+    return next(dict(r) for r in resolved if r.get("handover_at") is not None)
+
+
+def test_risk_adjusted_r_divides_by_the_stop_the_arm_actually_parked():
+    row = _handed_over_row()
+    row["handover_risk_pct"] = row["sl_distance_pct"] * 2.0
+    mark_risk_adjusted_r([row])
+    assert row["risk_denominator_pct"] == pytest.approx(row["handover_risk_pct"])
+    assert row["r_level_risk"] == pytest.approx(
+        row["pnl_level_pct"] / row["handover_risk_pct"]
+    )
+    # A wider stop cannot make the same loss look worse than the designed R.
+    assert abs(row["r_level_risk"]) < abs(row["r_level"])
+
+
+def test_an_arm_that_never_handed_over_took_exactly_its_designed_risk():
+    """Not a fallback — the original stop *is* the risk that arm ran."""
+    row = _handed_over_row()
+    row["handover_at"] = None
+    row["handover_risk_pct"] = None
+    mark_risk_adjusted_r([row])
+    assert row["risk_denominator_pct"] == pytest.approx(row["sl_distance_pct"])
+    assert row["r_level_risk"] == pytest.approx(row["r_level"])
+
+
+def test_the_two_denominators_are_published_side_by_side_never_blended():
+    _live, resolved = _rows()
+    rows = mark_risk_adjusted_r(
+        mark_anchor_integrity([dict(r) for r in resolved], now=1_700_200_000.0)
+    )
+    s = summarize_resolved(rows)
+    assert s["avg_r_level"] is not None
+    assert s["avg_r_level_risk"] is not None
+    assert "avg_r" not in s
+    assert "avg_r_blended" not in s
+
+
+def test_risk_r_refuses_rather_than_scoring_a_row_with_no_usable_risk():
+    row = _resolved_row()
+    row["handover_at"] = None
+    row["handover_risk_pct"] = None
+    row["sl_distance_pct"] = 0.0
+    mark_risk_adjusted_r([row])
+    assert row["risk_denominator_pct"] is None
+    assert row["r_level_risk"] is None
+
+
+# --------------------------------------------------------------------------- #
+# Cross-repo contract for the anchor stamps, on current engine output
+# --------------------------------------------------------------------------- #
+
+
+def test_the_engine_writes_the_anchor_stamps_this_page_grades_on():
+    """#817 from the consuming side. ``fixtures_sar_live_freshness.json`` is
+    regenerated by 360-v2's ``scripts/gen_ops_sar_live_fixture.py``, so this
+    fails the moment the engine stops writing a field the anchor panel reads —
+    loudly, instead of quietly grading every arm as unverified."""
+    fresh = json.loads(
+        (Path(__file__).parent / "fixtures_sar_live_freshness.json").read_text()
+    )
+    rows = fresh["open"] + fresh["resolved"]
+    assert rows, "the freshness fixture is empty"
+    for row in rows:
+        assert "anchor_bars_behind" in row
+        assert "first_step_bars" in row
+    # And the values are the engine's, not placeholders: the advancing arm
+    # consumed exactly one bar on its first step.
+    advancing = [r for r in rows if r.get("first_step_bars") is not None]
+    assert advancing and all(r["first_step_bars"] == 1 for r in advancing)
+
+
+def test_the_page_renders_the_anchor_panel_whether_or_not_anything_failed():
+    with _client() as client:
+        r = client.get("/signals/sar-live?tab=resolved")
+    assert r.status_code == 200
+    assert "walk history" in r.text
+    assert "stepped forward" in r.text
+    assert "R @risk" in r.text
+
+
+def test_a_replayed_arm_is_badged_in_the_resolved_table():
+    payload = json.loads(json.dumps(FIXTURE))
+    for row in payload["resolved"]:
+        row["first_step_bars"] = 158
+        row["anchor_bars_behind"] = 0.0
+    with _client(payload=payload) as client:
+        r = client.get("/signals/sar-live?tab=resolved")
+    assert r.status_code == 200
+    assert ">replayed" in r.text
+    assert "walked\n    history at open" in r.text or "walked" in r.text
