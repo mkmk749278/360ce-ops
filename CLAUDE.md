@@ -176,6 +176,39 @@ specific to it:
   Timeframes (5m/15m) are reported separately for the same reason: pooled, the headline
   moves with the timeframe mix instead of the mechanism.
 
+## The dark feed (`/signals/dark-live`) — a page that says nothing until a row closes
+
+Added 2026-07-31 (#111, engine #839) for the owner's question: *"15 paths and only
+`MOVER_TREND_PULLBACK` is our volume — what happened to the others?"* Each row is a
+real signal the scanner was willing to send with one gate loosened, diverted before
+the queue, so nothing here reached a channel, a push, the app feed or an order. That
+sentence and *"a user would have seen this"* are different, and the page must never
+merge them — the router's second layer is not applied, so the count over-reports a
+feed size.
+
+Two rules the page learned the day after it shipped:
+
+- **A measurement page that shows nothing until a row resolves cannot answer the
+  question it was built for.** The first cut rendered open rows as entry price and
+  two dashes; a dark row resolves up to six hours later and never at all if its
+  candles stop, so the owner's first read was a list of symbols (owner-caught
+  2026-07-31, hours after deploy). Open rows now carry a live mark, the unrealized
+  move, unrealized R against the *engine's* stamped SL distance, and room to each
+  level — with the whole book marked in **one** request (`/fapi/v1/ticker/price`),
+  never one per row, because a page whose cost scales with open trades is the hot-path
+  shape the cost rules forbid. Unrealized numbers stay out of every realized column
+  and out of the per-path table entirely.
+- **…and a mark is only honest beside a row that can say whether it is still true.**
+  This is #108 one page over, and it was avoided rather than paid for a third time:
+  freshness is graded on the **engine's** stamps (`last_resolved_at`, `bars_behind`,
+  `resolve_misses`), never on ops' own clock, and it leads the live columns. A row
+  written before those stamps is `unverified` — its own bucket, because a missing
+  stamp is not a pass. A level already crossed while the row still says OPEN is
+  badged, not printed as one more negative percentage: the resolver walks bars in
+  order and would have closed it, so those bars never arrived. And the open panel
+  publishes **both** denominators — every marked row, and only the rows still being
+  advanced — which agree while the lane is healthy and diverge exactly when it is not.
+
 ## Recorded vs reconstructed — the line `/track-record` must not cross
 
 Added 2026-07-28 (#98) for the owner's paper-trading problem: per-user paper books
@@ -226,6 +259,8 @@ own `UNPLACED` bucket rather than being folded into a real regime.
 | Binance Futures public 1m klines (no key, read-only) | `app/data_sources/binance_klines.py` |
 | Closed-signal record — `signal_performance.json` (`/track-record`, `/performance`) | `app/data_sources/data_volume.py` |
 | Live SAR mechanism arms — `sar_live_arms_v1.json` (`/signals/sar-live`) | `app/data_sources/data_volume.py` |
+| Dark emission lane — `dark_signals_live_v1.json` (`/signals/dark-live`) | `app/data_sources/data_volume.py` |
+| Live marks for open rows (whole futures book, one request, TTL-cached) | `binance_klines.BinanceKlinesClient.fetch_all_prices` |
 | Live-arm freshness test fixture — real engine output, regenerate with 360-v2 `scripts/gen_ops_sar_live_fixture.py` | `tests/fixtures_sar_live_freshness.json` |
 | "Held to stop" free-run replay (Profit tab) | `app/data_sources/free_run.py` |
 | Scaled-exit what-if simulator (Profit tab) | `app/data_sources/exit_sim.py` |
