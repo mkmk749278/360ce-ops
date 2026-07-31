@@ -332,7 +332,18 @@ def reduce_gate_metrics(records: Any) -> dict:
         g = by_gate.setdefault(gate, {
             "WOULD_WIN": 0, "WOULD_LOSE": 0, "WOULD_EXPIRE": 0,
             "saved_r": 0.0, "missed_r": 0.0,
+            # A pre-scoring gate (setup_compat / execution) fires BEFORE the
+            # scoring engine, so its rows carry the evaluator's confidence and
+            # never a scored one, and the engine keeps them out of the edge
+            # matrix. Ranking them in one list beside post-scoring gates without
+            # saying so would invite a comparison between two differently
+            # selected populations — the rows are right, the reading would not
+            # be. Flagged per gate rather than inferred from the name, so a
+            # renamed gate cannot silently lose its badge.
+            "pre_scoring": False,
         })
+        if rec.get("pre_scoring"):
+            g["pre_scoring"] = True
         g[cls] = g.get(cls, 0) + 1
         ev = _suppression_delta_r(rec)
         if ev is None:
@@ -356,6 +367,64 @@ def reduce_gate_metrics(records: Any) -> dict:
         else:
             g["verdict"] = "TUNE"
     return {"by_gate": by_gate, "pending": pending, "classified": classified}
+
+
+def reduce_path_silence(records: Any) -> list[dict]:
+    """Per setup: which gate is stopping this path, and is that gate right?
+
+    The per-gate table pools every setup into one row, so it cannot answer the
+    question the delivered book actually poses. On 2026-07-31 the last 100
+    delivered signals were **76% MOVER_\*** — ``SR_FLIP_RETEST`` shipped one
+    signal in nine days, ``RANGE_FADE`` and ``MEAN_REVERT`` zero — and the
+    reason is not one global gate. It is per path, and it splits three ways:
+    the detector never fires, the regime setup-compat gate confines it, or its
+    counterfactuals measure negative and the gate is doing its job.
+
+    ``MOVER_TREND_PULLBACK`` takes **zero** ``setup_compat:regime_*`` rejects
+    because a mover is defined by its own move rather than by the market's
+    state — it is the one path legal in every regime, which is why it is the
+    one path with volume. This table is where that asymmetry becomes visible.
+
+    Sorted by suppressions descending: the paths losing the most candidates
+    first, since those are where a gate change moves the feed.
+    """
+    if not isinstance(records, list):
+        return []
+    by_setup: dict[str, dict] = {}
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        cls = rec.get("classification")
+        setup = str(rec.get("setup_class") or "UNKNOWN")
+        gate = str(rec.get("gate_name") or "unknown")
+        row = by_setup.setdefault(setup, {
+            "setup_class": setup, "n": 0, "classified": 0, "would_win": 0,
+            "gates": {}, "pre_scoring_only": True,
+        })
+        row["n"] += 1
+        if not rec.get("pre_scoring"):
+            row["pre_scoring_only"] = False
+        row["gates"][gate] = row["gates"].get(gate, 0) + 1
+        if cls in (None, "INSUFFICIENT_DATA"):
+            continue
+        row["classified"] += 1
+        if cls == "WOULD_WIN":
+            row["would_win"] += 1
+    out = []
+    for row in by_setup.values():
+        top = sorted(row["gates"].items(), key=lambda kv: -kv[1])
+        row["top_gate"], row["top_gate_n"] = top[0] if top else ("—", 0)
+        row["top_gate_share"] = (row["top_gate_n"] / row["n"] * 100.0) if row["n"] else 0.0
+        row["gate_count"] = len(row["gates"])
+        # Refuse rather than clamp: a path with nothing classified has no
+        # would-win rate, and printing 0.0% would read as "none of these would
+        # have won" when it means "we do not know yet".
+        row["would_win_pct"] = (
+            (row["would_win"] / row["classified"] * 100.0) if row["classified"] else None
+        )
+        out.append(row)
+    out.sort(key=lambda r: -r["n"])
+    return out
 
 
 def reduce_allocations(alloc: Any, now_ts: Optional[float] = None) -> dict:
@@ -388,6 +457,7 @@ def _build_view(vol) -> dict:
         "per_strategy": reduce_per_strategy(matrix_rows),
         "geometry": reduce_geometry_ab(matrix_rows),
         "gates": reduce_gate_metrics(vol.suppressed_candidates()),
+        "path_silence": reduce_path_silence(vol.suppressed_candidates()),
         "allocations": reduce_allocations(vol.strategy_allocations()),
         "thresholds": {
             "edge_min_samples": EDGE_MIN_SAMPLES,

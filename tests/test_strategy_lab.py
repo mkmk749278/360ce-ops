@@ -6,6 +6,8 @@ pin that parity on plain data.
 """
 from __future__ import annotations
 
+import pytest
+
 import os
 import time
 
@@ -21,6 +23,7 @@ from app.routes.strategy_lab import (  # noqa: E402
     reduce_context_card,
     reduce_edge_matrix,
     reduce_gate_metrics,
+    reduce_path_silence,
     reduce_geometry_ab,
     reduce_per_strategy,
 )
@@ -276,3 +279,72 @@ class TestStrategyLabRoutes:
             assert r.status_code == 200
             assert "Matrix is cold" in r.text
             assert "No geometry pairs measured yet" in r.text
+
+
+# --------------------------------------------------------------------------- #
+# Pre-scoring gates (engine #839) — audited here, and kept out of the matrix
+# --------------------------------------------------------------------------- #
+
+
+def _supp(gate, setup, cls=None, pre=False, delta_r=None):
+    rec = {
+        "gate_name": gate, "setup_class": setup, "classification": cls,
+        "entry": 100.0, "stop_loss": 97.0, "tp1": 106.0, "sl_distance": 3.0,
+        "side": "LONG", "symbol": "AAAUSDT",
+    }
+    if pre:
+        rec["pre_scoring"] = True
+    return rec
+
+
+def test_a_pre_scoring_gate_is_badged_rather_than_pooled_silently():
+    """The rows are right; pooling them unlabelled with post-scoring gates
+    would invite comparing two differently selected populations."""
+    out = reduce_gate_metrics([
+        _supp("setup_compat:regime_STRONG_TREND", "MEAN_REVERT", "WOULD_LOSE", pre=True),
+        _supp("min_confidence", "SR_FLIP_RETEST", "WOULD_LOSE"),
+    ])
+    assert out["by_gate"]["setup_compat:regime_STRONG_TREND"]["pre_scoring"] is True
+    assert out["by_gate"]["min_confidence"]["pre_scoring"] is False
+
+
+def test_the_flag_comes_from_the_record_not_from_the_gate_name():
+    """A renamed gate must not silently lose its badge."""
+    out = reduce_gate_metrics([_supp("renamed_gate", "X", "WOULD_LOSE", pre=True)])
+    assert out["by_gate"]["renamed_gate"]["pre_scoring"] is True
+
+
+def test_path_silence_names_the_gate_that_stops_each_path():
+    rows = reduce_path_silence([
+        _supp("setup_compat:regime_STRONG_TREND", "MEAN_REVERT", "WOULD_LOSE", pre=True),
+        _supp("setup_compat:regime_WEAK_TREND", "MEAN_REVERT", "WOULD_WIN", pre=True),
+        _supp("setup_compat:regime_STRONG_TREND", "MEAN_REVERT", "WOULD_LOSE", pre=True),
+        _supp("min_confidence", "SR_FLIP_RETEST", "WOULD_LOSE"),
+    ])
+    by = {r["setup_class"]: r for r in rows}
+    assert by["MEAN_REVERT"]["n"] == 3
+    assert by["MEAN_REVERT"]["top_gate"] == "setup_compat:regime_STRONG_TREND"
+    assert by["MEAN_REVERT"]["top_gate_share"] == pytest.approx(66.67, abs=0.1)
+    assert by["MEAN_REVERT"]["would_win_pct"] == pytest.approx(33.33, abs=0.1)
+    # Sorted by suppressions descending — the paths losing most candidates first.
+    assert rows[0]["setup_class"] == "MEAN_REVERT"
+
+
+def test_a_path_killed_only_before_scoring_says_so():
+    """It is not being rejected on confidence or context — it never got there."""
+    rows = reduce_path_silence([
+        _supp("setup_compat:regime_STRONG_TREND", "MEAN_REVERT", "WOULD_LOSE", pre=True),
+    ])
+    assert rows[0]["pre_scoring_only"] is True
+
+
+def test_a_path_with_nothing_classified_refuses_rather_than_scoring_zero():
+    """Blank means 'we do not know yet', not 'none would have won'."""
+    rows = reduce_path_silence([_supp("setup_compat:channel", "RANGE_FADE", None, pre=True)])
+    assert rows[0]["classified"] == 0
+    assert rows[0]["would_win_pct"] is None
+
+
+def test_path_silence_survives_a_bad_payload():
+    assert reduce_path_silence(None) == []
+    assert reduce_path_silence(["not a dict"]) == []
