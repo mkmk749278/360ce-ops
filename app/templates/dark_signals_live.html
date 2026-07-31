@@ -74,12 +74,69 @@
   <noscript><button class="btn" type="submit">Apply</button></noscript>
 </form>
 
+{% if live.open %}
+<section class="card">
+  <h2 class="small">Open right now <span class="muted">— marks, not results</span></h2>
+  <table class="tbl">
+    <thead>
+      <tr><th>Population</th><th>Rows</th><th>Mean unrealized</th><th>Mean unrealized R</th><th>In profit</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Every marked open row</td>
+        <td>{{ live.all_marked.n }}</td>
+        <td class="{% if live.all_marked.avg_pct is not none and live.all_marked.avg_pct > 0 %}pos{% elif live.all_marked.avg_pct is not none and live.all_marked.avg_pct < 0 %}neg{% endif %}">
+          {% if live.all_marked.avg_pct is not none %}{{ "%+.2f"|format(live.all_marked.avg_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if live.all_marked.avg_r is not none and live.all_marked.avg_r > 0 %}pos{% elif live.all_marked.avg_r is not none and live.all_marked.avg_r < 0 %}neg{% endif %}">
+          {% if live.all_marked.avg_r is not none %}{{ "%+.2f"|format(live.all_marked.avg_r) }}R
+          <span class="muted small">of {{ live.all_marked.n_r }}</span>{% else %}—{% endif %}</td>
+        <td>{{ live.all_marked.n_up }}</td>
+      </tr>
+      <tr>
+        <td>…still being advanced by the engine</td>
+        <td>{{ live.still_measured.n }}</td>
+        <td class="{% if live.still_measured.avg_pct is not none and live.still_measured.avg_pct > 0 %}pos{% elif live.still_measured.avg_pct is not none and live.still_measured.avg_pct < 0 %}neg{% endif %}">
+          {% if live.still_measured.avg_pct is not none %}{{ "%+.2f"|format(live.still_measured.avg_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if live.still_measured.avg_r is not none and live.still_measured.avg_r > 0 %}pos{% elif live.still_measured.avg_r is not none and live.still_measured.avg_r < 0 %}neg{% endif %}">
+          {% if live.still_measured.avg_r is not none %}{{ "%+.2f"|format(live.still_measured.avg_r) }}R
+          <span class="muted small">of {{ live.still_measured.n_r }}</span>{% else %}—{% endif %}</td>
+        <td>{{ live.still_measured.n_up }}</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="muted small">
+    {{ live.open }} open{% if live.unmarked %}, {{ live.unmarked }} without a live price
+    (Binance did not return a mark for the symbol — the row is still open, it is just
+    unmarked){% endif %}{% if live.stalled %},
+    <strong class="neg">{{ live.stalled }} no longer being advanced</strong>{% endif %}{% if live.unverified %},
+    {{ live.unverified }} written before the engine stamped freshness{% endif %}{% if live.crossed %},
+    <strong class="neg">{{ live.crossed }} already through a level</strong>{% endif %}.
+  </p>
+  <p class="muted small">
+    <strong>These are marks, not results.</strong> An unrealized number is what the row is
+    worth at the current price; it is not an outcome and it is kept out of the per-path
+    table below entirely — an unrealized figure in a realized column is how a still-open
+    trade gets read as a finished one. R divides by the engine's stamped SL distance, the
+    same denominator its realized R uses, so a mark here is comparable with a result there;
+    a row whose SL distance the engine did not stamp gets a percentage and no R rather than
+    an invented denominator.
+  </p>
+  <p class="muted small">
+    <strong>Two populations, and neither is “the” number.</strong> The mark on a stalled row
+    is arithmetically fine — entry is fixed and the price is live — but its <em>status</em> is
+    a claim about bars that stopped arriving, so it may have resolved already without the
+    ledger knowing. The two rows above agree while the lane is healthy and diverge exactly
+    when it is not, which is the point of printing both.
+  </p>
+</section>
+{% endif %}
+
 {% if summary.by_setup %}
 <section class="card">
   <h2 class="small">Per path — what emitting actually produced</h2>
   <table class="tbl">
     <thead>
-      <tr><th>Setup</th><th>Dark signals</th><th>Open</th><th>TP1</th><th>SL</th><th>Expired</th><th>Win @decided</th><th>Avg R</th><th>Avg conf</th><th>Gate carried past</th></tr>
+      <tr><th>Setup</th><th>Dark signals</th><th>Open</th><th>TP1</th><th>SL</th><th>Expired</th><th title="past the horizon with candles that never arrived — terminal, and deliberately unscored">Unmeasured</th><th>Win @decided</th><th>Avg R</th><th>Avg conf</th><th>Gate carried past</th></tr>
     </thead>
     <tbody>
       {% for a in summary.by_setup %}
@@ -90,6 +147,7 @@
         <td class="pos">{{ a.tp1 }}</td>
         <td class="neg">{{ a.sl }}</td>
         <td>{{ a.expired }}</td>
+        <td class="{% if a.insufficient %}neg{% endif %}">{{ a.insufficient }}</td>
         <td>{% if a.win_rate is not none %}{{ "%.0f"|format(a.win_rate * 100) }}%
             <span class="muted small">of {{ a.decided }}</span>
             {% else %}<span class="muted" title="nothing has been decided for this path yet — not the same as none of them winning">—</span>{% endif %}</td>
@@ -109,6 +167,13 @@
     read as a finished one is how a page invents a verdict. A blank win rate means nothing has
     been decided yet, which is a different statement from nothing having won.
   </p>
+  <p class="muted small">
+    <strong>Unmeasured</strong> rows are terminal but unscored: past the six-hour horizon with
+    candles that never arrived, usually a symbol that rotated out of the scan universe. They are
+    excluded from <em>every</em> rate above rather than folded into the expiries — an expiry is a
+    walked window in which nothing happened, and this is the absence of a measurement. Before the
+    engine retired them they sat OPEN forever, which is worse: a dead row rendering as a live trade.
+  </p>
 </section>
 {% endif %}
 
@@ -127,7 +192,11 @@
   <div style="overflow-x:auto">
   <table class="tbl">
     <thead>
-      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Carried past</th><th>Conf</th><th>Regime</th><th>Entry</th><th>Status</th><th>Exit</th><th>PnL</th><th>R</th><th>MFE</th></tr>
+      {# Column order, 2026-07-31: what the row is worth comes before what it is.
+         The owner reads this page on a phone, and the first cut put Status/PnL
+         behind the setup name and the full gate token — so the only columns the
+         page was asked for sat off the right edge. #}
+      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Status</th><th title="how long ago the ENGINE last advanced this row on real bars — not when this page loaded, and not when the price beside it was fetched">Measured</th><th>Entry</th><th>Now</th><th title="unrealized while open, realized once closed — the two never share a column">PnL</th><th>R</th><th title="how far price sits from each level; negative means the level was already crossed while the row still says open">→SL / →TP1</th><th>MFE</th><th>Conf</th><th>Regime</th><th>Carried past</th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
@@ -135,26 +204,72 @@
         <td><strong>{{ r.get('symbol') }}</strong></td>
         <td class="{% if r.get('side') == 'LONG' %}pos{% else %}neg{% endif %}">{{ r.get('side') }}</td>
         <td class="small muted">{{ r.get('setup_class') }}</td>
-        <td class="mono small">{{ r.get('dark_gate') }}</td>
-        <td>{% if r.get('confidence') is not none %}{{ "%.1f"|format(r.get('confidence')) }}{% else %}—{% endif %}</td>
-        <td class="small muted">{{ r.get('regime') or '—' }}</td>
-        <td>{{ r.get('entry') }}</td>
         <td>{% if r.get('status') == 'CLOSED_TP1' %}<span class="badge st-done">TP1</span>
             {% elif r.get('status') == 'CLOSED_SL' %}<span class="badge sev-high">SL</span>
             {% elif r.get('status') == 'EXPIRED' %}<span class="badge st-partial">expired</span>
+            {% elif r.get('status') == 'INSUFFICIENT' %}<span class="badge st-partial" title="past the horizon and never walkable — its candles stopped arriving, so it earned no verdict and is scored nowhere">unmeasured</span>
             {% else %}<span class="badge st-open">open</span>{% endif %}
             {% if r.get('ambiguous_bar') %}<span class="badge sev-high" title="SL and TP1 both touched inside one bar; OHLC cannot order them, so this was resolved pessimistically">ambig</span>{% endif %}</td>
-        <td>{% if r.get('exit_price') is not none %}{{ "%.6g"|format(r.get('exit_price')) }}{% else %}—{% endif %}</td>
-        <td class="{% if r.get('pnl_pct') is not none and r.get('pnl_pct') > 0 %}pos{% elif r.get('pnl_pct') is not none and r.get('pnl_pct') < 0 %}neg{% endif %}">
-          {% if r.get('pnl_pct') is not none %}{{ "%+.2f"|format(r.get('pnl_pct')) }}%{% else %}—{% endif %}</td>
-        <td class="{% if r.get('r_multiple') is not none and r.get('r_multiple') > 0 %}pos{% elif r.get('r_multiple') is not none and r.get('r_multiple') < 0 %}neg{% endif %}">
-          {% if r.get('r_multiple') is not none %}{{ "%+.2f"|format(r.get('r_multiple')) }}{% else %}—{% endif %}</td>
+        {# Freshness leads the live columns, ahead of any number derived from the
+           row's status: a stalled row's "open" is a claim about bars that stopped
+           arriving, and the price beside it is live regardless (#108). #}
+        <td class="small">
+          {% if r.get('status') != 'OPEN' %}<span class="muted">—</span>
+          {% elif r.get('freshness') == 'unverified' %}<span class="badge st-partial" title="written before the engine stamped when it last advanced this row — an unknown, not a pass; the engine restamps it on its next resolve cycle">unverified</span>
+          {% else %}
+            {% if r.get('resolve_age_sec') is not none %}<span class="{% if r.get('is_stalled') %}neg{% endif %}">{{ "%.0f"|format(r.get('resolve_age_sec') / 60.0) }}m ago</span>{% endif %}
+            {% if r.get('is_stalled') %}<span class="badge sev-high" title="the engine has not advanced this row on fresh bars — its status and MFE describe candles that stopped arriving, while the price beside it is current">stalled{% if r.get('resolve_misses') %} ×{{ r.get('resolve_misses') }}{% endif %}</span>{% endif %}
+            {% if r.get('stall_reason') == 'no_candles' %}<span class="badge sev-high" title="the engine has no candles for this symbol — it has almost certainly rotated out of the scan universe">no candles</span>{% endif %}
+          {% endif %}
+        </td>
+        <td>{{ r.get('entry') }}</td>
+        <td>{% if r.get('current_price') is not none %}{{ "%.6g"|format(r.get('current_price')) }}
+            {% elif r.get('exit_price') is not none %}<span class="muted" title="exit price — this row is closed">{{ "%.6g"|format(r.get('exit_price')) }}</span>
+            {% else %}—{% endif %}</td>
+        {# Unrealized and realized share a column but never a row: a closed row has
+           no mark and an open row has no result, so the two can never be confused
+           for one another — and the open row is badged as a mark. #}
+        <td class="{% if r.get('pnl_pct') is not none and r.get('pnl_pct') > 0 %}pos{% elif r.get('pnl_pct') is not none and r.get('pnl_pct') < 0 %}neg{% elif r.get('unrealized_pct') is not none and r.get('unrealized_pct') > 0 %}pos{% elif r.get('unrealized_pct') is not none and r.get('unrealized_pct') < 0 %}neg{% endif %}">
+          {% if r.get('pnl_pct') is not none %}{{ "%+.2f"|format(r.get('pnl_pct')) }}%
+          {% elif r.get('unrealized_pct') is not none %}{{ "%+.2f"|format(r.get('unrealized_pct')) }}%
+            <span class="muted small" title="unrealized — this trade is still open, so this is a mark and not a result">mark</span>
+          {% else %}—{% endif %}</td>
+        <td class="{% if r.get('r_multiple') is not none and r.get('r_multiple') > 0 %}pos{% elif r.get('r_multiple') is not none and r.get('r_multiple') < 0 %}neg{% elif r.get('unrealized_r') is not none and r.get('unrealized_r') > 0 %}pos{% elif r.get('unrealized_r') is not none and r.get('unrealized_r') < 0 %}neg{% endif %}">
+          {% if r.get('r_multiple') is not none %}{{ "%+.2f"|format(r.get('r_multiple')) }}
+          {% elif r.get('unrealized_r') is not none %}{{ "%+.2f"|format(r.get('unrealized_r')) }}
+          {% else %}—{% endif %}</td>
+        <td class="small">
+          {% if r.get('room_to_sl_pct') is not none or r.get('room_to_tp1_pct') is not none %}
+            <span class="{% if r.get('level_crossed') == 'SL' %}neg{% endif %}">{% if r.get('room_to_sl_pct') is not none %}{{ "%.2f"|format(r.get('room_to_sl_pct')) }}%{% else %}—{% endif %}</span>
+            <span class="muted">/</span>
+            <span class="{% if r.get('level_crossed') == 'TP1' %}pos{% endif %}">{% if r.get('room_to_tp1_pct') is not none %}{{ "%.2f"|format(r.get('room_to_tp1_pct')) }}%{% else %}—{% endif %}</span>
+            {% if r.get('level_crossed') %}<span class="badge sev-high" title="price is already through this level while the row still says open — the resolver walks bars in order and would have closed it, so those bars never arrived">{{ r.get('level_crossed') }} crossed</span>{% endif %}
+          {% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{% if r.get('mfe_pct') is not none %}{{ "%.2f"|format(r.get('mfe_pct')) }}%{% else %}—{% endif %}</td>
+        <td>{% if r.get('confidence') is not none %}{{ "%.1f"|format(r.get('confidence')) }}{% else %}—{% endif %}</td>
+        <td class="small muted">{{ r.get('regime') or '—' }}</td>
+        <td class="mono small">{{ r.get('dark_gate') }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
   </div>
+  <p class="muted small">
+    <strong>Now</strong> is a live Binance mark for an open row and the recorded exit price for
+    a closed one; <strong>PnL</strong> and <strong>R</strong> follow it — a mark while the trade
+    is open, badged <em>mark</em>, and the engine's realized result once it closes. The two can
+    never appear on the same row, which is what keeps an unrealized number out of a realized one.
+  </p>
+  <p class="muted small">
+    <strong>Measured</strong> is when the <em>engine</em> last advanced this row on real bars —
+    not when this page loaded, and not when the price beside it was fetched. Those are three
+    different clocks and only the first one says the row's status is current. A
+    <span class="badge sev-high">stalled</span> row's mark is still arithmetically right (entry is
+    fixed, the price is live) but its <em>open</em> is a claim about candles that stopped arriving,
+    so it may have resolved already. <span class="badge sev-high">SL crossed</span> is that failure
+    made visible: price is through the level while the row still says open, and a resolver that had
+    walked those bars would have closed it.
+  </p>
   {% endif %}
 </section>
 {% endblock %}
