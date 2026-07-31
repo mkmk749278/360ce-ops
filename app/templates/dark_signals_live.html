@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% block title %}Dark feed — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Dark feed <span class="muted">— the silenced paths, emitting, owner-only</span></h1>
+
+<section class="card">
+  <p class="small">
+    {% if state.state == 'live' %}<span class="badge st-done">LIVE</span>
+    {% elif state.state == 'empty' %}<span class="badge st-partial">EMPTY</span>
+    {% elif state.state == 'stale' %}<span class="badge sev-high">STALE</span>
+    {% else %}<span class="badge sev-high">UNAVAILABLE</span>{% endif %}
+    {{ state.detail }}
+  </p>
+  <p class="muted small">
+    Reading <code>{{ provenance.file }}</code>{% if provenance.modified_at %}, last written
+    <strong>{{ provenance.modified_at }}</strong>{% if provenance.age_sec is not none %}
+    ({{ "%.0f"|format(provenance.age_sec / 60.0) }}m ago){% endif %}{% endif %}.
+  </p>
+</section>
+
+<section class="card">
+  <p class="muted small">
+    <strong>These are real signals, not counterfactuals.</strong> Each row went through the
+    <em>whole</em> scanner chain — scoring, MTF, min_confidence, the context floors,
+    level_still_in_play, staleness — with only <code>setup_compat</code> or
+    <code>execution</code> overridden for its path. That is what separates this page from
+    <a href="/strategy-lab">the suppression audit</a>, where a gate killed a candidate and a
+    resolver scored it afterwards.
+  </p>
+  <p class="muted small">
+    <strong>They are not what a user would have seen.</strong> The router applies a second
+    layer this lane does not — correlation lock, per-symbol and per-channel cooldown,
+    concurrency caps, same-direction throttle — and drops most of what it dequeues. So a row
+    here means <em>“the scanner was willing to send this”</em>, never <em>“a subscriber would
+    have received this”</em>, and the count over-reports a feed size. Sharing those predicates
+    means changing the router, which is paid-channel routing and ships as its own reviewed
+    change.
+  </p>
+  <p class="muted small">
+    <strong>Nothing here reached anyone.</strong> No channel, no push, no app feed, no order.
+    The engine diverts a dark candidate at the single <code>signal_queue.put</code> site, and
+    the queue is the only route to the router — so it is structural, not a set of skips that
+    could each be forgotten. <code>MOVER_TREND_PULLBACK</code> is excluded: it already owns
+    64% of the delivered book, and admitting it would make this a second MTP feed.
+  </p>
+</section>
+
+<form class="card" method="get" action="/signals/dark-live">
+  <label class="small">Setup
+    <select name="setup" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for s in setups %}
+      <option value="{{ s }}" {% if filter_setup == s %}selected{% endif %}>{{ s }} ({{ n_setup.get(s, 0) }})</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="small">Gate carried past
+    <select name="gate" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for g in gates %}
+      <option value="{{ g }}" {% if filter_gate == g %}selected{% endif %}>{{ g }} ({{ n_gate.get(g, 0) }})</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="small">Status
+    <select name="status" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for st in statuses %}
+      <option value="{{ st }}" {% if filter_status == st %}selected{% endif %}>{{ st }} ({{ n_status.get(st, 0) }})</option>
+      {% endfor %}
+    </select>
+  </label>
+  <a class="btn" href="/signals/dark-live/export.csv?setup={{ filter_setup }}&gate={{ filter_gate }}&status={{ filter_status }}">Export CSV</a>
+  <noscript><button class="btn" type="submit">Apply</button></noscript>
+</form>
+
+{% if summary.by_setup %}
+<section class="card">
+  <h2 class="small">Per path — what emitting actually produced</h2>
+  <table class="tbl">
+    <thead>
+      <tr><th>Setup</th><th>Dark signals</th><th>Open</th><th>TP1</th><th>SL</th><th>Expired</th><th>Win @decided</th><th>Avg R</th><th>Avg conf</th><th>Gate carried past</th></tr>
+    </thead>
+    <tbody>
+      {% for a in summary.by_setup %}
+      <tr>
+        <td class="mono">{{ a.setup_class }}</td>
+        <td>{{ a.n }}</td>
+        <td>{{ a.open }}</td>
+        <td class="pos">{{ a.tp1 }}</td>
+        <td class="neg">{{ a.sl }}</td>
+        <td>{{ a.expired }}</td>
+        <td>{% if a.win_rate is not none %}{{ "%.0f"|format(a.win_rate * 100) }}%
+            <span class="muted small">of {{ a.decided }}</span>
+            {% else %}<span class="muted" title="nothing has been decided for this path yet — not the same as none of them winning">—</span>{% endif %}</td>
+        <td class="{% if a.avg_r is not none and a.avg_r > 0 %}pos{% elif a.avg_r is not none and a.avg_r < 0 %}neg{% endif %}">
+          {% if a.avg_r is not none %}{{ "%+.3f"|format(a.avg_r) }}R{% else %}—{% endif %}</td>
+        <td>{% if a.avg_confidence is not none %}{{ "%.1f"|format(a.avg_confidence) }}{% else %}—{% endif %}</td>
+        <td class="mono small">{{ a.top_gate }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    <strong>Win rate divides by decided rows</strong> (TP1 + SL), never by every row: an
+    <em>expiry</em> is the setup doing nothing, not losing, and counting it as a loss is the
+    fabrication class this repo already paid for. Expiries score <strong>0R</strong> and are
+    counted in their own column. Open rows are excluded from every rate — a still-open trade
+    read as a finished one is how a page invents a verdict. A blank win rate means nothing has
+    been decided yet, which is a different statement from nothing having won.
+  </p>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2 class="small">Dark signals <span class="muted">— {{ shown }} of {{ matched }}</span></h2>
+  {% if shown < matched %}
+  <p class="muted small">Table capped at {{ row_cap }} rows; every count above is measured on
+  all {{ matched }}. Export CSV for the full selection.</p>
+  {% endif %}
+  {% if not rows %}
+  <p class="muted small">
+    {% if state.state == 'unavailable' %}The dark ledger is not on the volume — see the banner above.
+    {% else %}No dark signals in this selection.{% endif %}
+  </p>
+  {% else %}
+  <div style="overflow-x:auto">
+  <table class="tbl">
+    <thead>
+      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Carried past</th><th>Conf</th><th>Regime</th><th>Entry</th><th>Status</th><th>Exit</th><th>PnL</th><th>R</th><th>MFE</th></tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><strong>{{ r.get('symbol') }}</strong></td>
+        <td class="{% if r.get('side') == 'LONG' %}pos{% else %}neg{% endif %}">{{ r.get('side') }}</td>
+        <td class="small muted">{{ r.get('setup_class') }}</td>
+        <td class="mono small">{{ r.get('dark_gate') }}</td>
+        <td>{% if r.get('confidence') is not none %}{{ "%.1f"|format(r.get('confidence')) }}{% else %}—{% endif %}</td>
+        <td class="small muted">{{ r.get('regime') or '—' }}</td>
+        <td>{{ r.get('entry') }}</td>
+        <td>{% if r.get('status') == 'CLOSED_TP1' %}<span class="badge st-done">TP1</span>
+            {% elif r.get('status') == 'CLOSED_SL' %}<span class="badge sev-high">SL</span>
+            {% elif r.get('status') == 'EXPIRED' %}<span class="badge st-partial">expired</span>
+            {% else %}<span class="badge st-open">open</span>{% endif %}
+            {% if r.get('ambiguous_bar') %}<span class="badge sev-high" title="SL and TP1 both touched inside one bar; OHLC cannot order them, so this was resolved pessimistically">ambig</span>{% endif %}</td>
+        <td>{% if r.get('exit_price') is not none %}{{ "%.6g"|format(r.get('exit_price')) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.get('pnl_pct') is not none and r.get('pnl_pct') > 0 %}pos{% elif r.get('pnl_pct') is not none and r.get('pnl_pct') < 0 %}neg{% endif %}">
+          {% if r.get('pnl_pct') is not none %}{{ "%+.2f"|format(r.get('pnl_pct')) }}%{% else %}—{% endif %}</td>
+        <td class="{% if r.get('r_multiple') is not none and r.get('r_multiple') > 0 %}pos{% elif r.get('r_multiple') is not none and r.get('r_multiple') < 0 %}neg{% endif %}">
+          {% if r.get('r_multiple') is not none %}{{ "%+.2f"|format(r.get('r_multiple')) }}{% else %}—{% endif %}</td>
+        <td>{% if r.get('mfe_pct') is not none %}{{ "%.2f"|format(r.get('mfe_pct')) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

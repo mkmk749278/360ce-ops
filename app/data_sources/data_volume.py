@@ -42,6 +42,11 @@ _SAR_LEDGER_RE = re.compile(r"^sar_exit_candidates_v(\d+)\.json$")
 SAR_LIVE_VERSION = 1
 SAR_LIVE_FILE = f"sar_live_arms_v{SAR_LIVE_VERSION}.json"
 
+#: Dark emission lane (engine ``src/dark_emission.py``). Signals from the paths
+#: the gates normally silence, emitted for real and diverted before the queue.
+DARK_EMISSION_VERSION = 1
+DARK_EMISSION_FILE = f"dark_signals_live_v{DARK_EMISSION_VERSION}.json"
+
 _SAR_LIVE_RE = re.compile(r"^sar_live_arms_v(\d+)\.json$")
 
 
@@ -170,6 +175,57 @@ class DataVolumeReader:
         than a level reconstructed afterwards.
         """
         return self._load(SAR_LIVE_FILE)
+
+    # -- Dark emission lane (engine: src/dark_emission.py) --------------- #
+
+    def dark_signals(self) -> Any:
+        """Owner-only signals from the paths the gates normally silence.
+
+        These are **not** counterfactuals. Each row cleared the full scanner
+        chain — scoring, MTF, min_confidence, the context floors,
+        level_still_in_play, staleness — with only ``setup_compat`` or
+        ``execution`` overridden, and was then diverted at the single
+        ``signal_queue.put`` site so it could never reach the router, a
+        channel, a push, the app feed or an order.
+
+        They are also **not** what a user would have seen: the router's second
+        layer (correlation lock, cooldowns, concurrency caps) is not applied,
+        so the count over-reports a feed size. The page has to say that, or it
+        repeats #816 — a pre-router population labelled as a delivered one.
+        """
+        return self._load(DARK_EMISSION_FILE)
+
+    def dark_signals_provenance(self) -> dict[str, Any]:
+        """Which dark-lane file, and when the engine last wrote it.
+
+        The engine flushes on the 5-min resolve cycle, so this file is much
+        slower-moving than the SAR live arms — a few minutes old is healthy
+        here and would be FROZEN there. Missing entirely means the lane is off
+        or the resolve loop is not running; current and empty means the lane is
+        on and the loosened paths have produced nothing, which is a finding
+        rather than a fault.
+        """
+        info: dict[str, Any] = {
+            "file": DARK_EMISSION_FILE,
+            "version": DARK_EMISSION_VERSION,
+            "exists": False,
+            "modified_at": None,
+            "age_sec": None,
+        }
+        try:
+            path = self._dir / DARK_EMISSION_FILE
+            if path.exists():
+                info["exists"] = True
+                mtime = path.stat().st_mtime
+                info["modified_at"] = datetime.fromtimestamp(
+                    mtime, tz=timezone.utc
+                ).strftime("%Y-%m-%d %H:%M UTC")
+                info["age_sec"] = max(
+                    0.0, datetime.now(timezone.utc).timestamp() - mtime
+                )
+        except OSError:
+            pass
+        return info
 
     def sar_live_provenance(self) -> dict[str, Any]:
         """Which live-arm file we are reading, and when the engine last wrote it.
