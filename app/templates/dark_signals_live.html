@@ -143,6 +143,83 @@
 </section>
 {% endif %}
 
+<section class="card">
+  <h2 class="small">Regular exit vs SAR exit <span class="muted">— the same entries, two mechanisms</span></h2>
+  {% if sar.n %}
+  <table class="tbl">
+    <thead>
+      <tr><th>Mechanism</th><th>Avg R <span class="muted small">vs designed risk</span></th>
+          <th>Avg R <span class="muted small">vs risk parked</span></th><th>Win rate</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Regular — the row’s own SL / TP1</td>
+        <td class="{% if sar.regular.avg_r is not none and sar.regular.avg_r > 0 %}pos{% elif sar.regular.avg_r is not none and sar.regular.avg_r < 0 %}neg{% endif %}">
+          {% if sar.regular.avg_r is not none %}{{ "%+.3f"|format(sar.regular.avg_r) }}R
+          <span class="muted small">of {{ sar.regular.n_r }}</span>{% else %}—{% endif %}</td>
+        <td class="muted">—<span class="muted small"> same stop</span></td>
+        <td>{% if sar.regular.win_rate is not none %}{{ "%.0f"|format(sar.regular.win_rate * 100) }}%{% else %}—{% endif %}</td>
+      </tr>
+      <tr>
+        <td>SAR <code>@level</code> — stop touched intrabar</td>
+        <td class="{% if sar.sar_level.avg_r is not none and sar.sar_level.avg_r > 0 %}pos{% elif sar.sar_level.avg_r is not none and sar.sar_level.avg_r < 0 %}neg{% endif %}">
+          {% if sar.sar_level.avg_r is not none %}{{ "%+.3f"|format(sar.sar_level.avg_r) }}R
+          <span class="muted small">of {{ sar.sar_level.n_r }}</span>{% else %}—{% endif %}</td>
+        <td class="{% if sar.sar_level.avg_r_risk is not none and sar.sar_level.avg_r_risk > 0 %}pos{% elif sar.sar_level.avg_r_risk is not none and sar.sar_level.avg_r_risk < 0 %}neg{% endif %}">
+          {% if sar.sar_level.avg_r_risk is not none %}{{ "%+.3f"|format(sar.sar_level.avg_r_risk) }}R
+          <span class="muted small">of {{ sar.sar_level.n_r_risk }}</span>{% else %}—{% endif %}</td>
+        <td>{% if sar.sar_level.win_rate is not none %}{{ "%.0f"|format(sar.sar_level.win_rate * 100) }}%{% else %}—{% endif %}</td>
+      </tr>
+      <tr>
+        <td>SAR <code>@confirm</code> — flip confirmed at the close</td>
+        <td class="{% if sar.sar_confirm.avg_r is not none and sar.sar_confirm.avg_r > 0 %}pos{% elif sar.sar_confirm.avg_r is not none and sar.sar_confirm.avg_r < 0 %}neg{% endif %}">
+          {% if sar.sar_confirm.avg_r is not none %}{{ "%+.3f"|format(sar.sar_confirm.avg_r) }}R
+          <span class="muted small">of {{ sar.sar_confirm.n_r }}</span>{% else %}—{% endif %}</td>
+        <td class="{% if sar.sar_confirm.avg_r_risk is not none and sar.sar_confirm.avg_r_risk > 0 %}pos{% elif sar.sar_confirm.avg_r_risk is not none and sar.sar_confirm.avg_r_risk < 0 %}neg{% endif %}">
+          {% if sar.sar_confirm.avg_r_risk is not none %}{{ "%+.3f"|format(sar.sar_confirm.avg_r_risk) }}R
+          <span class="muted small">of {{ sar.sar_confirm.n_r_risk }}</span>{% else %}—{% endif %}</td>
+        <td class="muted">—</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="muted small">
+    Measured over the <strong>{{ sar.n }}</strong> rows where <em>both</em> mechanisms
+    reached a verdict{% if sar.row_only or sar.arm_only %} —
+    {% if sar.row_only %}{{ sar.row_only }} where only the regular exit decided{% endif %}
+    {%- if sar.row_only and sar.arm_only %}, {% endif %}
+    {%- if sar.arm_only %}{{ sar.arm_only }} where only the SAR arm did{% endif %}
+    {{ "are excluded" if (sar.row_only + sar.arm_only) != 1 else "is excluded" }}{% endif %}.
+    A row that resolved while its arm is still running describes one mechanism and not the
+    other; averaging over the union would compare two different sets of trades and call the
+    difference a result.
+  </p>
+  {% else %}
+  <p class="muted small">
+    <strong>No row has both verdicts yet.</strong> A dark row resolves against its own SL/TP1
+    within six hours; its SAR arm exits only when SAR flips, which is normally later. This
+    panel stays empty until the same row has been decided twice — it is not a fault, and it
+    is deliberately not filled with whichever half arrived first.
+  </p>
+  {% endif %}
+  <p class="muted small">
+    <strong>Neither column is “the” result.</strong> The regular row exits at the stop the
+    evaluator set; the SAR arm cancels that stop the moment SAR comes onside and parks its
+    own. <code>@level</code> is that stop touched intrabar, <code>@confirm</code> is the flip
+    confirmed at the close and exited at market.
+    Their difference is the cost of confirmation, it is never zero, and that is why there is
+    no blended figure here.
+    R against <em>designed risk</em> divides by the SL distance the trade was sized for;
+    R against <em>risk parked</em> divides by the stop SAR actually had out, which has been
+    the wider of the two on most handovers. Both are defensible, so both are printed.
+  </p>
+  <p class="muted small">
+    These arms are kept in their own ledger, separate from
+    <a href="/signals/sar-live">the live SAR arms</a>. Every arm there belongs to a signal a
+    subscriber received; every arm here belongs to one nobody received. Pooling them would
+    inflate the population an adoption decision reads.
+  </p>
+</section>
+
 {% if summary.by_setup %}
 <section class="card">
   <h2 class="small">Per path — what emitting actually produced</h2>
@@ -208,7 +285,7 @@
          The owner reads this page on a phone, and the first cut put Status/PnL
          behind the setup name and the full gate token — so the only columns the
          page was asked for sat off the right edge. #}
-      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Status</th><th title="how long ago the ENGINE last advanced this row on real bars — not when this page loaded, and not when the price beside it was fetched">Measured</th><th>Entry</th><th>Now</th><th title="unrealized while open, realized once closed — the two never share a column">PnL</th><th>R</th><th title="how far price sits from each level; negative means the level was already crossed while the row still says open">→SL / →TP1</th><th>MFE</th><th>Conf</th><th>Regime</th><th>Carried past</th></tr>
+      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Status</th><th title="how long ago the ENGINE last advanced this row on real bars — not when this page loaded, and not when the price beside it was fetched">Measured</th><th>Entry</th><th>Now</th><th title="unrealized while open, realized once closed — the two never share a column">PnL</th><th>R</th><th title="how far price sits from each level; negative means the level was already crossed while the row still says open">→SL / →TP1</th><th>MFE</th><th title="what the SAR exit arm on this same entry did — RUNNING until SAR flips, which is normally later than the row&#39;s own stop. Blank means no arm: the engine refuses to open one whose anchor bar is stale, so blank is a refusal rather than a null result.">SAR exit</th><th>Conf</th><th>Regime</th><th>Carried past</th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
@@ -259,6 +336,20 @@
             {% if r.get('level_crossed') %}<span class="badge sev-high" title="price is already through this level while the row still says open — the resolver walks bars in order and would have closed it, so those bars never arrived">{{ r.get('level_crossed') }} crossed</span>{% endif %}
           {% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{% if r.get('mfe_pct') is not none %}{{ "%.2f"|format(r.get('mfe_pct')) }}%{% else %}—{% endif %}</td>
+        <td class="small">
+          {% set arm = r.get('sar_best') %}
+          {% if arm %}
+            {% if arm.get('status') == 'RUNNING' %}<span class="badge st-partial" title="SAR has not flipped yet — the arm exits on its own signal, normally later than this row's stop">running</span>
+            {% elif arm.get('status') == 'INSUFFICIENT' %}<span class="badge st-partial" title="terminal but unscored — the candles this arm needed stopped arriving, so no verdict was earned">unmeasured</span>
+            {% else %}
+              <span class="mono">{{ arm.get('status')|replace('CLOSED_', '')|lower }}</span>
+              {% if arm.get('r_level') is not none %}
+              <span class="{% if arm.get('r_level') > 0 %}pos{% elif arm.get('r_level') < 0 %}neg{% endif %}">{{ "%+.2f"|format(arm.get('r_level')) }}R</span>
+              {% endif %}
+            {% endif %}
+            {% if r.get('sar_n', 0) > 1 %}<span class="muted small" title="one arm per timeframe; this column shows the one that has consumed the most bars">×{{ r.get('sar_n') }}</span>{% endif %}
+          {% else %}<span class="muted" title="no arm — the engine refuses to open one whose anchor bar is already stale, so this is the guard firing rather than a null result">—</span>{% endif %}
+        </td>
         <td>{% if r.get('confidence') is not none %}{{ "%.1f"|format(r.get('confidence')) }}{% else %}—{% endif %}</td>
         <td class="small muted">{{ r.get('regime') or '—' }}</td>
         <td class="mono small">{{ r.get('dark_gate') }}</td>

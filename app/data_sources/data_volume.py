@@ -47,6 +47,15 @@ SAR_LIVE_FILE = f"sar_live_arms_v{SAR_LIVE_VERSION}.json"
 DARK_EMISSION_VERSION = 1
 DARK_EMISSION_FILE = f"dark_signals_live_v{DARK_EMISSION_VERSION}.json"
 
+#: SAR exit arms opened on DARK rows — deliberately a different file from
+#: ``sar_live_arms_v1.json``. That one is the population ``/signals/sar-live``
+#: presents as the evidence for adopting SAR on the money path, and every arm in
+#: it belongs to a signal a subscriber received. These belong to signals nobody
+#: received. Reading them from one file would silently merge the two, and this
+#: page could not un-merge them afterwards.
+DARK_SAR_VERSION = 1
+DARK_SAR_FILE = f"dark_sar_arms_v{DARK_SAR_VERSION}.json"
+
 _SAR_LIVE_RE = re.compile(r"^sar_live_arms_v(\d+)\.json$")
 
 
@@ -194,6 +203,20 @@ class DataVolumeReader:
         repeats #816 — a pre-router population labelled as a delivered one.
         """
         return self._load(DARK_EMISSION_FILE)
+
+    def dark_sar_arms(self) -> Any:
+        """SAR exit arms opened on the dark rows — the second outcome per row.
+
+        Same shape and same producer as ``sar_live_arms`` (engine
+        ``src/sar_live_shadow.py``), stepped forward on the dark lane's own
+        resolve cycle rather than the monitor loop, and written to its own file.
+
+        Joined to a dark row by ``signal_id``: the dark row carries what its own
+        SL/TP1 geometry produced, the arm carries what a SAR handover would have
+        produced from the same entry. Neither is "the" outcome — that is the
+        whole point of showing both.
+        """
+        return self._load(DARK_SAR_FILE)
 
     def dark_signals_provenance(self) -> dict[str, Any]:
         """Which dark-lane file, and when the engine last wrote it.
