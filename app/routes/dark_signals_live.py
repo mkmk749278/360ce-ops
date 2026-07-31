@@ -179,6 +179,13 @@ def mark_freshness(rows: list[dict], *, now: float) -> list[dict]:
                 verdict = FRESH_UNVERIFIED
         elif misses > 0 or row.get("stalled") is True or age > ROW_STALE_SEC:
             verdict = FRESH_STALLED
+        elif row.get("window_undated_reason"):
+            # Advanced — so not stalled — but on bars the engine could not date,
+            # which means nothing can say whether they are current. Printing
+            # "2m ago" here would answer a question nobody asked: that is when
+            # the resolver ran, not how recent the candles it read were. Its own
+            # bucket, because an unknown is not a pass.
+            verdict = FRESH_UNVERIFIED
         else:
             verdict = FRESH_CURRENT
 
@@ -187,6 +194,13 @@ def mark_freshness(rows: list[dict], *, now: float) -> list[dict]:
         row["stall_reason"] = (
             str(row.get("resolve_miss_reason") or "")
             or ("not_advanced" if verdict == FRESH_STALLED else "")
+        )
+        # Why it is unverified: written before the stamps existed, or advanced
+        # on an undatable window. Different causes, different fixes, and the
+        # second one is a live fault rather than a legacy row.
+        row["unverified_reason"] = (
+            str(row.get("window_undated_reason") or "")
+            if verdict == FRESH_UNVERIFIED else ""
         )
     return rows
 
@@ -495,6 +509,7 @@ _DARK_COLS = [
     # …and whether the row beside those numbers is still being measured.
     "last_resolved_at", "resolve_age_sec", "last_bar_ms", "bars_behind",
     "resolve_misses", "resolve_miss_reason", "stalled", "freshness",
+    "window_undated_reason", "unverified_reason",
 ]
 
 

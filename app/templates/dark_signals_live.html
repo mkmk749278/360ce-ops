@@ -215,7 +215,8 @@
            arriving, and the price beside it is live regardless (#108). #}
         <td class="small">
           {% if r.get('status') != 'OPEN' %}<span class="muted">—</span>
-          {% elif r.get('freshness') == 'unverified' %}<span class="badge st-partial" title="written before the engine stamped when it last advanced this row — an unknown, not a pass; the engine restamps it on its next resolve cycle">unverified</span>
+          {% elif r.get('freshness') == 'unverified' %}<span class="badge st-partial" title="{% if r.get('unverified_reason') %}the engine advanced this row, but on bars it could not date — the outcome is real, nothing can say whether the candles behind it are current{% else %}written before the engine stamped when it last advanced this row — an unknown, not a pass; the engine restamps it on its next resolve cycle{% endif %}">unverified</span>
+            {% if r.get('unverified_reason') %}<span class="mono small muted" title="why the window could not be dated">{{ r.get('unverified_reason') }}</span>{% endif %}
           {% else %}
             {% if r.get('resolve_age_sec') is not none %}<span class="{% if r.get('is_stalled') %}neg{% endif %}">{{ "%.0f"|format(r.get('resolve_age_sec') / 60.0) }}m ago</span>{% endif %}
             {% if r.get('is_stalled') %}<span class="badge sev-high" title="the engine has not advanced this row on fresh bars — its status and MFE describe candles that stopped arriving, while the price beside it is current">stalled{% if r.get('resolve_misses') %} ×{{ r.get('resolve_misses') }}{% endif %}</span>{% endif %}
