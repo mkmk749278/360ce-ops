@@ -124,7 +124,7 @@ def test_a_current_file_with_rows_is_live_and_says_nothing_reached_a_user():
 # --------------------------------------------------------------------------- #
 
 
-def _client(payload=None, provenance=None, prices=None, raise_prices=False):
+def _client(payload=None, provenance=None, prices=None, raise_prices=False, arms=None):
     from fastapi.testclient import TestClient
 
     from app.main import app
@@ -145,6 +145,7 @@ def _client(payload=None, provenance=None, prices=None, raise_prices=False):
     vol = app.state.data_volume
     vol.dark_signals = lambda: (payload if payload is not None else _payload([_row()]))
     vol.dark_signals_provenance = lambda: _prov
+    vol.dark_sar_arms = lambda: (arms if arms is not None else {"open": [], "resolved": []})
     app.state.binance_klines.fetch_all_prices = _fetch_all_prices
     client.post("/login", data={"password": "test-token"})
     return client
@@ -518,3 +519,148 @@ def test_the_page_names_why_a_row_could_not_be_dated():
     finally:
         client.__exit__(None, None, None)
     assert "unverified" in r.text and "no_timestamps" in r.text
+
+
+# --------------------------------------------------------------------------- #
+# Regular exit vs SAR exit — two outcomes on the same entries
+#
+# Owner, 2026-07-31: "observe this dark feed too with SAR exit mechanism along
+# with regular". The trap is the comparison population: a row that resolved
+# while its arm is still running describes one mechanism and not the other.
+# --------------------------------------------------------------------------- #
+
+
+def _arm(signal_id="SIG-1", status="CLOSED_SAR_FLIP", r_level=0.5,
+         r_confirm=0.3, bars=10, tf="5m", **kw):
+    arm = {
+        "arm_id": f"{signal_id}:{tf}", "signal_id": signal_id, "symbol": "AAAUSDT",
+        "timeframe": tf, "status": status, "r_level": r_level,
+        "r_confirm": r_confirm, "r_level_risk": r_level, "r_confirm_risk": r_confirm,
+        "bars_seen": bars, "lane": "dark",
+    }
+    arm.update(kw)
+    return arm
+
+
+def test_arms_are_indexed_by_signal_and_kept_per_timeframe():
+    from app.routes.dark_signals_live import reduce_arms
+
+    idx = reduce_arms({"open": [_arm(tf="5m")], "resolved": [_arm(tf="15m")]})
+    assert len(idx["SIG-1"]) == 2, "pooling timeframes makes the headline move with the mix"
+
+
+def test_a_broken_arms_payload_yields_no_arms_rather_than_raising():
+    from app.routes.dark_signals_live import reduce_arms
+
+    assert reduce_arms(None) == {}
+    assert reduce_arms({"open": "nope"}) == {}
+
+
+def test_the_row_column_shows_the_most_advanced_arm():
+    """Chosen by bars consumed, never by timeframe — otherwise the column
+    silently prefers a series that stopped arriving."""
+    from app.routes.dark_signals_live import attach_arms, reduce_arms
+
+    rows = [dict(_row(), signal_id="SIG-1")]
+    attach_arms(rows, reduce_arms({"open": [], "resolved": [
+        _arm(tf="5m", bars=3, r_level=-1.0), _arm(tf="15m", bars=40, r_level=2.0),
+    ]}))
+    assert rows[0]["sar_best"]["timeframe"] == "15m"
+    assert rows[0]["sar_n"] == 2
+
+
+def test_a_row_with_no_arm_gets_an_empty_list_not_a_zero():
+    from app.routes.dark_signals_live import attach_arms
+
+    rows = [dict(_row(), signal_id="SIG-NONE")]
+    attach_arms(rows, {})
+    assert rows[0]["sar_arms"] == [] and rows[0]["sar_best"] is None
+
+
+def test_only_rows_decided_by_BOTH_mechanisms_enter_the_comparison():
+    """The whole point of the panel. Averaging over the union would compare two
+    different sets of trades and call the difference a result."""
+    from app.routes.dark_signals_live import attach_arms, reduce_arms, summarize_sar
+
+    rows = [
+        dict(_row(status="CLOSED_TP1", r=2.0), signal_id="BOTH"),
+        dict(_row(status="CLOSED_SL", r=-1.0), signal_id="ROWONLY"),
+        dict(_row(status="OPEN"), signal_id="ARMONLY"),
+    ]
+    attach_arms(rows, reduce_arms({"open": [_arm("ROWONLY", status="RUNNING")], "resolved": [
+        _arm("BOTH", r_level=0.9), _arm("ARMONLY", r_level=1.5),
+    ]}))
+    panel = summarize_sar(rows)
+    assert panel["n"] == 1
+    assert panel["row_only"] == 1 and panel["arm_only"] == 1
+    assert panel["regular"]["avg_r"] == pytest.approx(2.0)
+    assert panel["sar_level"]["avg_r"] == pytest.approx(0.9)
+
+
+def test_an_unmeasured_arm_is_not_scored_as_a_result():
+    """INSUFFICIENT is terminal but unscored — the absence of a measurement,
+    not a 0R outcome."""
+    from app.routes.dark_signals_live import attach_arms, reduce_arms, summarize_sar
+
+    rows = [dict(_row(status="CLOSED_TP1", r=2.0), signal_id="SIG-1")]
+    attach_arms(rows, reduce_arms({"open": [], "resolved": [
+        _arm(status="INSUFFICIENT", r_level=None),
+    ]}))
+    assert summarize_sar(rows)["n"] == 0
+
+
+def test_there_is_no_blended_r_across_the_two_mechanisms():
+    """Collapsing them before the difference is known is choosing the answer."""
+    from app.routes.dark_signals_live import attach_arms, reduce_arms, summarize_sar
+
+    rows = [dict(_row(status="CLOSED_TP1", r=2.0), signal_id="SIG-1")]
+    attach_arms(rows, reduce_arms({"open": [], "resolved": [_arm()]}))
+    panel = summarize_sar(rows)
+    assert "avg_r" not in panel
+    assert "combined" not in panel
+    assert panel["sar_level"]["avg_r"] != panel["sar_confirm"]["avg_r"]
+
+
+def test_the_panel_is_measured_on_the_filtered_selection():
+    """A summary over the whole ledger beside a filtered table summarises
+    nothing the reader is looking at (#90/#91)."""
+    from app.routes.dark_signals_live import (
+        attach_arms, filter_rows, reduce_arms, summarize_sar,
+    )
+
+    rows = [
+        dict(_row(setup="MEAN_REVERT", status="CLOSED_TP1", r=2.0), signal_id="A"),
+        dict(_row(setup="RANGE_FADE", status="CLOSED_SL", r=-1.0), signal_id="B"),
+    ]
+    attach_arms(rows, reduce_arms({"open": [], "resolved": [
+        _arm("A", r_level=1.0), _arm("B", r_level=-0.5),
+    ]}))
+    panel = summarize_sar(filter_rows(rows, setup="MEAN_REVERT"))
+    assert panel["n"] == 1 and panel["sar_level"]["avg_r"] == pytest.approx(1.0)
+
+
+def test_the_page_renders_the_comparison_and_says_neither_is_the_result():
+    client = _client(
+        payload=_payload([dict(_row(status="CLOSED_TP1", r=2.0), signal_id="SIG-1")]),
+        arms={"open": [], "resolved": [_arm()]},
+    )
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert r.status_code == 200
+    assert "Regular exit vs SAR exit" in r.text
+    assert "Neither column" in r.text
+    assert "cost of confirmation" in r.text
+
+
+def test_the_page_says_the_empty_panel_is_not_a_fault():
+    """A dark row resolves within six hours; its arm exits when SAR flips,
+    normally later. Empty is the expected early state."""
+    client = _client(payload=_payload([dict(_row(status="OPEN"), signal_id="SIG-1")]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert "No row has both verdicts yet" in r.text
+    assert "not a fault" in r.text

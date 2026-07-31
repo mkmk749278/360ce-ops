@@ -365,6 +365,121 @@ def summarize(rows: list[dict]) -> dict:
     return {"by_setup": out, "n": len(rows)}
 
 
+#: An arm's terminal states, mirrored from the engine's ``sar_live_shadow``.
+#: ``INSUFFICIENT`` is terminal but deliberately unscored — the absence of a
+#: measurement, not a 0R outcome.
+ARM_RUNNING = "RUNNING"
+ARM_INSUFFICIENT = "INSUFFICIENT"
+
+
+def reduce_arms(payload: Any) -> dict[str, list[dict]]:
+    """SAR arms from the dark lane's own file, indexed by ``signal_id``.
+
+    One dark row can hold several arms — one per timeframe — and they are kept
+    as a list rather than collapsed. Pooling 5m and 15m into one number would
+    make the headline move with the timeframe mix instead of the mechanism,
+    which is the rule ``/signals/sar-live`` already carries.
+    """
+    out: dict[str, list[dict]] = {}
+    if not isinstance(payload, dict):
+        return out
+    for key in ("open", "resolved"):
+        arms = payload.get(key)
+        if not isinstance(arms, list):
+            continue
+        for arm in arms:
+            if not isinstance(arm, dict):
+                continue
+            sid = str(arm.get("signal_id") or "")
+            if sid:
+                out.setdefault(sid, []).append(arm)
+    return out
+
+
+def attach_arms(rows: list[dict], arms_by_signal: dict[str, list[dict]]) -> list[dict]:
+    """Hang each dark row's SAR arms off the row, without merging the outcomes.
+
+    Two outcomes per row and **neither is "the" result**: ``status``/
+    ``r_multiple`` are what the row's own SL/TP1 geometry produced, and the arm
+    carries what a SAR handover would have produced from the same entry. There
+    is deliberately no combined field — collapsing them before the difference is
+    known is choosing the answer, exactly as with the two fills and the two
+    denominators on the live SAR page.
+
+    A row with no arm gets an empty list, which is a real state and not a zero:
+    the engine refuses to open an arm whose anchor bar is stale (#836), so
+    "no arm" usually means the guard fired, never that SAR did nothing.
+    """
+    for row in rows:
+        sid = str(row.get("signal_id") or "")
+        found = arms_by_signal.get(sid) or []
+        row["sar_arms"] = found
+        row["sar_n"] = len(found)
+        # The single most-advanced arm, for the row-level column. Chosen by bars
+        # consumed rather than by timeframe so the column never silently prefers
+        # a series that stopped arriving.
+        best = None
+        for arm in found:
+            if best is None or int(arm.get("bars_seen") or 0) > int(best.get("bars_seen") or 0):
+                best = arm
+        row["sar_best"] = best
+        row["sar_status"] = str(best.get("status") or "") if best else ""
+    return rows
+
+
+def summarize_sar(rows: list[dict]) -> dict:
+    """The two outcomes side by side, over the rows where BOTH are decided.
+
+    The comparison population is deliberately narrow. A dark row that resolved
+    while its arm is still running, or an arm that closed while the row is still
+    open, describes one mechanism and not the other — averaging over the union
+    would compare two different sets of trades and call the difference a result.
+    So the panel reports the paired population and says how many rows fell out
+    of it, rather than quietly widening the denominator.
+
+    ``@level`` and ``@confirm`` stay apart for the reason the live SAR page
+    keeps them apart: their difference is the cost of confirmation, and it is
+    never zero.
+    """
+    paired: list[tuple[dict, dict]] = []
+    row_only = arm_only = 0
+    for row in rows:
+        arm = row.get("sar_best")
+        row_done = str(row.get("status") or "") not in ("", STATUS_OPEN)
+        row_scored = row_done and str(row.get("status")) != STATUS_INSUFFICIENT
+        arm_done = bool(arm) and str(arm.get("status") or "") not in ("", ARM_RUNNING)
+        arm_scored = arm_done and str(arm.get("status")) != ARM_INSUFFICIENT
+        if row_scored and arm_scored:
+            paired.append((row, arm))
+        elif row_scored and arm is not None:
+            row_only += 1
+        elif arm_scored:
+            arm_only += 1
+
+    def _mean(vals: list[float]) -> Optional[float]:
+        return (sum(vals) / len(vals)) if vals else None
+
+    regular = [v for v in (_f(r.get("r_multiple")) for r, _ in paired) if v is not None]
+    lvl = [v for v in (_f(a.get("r_level")) for _, a in paired) if v is not None]
+    cfm = [v for v in (_f(a.get("r_confirm")) for _, a in paired) if v is not None]
+    lvl_risk = [v for v in (_f(a.get("r_level_risk")) for _, a in paired) if v is not None]
+    cfm_risk = [v for v in (_f(a.get("r_confirm_risk")) for _, a in paired) if v is not None]
+    wins = sum(1 for r, _ in paired if str(r.get("status")) == STATUS_TP1)
+    arm_wins = sum(1 for _, a in paired if (_f(a.get("r_level")) or 0.0) > 0)
+    return {
+        "n": len(paired),
+        "row_only": row_only,
+        "arm_only": arm_only,
+        "regular": {"avg_r": _mean(regular), "n_r": len(regular),
+                    "win_rate": (wins / len(paired)) if paired else None},
+        "sar_level": {"avg_r": _mean(lvl), "n_r": len(lvl),
+                      "avg_r_risk": _mean(lvl_risk), "n_r_risk": len(lvl_risk),
+                      "win_rate": (arm_wins / len(paired)) if paired else None},
+        "sar_confirm": {"avg_r": _mean(cfm), "n_r": len(cfm),
+                        "avg_r_risk": _mean(cfm_risk), "n_r_risk": len(cfm_risk)},
+    }
+
+
 def reduce_state(provenance: dict, rows: list[dict], now: Optional[float] = None) -> dict:
     """Is this page live? Read before any number on it.
 
@@ -435,6 +550,10 @@ async def dark_signals_live(
     payload = vol.dark_signals()
     provenance = vol.dark_signals_provenance()
     rows = reduce_rows(payload)
+    # The second outcome per row. Its own file, because the live SAR ledger is
+    # the population an adoption decision reads and every arm in it belongs to a
+    # delivered signal — these belong to signals nobody received.
+    attach_arms(rows, reduce_arms(vol.dark_sar_arms()))
 
     # One request for the whole futures book, TTL-cached: marking N open rows
     # costs one call rather than N, so the page's cost does not scale with how
@@ -459,6 +578,11 @@ async def dark_signals_live(
     scoped_status = filter_rows(rows, setup=setup, gate=gate)
     selected = filter_rows(rows, setup=setup, gate=gate, status=status)
 
+    # Measured on the rows the page is showing, after every filter — a summary
+    # over the whole ledger beside a filtered table summarises nothing the
+    # reader is looking at (#90/#91).
+    sar_panel = summarize_sar(selected)
+
     # Truncate after filtering, never before (#97). The page says when it bit.
     shown = selected[:TABLE_ROW_CAP]
 
@@ -472,6 +596,7 @@ async def dark_signals_live(
         # Summaries measured on the full selection, never the truncated table.
         "summary": summarize(selected),
         "live": summarize_open(selected),
+        "sar": sar_panel,
         "state": reduce_state(provenance, rows),
         "provenance": provenance,
         "setups": sorted({str(r.get("setup_class") or "") for r in rows if r.get("setup_class")}),
