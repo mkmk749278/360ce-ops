@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}Entry features{% endblock %}
+{% block content %}
+
+<h1>Entry features — MVRTP</h1>
+<p class="muted small">
+  <code>MOVER_TREND_PULLBACK</code> takes its entry from price against three simple
+  moving averages (SMA7 / SMA25 / SMA99 on 15m) plus one ATR for the stop buffer.
+  It reads the 15m volume series and passes it only to <code>consol_break</code> —
+  the two triggers that carry almost all the volume, <code>fast_pullback</code> and
+  <code>deep_pullback</code>, never look at volume at all. Everything below was
+  already sitting in <code>smc_data</code> at that same call and was never read.
+</p>
+<p class="warn small">
+  <strong>Nothing on this page is applied.</strong> Every “keep” column is a
+  question, not a change. The engine emits the identical signal whether this
+  measurement is on or off, and a test on the producing side pins that by
+  comparing the emitted signal both ways.
+</p>
+
+{% if error %}
+<section class="card"><h2>Ledger unavailable</h2><p class="warn">{{ error }}</p></section>
+{% endif %}
+
+<section class="card">
+  <h2>Coverage</h2>
+  {% if coverage.joined %}
+  <div class="summary-row">
+    <span class="stat"><span class="n">{{ coverage.joined }}</span> stamped &amp; closed</span>
+    <span class="stat"><span class="n">{{ coverage.scored }}</span> with an R</span>
+    <span class="stat"><span class="n">{{ coverage.stamps }}</span> stamps total</span>
+    <span class="stat"><span class="n">{{ coverage.stamped_not_closed }}</span> stamped, not yet closed</span>
+  </div>
+  <p class="muted small">
+    A stamp with no closed-signal record is a signal the router dropped, or one
+    still open — counted here rather than dropped, because a join that keeps only
+    what matched reports a book that is not the book. <strong>R divides by the
+    engine's <code>sl_distance_pct_at_entry</code></strong> (the risk the trade was
+    <em>sized</em> for), not the stop it exited on; the gross % sits beside every R
+    because the R-scored subset is not a random sample — rows closed before that
+    field existed carry no denominator.
+  </p>
+  {% else %}
+  <p class="muted small">
+    No stamped signal has closed yet. This is the <em>quiet</em> state, not a
+    fault: stamping happens when a MVRTP signal is created, and a row appears here
+    only once that signal reaches a terminal outcome. If the engine were not
+    stamping at all, the coverage counts above would stay at zero while
+    <code>/track-record</code> kept adding MVRTP rows — that is the comparison to
+    make before calling this broken.
+  </p>
+  {% endif %}
+</section>
+
+{% if coverage.joined %}
+<section class="card">
+  <h2>As of now, versus under one candidate rule</h2>
+  <p class="muted small">
+    Each row asks a single question: if this input had been required at entry,
+    which signals would have gone out, and what would the book have looked like?
+    <strong>“Now” is the book as it actually shipped</strong> — the same rows, every
+    time — so the only thing changing down the table is which subset a rule keeps.
+  </p>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Feature</th><th>Rule</th>
+        <th>Now (avg R)</th><th>Keep (avg R)</th><th>Δ avg R</th>
+        <th>Now (avg %)</th><th>Keep (avg %)</th><th>Δ avg %</th>
+        <th>Kept</th><th>Dropped</th><th title="feature never computed — the rule could not have judged these">Unknown</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in splits %}
+      <tr>
+        <td><strong>{{ s.label }}</strong><br><span class="muted small">{{ s.asks }}</span></td>
+        <td><code>{{ s.direction }} {{ "%.4g"|format(s.threshold) }}</code></td>
+        <td>{% if s.now.avg_r is not none %}{{ "%+.3f"|format(s.now.avg_r) }}<span class="muted small"> (n={{ s.now.scored }})</span>{% else %}—{% endif %}</td>
+        <td>{% if s.keep.avg_r is not none %}{{ "%+.3f"|format(s.keep.avg_r) }}<span class="muted small"> (n={{ s.keep.scored }})</span>{% else %}—{% endif %}</td>
+        <td class="{% if s.delta_avg_r and s.delta_avg_r > 0 %}pos{% elif s.delta_avg_r and s.delta_avg_r < 0 %}neg{% endif %}">{% if s.delta_avg_r is not none %}{{ "%+.3f"|format(s.delta_avg_r) }}{% else %}—{% endif %}</td>
+        <td>{% if s.now.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.now.avg_pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if s.keep.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.keep.avg_pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if s.delta_avg_pnl_pct and s.delta_avg_pnl_pct > 0 %}pos{% elif s.delta_avg_pnl_pct and s.delta_avg_pnl_pct < 0 %}neg{% endif %}">{% if s.delta_avg_pnl_pct is not none %}{{ "%+.2f"|format(s.delta_avg_pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td>{{ s.keep.n }}{% if s.kept_fraction is not none %} <span class="muted small">({{ "%.0f"|format(s.kept_fraction * 100) }}%)</span>{% endif %}</td>
+        <td>{{ s.drop.n }}</td>
+        <td>{% if s.unknown.n %}<span class="warn">{{ s.unknown.n }}</span>{% else %}0{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="warn small">
+    <strong>Read the n and the kept-fraction before the Δ.</strong> A rule that keeps
+    95% of the book has not been tested by this window whatever its Δ says, and a
+    rule whose Δ rests on three trades is not a finding — the window that prompted
+    this work had 46 MVRTP signals, 19 tested cells, and exactly one cleared 95%
+    <em>in the backwards direction</em> against a ~62% chance of a spurious hit.
+    <strong>Unknown</strong> rows are counted apart on purpose: a rule cannot be
+    credited with an outcome it could not have seen, and folding them into “keep”
+    is how a filter takes credit for rows it never filtered.
+  </p>
+</section>
+{% endif %}
+
+{% if missing_counts %}
+<section class="card">
+  <h2>Inputs that did not arrive</h2>
+  <div class="table-scroll">
+  <table>
+    <thead><tr><th>Feature</th><th>Absent on</th><th>of</th></tr></thead>
+    <tbody>
+      {% for k, v in missing_counts.items() | sort %}
+      <tr>
+        <td><code>{{ k }}</code></td>
+        <td class="{% if v >= total_rows %}neg{% endif %}">{{ v }}</td>
+        <td>{{ total_rows }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">
+    A feature absent on <em>every</em> row is a dead upstream, and it looks exactly
+    like a feature nobody uses unless the count is on screen. The engine's
+    <code>entry_feature_inputs</code> liveness probe fails on that condition. A
+    feature absent on <em>some</em> rows is normal — order flow and depth are not
+    guaranteed for a freshly promoted mover.
+  </p>
+</section>
+{% endif %}
+
+{% if rows %}
+<section class="card">
+  <h2>Stamped signals</h2>
+  <div class="actions"><a class="btn" href="/signals/entry-features/export.csv">Download CSV (all rows)</a></div>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Signal</th><th>Symbol</th><th>Side</th><th>Trigger</th><th>Conf</th>
+        <th>Vol ratio</th><th>CVD slope</th><th>Depth (ATR)</th><th>Ext %</th>
+        <th>Lvl dist (R)</th><th>Book imb</th><th>Funding</th>
+        <th>Profile</th><th>PnL %</th><th>R</th><th>Outcome</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><code class="small">{{ r.signal_id }}</code></td>
+        <td>{{ r.symbol }}</td>
+        <td>{{ r.side }}</td>
+        <td><span class="small">{{ r.entry_trigger }}</span></td>
+        <td>{% if r.confidence is not none %}{{ "%.0f"|format(r.confidence) }}{% else %}—{% endif %}</td>
+        <td>{% if r.pullback_vol_ratio is not none %}{{ "%.2f"|format(r.pullback_vol_ratio) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.cvd_slope is not none %}{{ "%+.4g"|format(r.cvd_slope) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.pullback_depth_atr is not none %}{{ "%.2f"|format(r.pullback_depth_atr) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.extension_pct is not none %}{{ "%+.1f"|format(r.extension_pct) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.level_dist_r is not none %}{{ "%.2f"|format(r.level_dist_r) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.book_imbalance is not none %}{{ "%+.2f"|format(r.book_imbalance) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.funding_rate is not none %}{{ "%+.4g"|format(r.funding_rate) }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if r.profile_would_reject is true %}<span class="badge st-partial" title="the pair-tier spread/volume thresholds would have rejected this — MVRTP does not pass `profile` to _pass_basic_filters, so they never applied">would reject</span>{% elif r.profile_would_reject is false %}ok{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="{% if r.pnl_pct and r.pnl_pct > 0 %}pos{% elif r.pnl_pct and r.pnl_pct < 0 %}neg{% endif %}">{% if r.pnl_pct is not none %}{{ "%+.2f"|format(r.pnl_pct) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.r and r.r > 0 %}pos{% elif r.r and r.r < 0 %}neg{% endif %}">{% if r.r is not none %}{{ "%+.2f"|format(r.r) }}{% else %}<span class="muted" title="no entry-risk stamp on the closed-signal record">—</span>{% endif %}</td>
+        <td><span class="small">{{ r.outcome_label }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if row_cap_bit %}
+  <p class="muted small">Showing the newest 200 of {{ total_rows }} joined rows. The CSV carries all of them.</p>
+  {% endif %}
+  <p class="muted small">
+    An em-dash in a feature column means the input was not available for that
+    signal — never that it read zero. A missing order book is not a balanced one,
+    and a missing level book is not a clear path.
+  </p>
+</section>
+{% endif %}
+
+{% endblock %}
