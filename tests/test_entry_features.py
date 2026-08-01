@@ -24,10 +24,28 @@ os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
 
 from app.routes.entry_features import (  # noqa: E402
-    FEATURES,
+    FALLBACK_SPEC,
+    FEATURE_COPY,
+    features_for,
     join_outcomes,
-    split_by_feature,
+    setups_present,
+    split_by_feature as _split,
 )
+
+#: The engine ships this with the ledger. Tests below drive the real reducer
+#: with a real-shaped spec rather than letting each call invent one.
+_SPEC = {
+    "core": ["tp1_r_multiple", "pullback_vol_ratio", "extension_pct"],
+    "paths": {
+        "TREND_PULLBACK_EMA": ["h1_trend_sep_atr", "rsi_at_entry"],
+        "MOVER_AVWAP_SCALP": ["anchor_age_bars", "leg_move_pct"],
+    },
+    "keep_above": ["tp1_r_multiple", "pullback_vol_ratio", "h1_trend_sep_atr"],
+}
+
+
+def split_by_feature(joined, feature, threshold, spec=None):
+    return _split(joined, feature, threshold, spec if spec is not None else _SPEC)
 
 
 def _stamp(sid, **kw):
@@ -113,8 +131,12 @@ class TestNowVsLater:
     def test_direction_is_inverted_for_features_where_high_is_the_problem(self):
         """`extension_pct` keeps rows BELOW the threshold — a rule that kept the
         most extended entries would be backwards, and the arrow on screen is how
-        the reader knows which way it runs."""
-        assert FEATURES["extension_pct"]["keep_above"] is False
+        the reader knows which way it runs.
+
+        The direction comes from the engine's spec, not from an ops-side flag:
+        ops does not decide which way a feature it does not stamp should filter.
+        """
+        assert "extension_pct" not in _SPEC["keep_above"]
         stamps = [_stamp("a", extension_pct=2.0), _stamp("b", extension_pct=40.0)]
         recs = [_rec("a", 3.0), _rec("b", -3.0)]
         out = split_by_feature(join_outcomes(stamps, recs)[0], "extension_pct", 15.0)
@@ -143,25 +165,100 @@ class TestNowVsLater:
         assert out["kept_fraction"] is None
 
 
-class TestOpsMirrorsTheEngine:
-    def test_every_rendered_feature_declares_its_direction_and_question(self):
-        """A threshold with no stated direction is unreadable, and a split with
-        no stated question invites the reader to invent one."""
-        for name, spec in FEATURES.items():
-            assert isinstance(spec.get("keep_above"), bool), name
-            assert spec.get("asks"), name
-            assert spec.get("label"), name
-            assert spec.get("default") is not None, name
+class TestTheRegistryIsNotMirroredHere:
+    """Which features a path declares and which way a rule filters are decided
+    by the engine that stamps them, and arrive in the ledger's ``spec``.
 
-    def test_the_keep_above_set_matches_the_engines(self):
-        """Ops ports the engine's math; it does not invent it. These two
-        drifting would put the arrow on screen at odds with the split beneath
-        it — the mirror problem this repo has already paid for once."""
-        engine_keep_above = {"pullback_vol_ratio", "level_dist_r", "cvd_slope"}
-        ops_keep_above = {k for k, v in FEATURES.items() if v["keep_above"]}
-        assert engine_keep_above <= ops_keep_above, (
-            "engine _KEEP_ABOVE has a feature ops filters the other way"
-        )
+    Ops kept its own copy of ``MEASUREMENT_SUFFIXES`` once; it drifted and
+    inflated the Strategy Lab rollup for a week. The fix for a drifting mirror
+    is not a second mirror.
+    """
+
+    def test_the_direction_comes_from_the_spec_not_from_ops(self):
+        rows = [
+            {"f": 1.0, "r": 1.0, "pnl_pct": 1.0},
+            {"f": 9.0, "r": -1.0, "pnl_pct": -1.0},
+        ]
+        above = split_by_feature(rows, "f", 5.0, {"keep_above": ["f"]})
+        below = split_by_feature(rows, "f", 5.0, {"keep_above": []})
+        assert above["direction"] == "≥" and above["keep"]["n"] == 1
+        assert below["direction"] == "≤" and below["keep"]["n"] == 1
+        assert above["keep"]["avg_r"] != below["keep"]["avg_r"]
+
+    def test_columns_are_core_plus_the_selected_path(self):
+        tpe = features_for(_SPEC, "TREND_PULLBACK_EMA")
+        mvavw = features_for(_SPEC, "MOVER_AVWAP_SCALP")
+        assert tpe[: len(_SPEC["core"])] == _SPEC["core"]
+        assert "h1_trend_sep_atr" in tpe
+        # The point of splitting: neither path's own features leak onto the other.
+        assert "anchor_age_bars" not in tpe
+        assert "h1_trend_sep_atr" not in mvavw
+
+    def test_with_no_path_selected_the_union_is_shown_core_first(self):
+        every = features_for(_SPEC, "")
+        assert every[: len(_SPEC["core"])] == _SPEC["core"]
+        assert {"h1_trend_sep_atr", "anchor_age_bars"} <= set(every)
+        assert len(every) == len(set(every)), "a feature must not appear twice"
+
+    def test_an_engine_feature_ops_has_no_copy_for_still_renders(self):
+        """Silently dropping an unknown feature would make a newly added engine
+        input invisible on the page that exists to read it."""
+        out = split_by_feature([], "a_brand_new_engine_feature", 1.0)
+        assert out["label"] == "a_brand_new_engine_feature"
+
+    def test_the_fallback_is_only_a_fallback(self):
+        """It exists so a pre-`spec` ledger still renders. It is deliberately
+        minimal — a full second registry here is the mirror we are avoiding."""
+        assert FALLBACK_SPEC["paths"] == {}
+        assert FALLBACK_SPEC["core"]
+
+    def test_every_feature_ops_has_copy_for_states_its_question(self):
+        """A split with no stated question invites the reader to invent one."""
+        for name, copy in FEATURE_COPY.items():
+            assert copy.get("asks"), name
+            assert copy.get("label"), name
+            assert copy.get("default") is not None, name
+
+
+class TestTimeframesAreNotPooledSilently:
+    """TPE triggers on 5m and the mover paths on 15m. A volume ratio over 5m
+    bars and one over 15m bars are different measurements, so a split that spans
+    both has to say so rather than presenting one number."""
+
+    def test_a_single_timeframe_split_is_not_flagged(self):
+        rows = [{"tf_name": "5m", "f": 1.0, "r": 1.0, "pnl_pct": 1.0}]
+        out = split_by_feature(rows, "f", 0.5, {"keep_above": ["f"]})
+        assert out["timeframes"] == ["5m"]
+        assert out["mixed_timeframes"] is False
+
+    def test_a_split_spanning_two_series_is_flagged(self):
+        rows = [
+            {"tf_name": "5m", "f": 1.0, "r": 1.0, "pnl_pct": 1.0},
+            {"tf_name": "15m", "f": 2.0, "r": -1.0, "pnl_pct": -1.0},
+        ]
+        out = split_by_feature(rows, "f", 0.5, {"keep_above": ["f"]})
+        assert out["timeframes"] == ["15m", "5m"]
+        assert out["mixed_timeframes"] is True
+
+
+class TestTheSelectorDescribesTheWholeBook:
+    def test_counts_come_from_the_data_not_a_hardcoded_list(self):
+        """A path that starts or stops stamping must be visible rather than
+        silently absent — a fixed list shows exactly the paths someone typed."""
+        rows = [
+            {"setup_class": "MOVER_AVWAP_SCALP"},
+            {"setup_class": "MOVER_AVWAP_SCALP"},
+            {"setup_class": "TREND_PULLBACK_EMA"},
+            {"setup_class": "A_PATH_NOBODY_HAS_HEARD_OF"},
+        ]
+        assert setups_present(rows) == [
+            ("MOVER_AVWAP_SCALP", 2),
+            ("A_PATH_NOBODY_HAS_HEARD_OF", 1),
+            ("TREND_PULLBACK_EMA", 1),
+        ]
+
+    def test_a_row_with_no_setup_is_named_not_dropped(self):
+        assert setups_present([{}]) == [("UNKNOWN", 1)]
 
 
 class TestRoute:
@@ -296,3 +393,125 @@ class TestRegimeProvenance:
         /track-record uses for pre-#817 records."""
         joined, _ = join_outcomes([_stamp("s1")], [_rec("s1", 1.0)])
         assert joined[0]["entry_regime"] == "UNPLACED"
+
+
+class TestPerPathRendering:
+    """The page's primary control is the path selector, not a filter.
+
+    A split drawn across paths that share no trigger, timeframe or stop geometry
+    moves with the setup mix as much as with the feature.
+    """
+
+    def _client(self, stamps, records, spec=None):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        payload = {"schema": 2, "written_at": 1.0, "rows": stamps}
+        if spec is not None:
+            payload["spec"] = spec
+
+        class _DV:
+            def entry_features(self):
+                return payload
+
+            def signal_performance(self):
+                return records
+
+        # Installed by the caller INSIDE the context manager: app startup
+        # assigns a real DataVolumeReader over app.state.data_volume, so a stub
+        # set before entering is silently replaced and every assertion below
+        # would run against an empty ledger.
+        self._stub = _DV()
+        return TestClient(app)
+
+    def _login(self, client):
+        from app.main import app
+
+        client.post("/login", data={"password": os.environ["OPS_AUTH_TOKEN"]})
+        app.state.data_volume = self._stub
+
+    @staticmethod
+    def _book():
+        stamps = [
+            {"signal_id": "t1", "setup_class": "TREND_PULLBACK_EMA",
+             "symbol": "BTCUSDT", "tf_name": "5m", "h1_trend_sep_atr": 1.2,
+             "tp1_r_multiple": 0.8},
+            {"signal_id": "m1", "setup_class": "MOVER_AVWAP_SCALP",
+             "symbol": "ETHUSDT", "tf_name": "15m", "anchor_age_bars": 30.0,
+             "tp1_r_multiple": 1.0},
+        ]
+        recs = [
+            {"signal_id": "t1", "pnl_pct": -2.0, "sl_distance_pct_at_entry": 2.0},
+            {"signal_id": "m1", "pnl_pct": 3.0, "sl_distance_pct_at_entry": 3.0},
+        ]
+        return stamps, recs
+
+    def test_selecting_a_path_shows_only_that_path_s_features(self):
+        stamps, recs = self._book()
+        client = self._client(stamps, recs, spec=_SPEC)
+        with client:
+            self._login(client)
+            tpe = client.get("/signals/entry-features?setup=TREND_PULLBACK_EMA").text
+            assert "h1_trend_sep_atr" in tpe or "1H EMA21/50 separation" in tpe
+            # The mover path's own question must not appear on the TPE view.
+            assert "Anchor age" not in tpe
+
+    def test_the_selector_counts_the_whole_book_not_the_filtered_view(self):
+        """A selector applied to its own counts makes each option describe only
+        itself — #90's rule, one page over."""
+        stamps, recs = self._book()
+        client = self._client(stamps, recs, spec=_SPEC)
+        with client:
+            self._login(client)
+            page = client.get("/signals/entry-features?setup=TREND_PULLBACK_EMA").text
+            # Both paths still offered, each with its full count.
+            assert "MOVER_AVWAP_SCALP (1)" in page
+            assert "TREND_PULLBACK_EMA (1)" in page
+
+    def test_the_unfiltered_view_warns_that_it_pools_paths(self):
+        stamps, recs = self._book()
+        client = self._client(stamps, recs, spec=_SPEC)
+        with client:
+            self._login(client)
+            page = client.get("/signals/entry-features").text
+            assert "Showing every path at once" in page
+
+    def test_a_ledger_without_a_spec_says_it_fell_back(self):
+        """A silent fallback is a mirror nobody knows is a mirror."""
+        stamps, recs = self._book()
+        client = self._client(stamps, recs, spec=None)
+        with client:
+            self._login(client)
+            page = client.get("/signals/entry-features").text
+            assert "ops fallback" in page
+
+    def test_a_ledger_with_a_spec_does_not_show_the_fallback_warning(self):
+        stamps, recs = self._book()
+        client = self._client(stamps, recs, spec=_SPEC)
+        with client:
+            self._login(client)
+            assert "ops fallback" not in client.get("/signals/entry-features").text
+
+    def test_the_number_of_cells_drawn_is_on_screen(self):
+        """"Best of N" is not a fact about the winner until N is on screen."""
+        stamps, recs = self._book()
+        client = self._client(stamps, recs, spec=_SPEC)
+        with client:
+            self._login(client)
+            assert "cells drawn on this view" in client.get(
+                "/signals/entry-features"
+            ).text
+
+    def test_the_export_respects_the_selected_path(self):
+        stamps, recs = self._book()
+        client = self._client(stamps, recs, spec=_SPEC)
+        with client:
+            self._login(client)
+            csv = client.get(
+                "/signals/entry-features/export.csv?setup=TREND_PULLBACK_EMA"
+            ).text
+            assert "BTCUSDT" in csv and "ETHUSDT" not in csv
+            # ...but every path's columns are present, so a per-path column does
+            # not vanish because of the current filter.
+            assert "anchor_age_bars" in csv

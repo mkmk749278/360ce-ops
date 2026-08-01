@@ -236,7 +236,13 @@
         <td class="pos">{{ a.tp1 }}</td>
         <td class="neg">{{ a.sl }}</td>
         <td>{{ a.expired }}</td>
-        <td class="{% if a.insufficient %}neg{% endif %}">{{ a.insufficient }}</td>
+        <td class="{% if a.insufficient %}neg{% endif %}"
+            title="{{ a.insufficient_no_walk }} never walkable (candles stopped), {{ a.insufficient_partial_window }} walked with holes in the window — different faults, different fixes">
+          {{ a.insufficient }}
+          {% if a.insufficient_partial_window %}
+          <span class="muted small">({{ a.insufficient_partial_window }} partial)</span>
+          {% endif %}
+        </td>
         <td>{% if a.win_rate is not none %}{{ "%.0f"|format(a.win_rate * 100) }}%
             <span class="muted small">of {{ a.decided }}</span>
             {% else %}<span class="muted" title="nothing has been decided for this path yet — not the same as none of them winning">—</span>{% endif %}</td>
@@ -296,6 +302,7 @@
         <td>{% if r.get('status') == 'CLOSED_TP1' %}<span class="badge st-done">TP1</span>
             {% elif r.get('status') == 'CLOSED_SL' %}<span class="badge sev-high">SL</span>
             {% elif r.get('status') == 'EXPIRED' %}<span class="badge st-partial">expired</span>
+            {% elif r.get('status') == 'INSUFFICIENT' and r.get('insufficient_reason') == 'partial_window' %}<span class="badge st-partial" title="walked, but the walk did not cover the row's window — 'nothing happened' would be a claim about bars nobody looked at, so it earned no verdict rather than a 0R expiry">partial window</span>
             {% elif r.get('status') == 'INSUFFICIENT' %}<span class="badge st-partial" title="past the horizon and never walkable — its candles stopped arriving, so it earned no verdict and is scored nowhere">unmeasured</span>
             {% else %}<span class="badge st-open">open</span>{% endif %}
             {% if r.get('ambiguous_bar') %}<span class="badge sev-high" title="SL and TP1 both touched inside one bar; OHLC cannot order them, so this was resolved pessimistically">ambig</span>{% endif %}</td>

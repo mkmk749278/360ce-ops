@@ -24,13 +24,17 @@ from app.routes.dark_signals_live import (  # noqa: E402
 
 
 def _row(setup="MEAN_REVERT", gate="setup_compat:regime_STRONG_TREND",
-         status="OPEN", r=None, ts=1_700_000_000.0, conf=70.0):
-    return {
+         status="OPEN", r=None, ts=1_700_000_000.0, conf=70.0,
+         insufficient_reason=None):
+    row = {
         "symbol": "AAAUSDT", "side": "LONG", "setup_class": setup,
         "dark_gate": gate, "status": status, "r_multiple": r,
         "emitted_at": ts, "confidence": conf, "entry": 100.0,
         "stop_loss": 97.0, "tp1": 106.0,
     }
+    if insufficient_reason is not None:
+        row["insufficient_reason"] = insufficient_reason
+    return row
 
 
 def _payload(rows):
@@ -415,6 +419,35 @@ def test_an_unmeasured_row_is_kept_out_of_every_rate():
 def test_an_unmeasured_row_is_not_counted_as_open_either():
     agg = summarize([_row(status="INSUFFICIENT")])["by_setup"][0]
     assert agg["open"] == 0 and agg["resolved"] == 0
+
+
+def test_the_two_causes_of_unmeasured_are_counted_apart():
+    """A series that never arrived and a series with holes are different faults
+    with different fixes, so the page must never pool them into one number.
+
+    ``partial_window`` arrived with the engine fix of 2026-08-01: a row whose
+    walk did not cover its window used to be called an EXPIRED and scored 0R,
+    which is a claim about bars nobody looked at. In the owner's window ROBOUSDT
+    expired on 309 bars of a 362-minute window and ARBUSDT on 329 of 365.
+    """
+    agg = summarize([
+        _row(status="INSUFFICIENT", insufficient_reason="no_walk"),
+        _row(status="INSUFFICIENT", insufficient_reason="partial_window"),
+        _row(status="INSUFFICIENT", insufficient_reason="partial_window"),
+    ])["by_setup"][0]
+    assert agg["insufficient"] == 3
+    assert agg["insufficient_no_walk"] == 1
+    assert agg["insufficient_partial_window"] == 2
+    # Still out of every rate, whichever cause it was.
+    assert agg["resolved"] == 0 and agg["decided"] == 0
+
+
+def test_a_row_with_no_reason_stamp_is_not_silently_called_partial():
+    """A missing stamp is not a pass. Rows written before the engine stamped a
+    reason fall to the original cause rather than the new one."""
+    agg = summarize([_row(status="INSUFFICIENT")])["by_setup"][0]
+    assert agg["insufficient_no_walk"] == 1
+    assert agg["insufficient_partial_window"] == 0
 
 
 # --------------------------------------------------------------------------- #
