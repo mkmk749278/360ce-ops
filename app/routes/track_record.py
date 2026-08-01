@@ -19,12 +19,18 @@ Four rules it inherits from the pages that got them wrong first:
 * **R is the headline, not portfolio %.** A "+34% last month" needs an invented
   position size, and the router's ``MAX_SAME_DIRECTION_GLOBAL=3`` cap means two
   users on identical settings get different fills — so a portfolio return is not
-  a fact about anyone. ``R = pnl_pct / sl_distance_pct`` is, and it is the same
-  denominator the SAR arm and the edge matrix use.
-* **Refuse, don't clamp.** A record without a usable ``stop_loss`` has no R. It
-  is counted in the trade count and excluded from the R average, and the page
-  says how many were excluded — never scored 0R, which would drag every average
-  toward zero and read as mediocrity rather than as missing data.
+  a fact about anyone. ``R = pnl_pct / sl_distance_pct_at_entry`` is, and it is
+  the same denominator the SAR arm and the edge matrix use.
+* **Divide by the risk taken, not the stop on the record.** The engine moves a
+  signal's stop in place — BE shift, TP1 park, trail — so ``stop_loss`` is the
+  stop as of the *exit*. This page divided by it until 2026-08-01, which scored
+  a BE-shifted −0.1% stop-out as a full −1.00R loss; 9 of 28 SL_HITs in that
+  window were that row and it flipped the sign of the headline. Engine
+  ``sl_distance_pct_at_entry`` is the risk the trade was sized for.
+* **Refuse, don't clamp.** A record without a usable entry risk has no R. It is
+  counted in the trade count and excluded from the R average, and the page says
+  how many were excluded **and why** — never scored 0R, which would drag every
+  average toward zero and read as mediocrity rather than as missing data.
 * **Bucket by CLOSE time, not entry.** A day's PnL is the PnL realised that day.
   Bucketing by entry would credit Monday with a trade that closed on Thursday.
 * **Disclose concentration.** Overlapping entries into one move are not
@@ -99,26 +105,57 @@ def _close_time(rec: dict) -> Optional[datetime]:
 def record_r(rec: dict) -> Optional[float]:
     """R for one closed signal, or None when the record cannot support one.
 
-    ``R = pnl_pct / sl_distance_pct``, the same denominator the SAR arm and the
-    edge matrix divide by, so a number here is comparable with one there.
+    ``R = pnl_pct / sl_distance_pct_at_entry``, the same denominator the SAR arm
+    and the edge matrix divide by, so a number here is comparable with one there.
 
-    Returns None rather than 0.0 when the geometry is missing. A missing stop is
-    "we cannot score this", not "this scored flat", and the two must stay
-    distinguishable — scoring it 0R would pull every average toward zero and
-    make a data gap read as mediocre performance.
+    **The denominator is the risk the trade was sized for, and ``stop_loss`` is
+    not it.** The engine mutates the signal's stop in place as the trade
+    progresses — BE shift, TP1 park, trail — so the ``stop_loss`` on the record
+    is the stop as of the *exit*. Dividing by it scored a BE-shifted −0.1%
+    stop-out as exactly −1.00R, indistinguishable from a trade that gave back
+    its whole designed risk. On the 2026-07-29→08-01 window that was 9 of 28
+    SL_HITs and it flipped the sign of the book: −0.088R against a true +0.160R
+    (2026-08-01). Engine ``sl_distance_pct_at_entry`` carries the real one.
+
+    Returns None rather than 0.0 when the geometry is missing. A missing
+    denominator is "we cannot score this", not "this scored flat", and the two
+    must stay distinguishable — scoring it 0R would pull every average toward
+    zero and make a data gap read as mediocre performance. Records closed before
+    the engine stamp exists carry no usable risk and are refused here; the page
+    surfaces them as their own bucket rather than silently shrinking the
+    population it averages.
     """
     try:
-        entry = float(rec.get("entry") or 0.0)
-        stop = float(rec.get("stop_loss") or 0.0)
+        sl_distance_pct = float(rec.get("sl_distance_pct_at_entry") or 0.0)
         pnl = float(rec.get("pnl_pct") or 0.0)
     except (TypeError, ValueError):
         return None
-    if entry <= 0.0 or stop <= 0.0:
-        return None
-    sl_distance_pct = abs(entry - stop) / entry * 100.0
     if sl_distance_pct <= 0.0:
         return None
     return pnl / sl_distance_pct
+
+
+def unscored_reason(rec: dict) -> Optional[str]:
+    """Why this record has no R — or None when it has one.
+
+    Two states that look identical on a page and have different fixes, so they
+    are never pooled into one sentence:
+
+    * ``awaiting_engine_stamp`` — closed before the engine carried
+      ``sl_distance_pct_at_entry`` (2026-08-01). The risk it was sized for is
+      genuinely unrecoverable: the stop on the record has already been moved.
+      This population only shrinks, and it shrinks on its own.
+    * ``no_geometry`` — stamped by the current engine and still unusable, i.e.
+      a signal whose evaluator never recorded an entry→SL distance. That is a
+      producer-side fault and does *not* age out; if this count is non-zero and
+      not falling, something upstream is failing to stamp.
+    """
+    try:
+        if float(rec.get("sl_distance_pct_at_entry") or 0.0) > 0.0:
+            return None
+    except (TypeError, ValueError):
+        pass
+    return "awaiting_engine_stamp" if "sl_distance_pct_at_entry" not in rec else "no_geometry"
 
 
 def _regime(rec: dict) -> str:
@@ -195,6 +232,7 @@ def reduce_records(records: Any) -> list[dict]:
                 "stop_loss": rec.get("stop_loss"),
                 "pnl_pct": rec.get("pnl_pct"),
                 "r_multiple": record_r(rec),
+                "unscored_reason": unscored_reason(rec),
                 "outcome": str(rec.get("outcome_label") or ""),
                 "hit_sl": bool(rec.get("hit_sl")),
                 "hit_tp": int(rec.get("hit_tp") or 0),
@@ -213,6 +251,7 @@ def reduce_records(records: Any) -> list[dict]:
             "stop_loss": rec.get("stop_loss"),
             "pnl_pct": rec.get("pnl_pct"),
             "r_multiple": record_r(rec),
+            "unscored_reason": unscored_reason(rec),
             "outcome": str(rec.get("outcome_label") or ""),
             "hit_sl": bool(rec.get("hit_sl")),
             "hit_tp": int(rec.get("hit_tp") or 0),
@@ -302,6 +341,8 @@ def summarize(rows: list[dict]) -> dict:
       gap between the two is shown rather than absorbed.
     """
     scored = [r for r in rows if r["r_multiple"] is not None]
+    awaiting = sum(1 for r in rows if r.get("unscored_reason") == "awaiting_engine_stamp")
+    no_geometry = sum(1 for r in rows if r.get("unscored_reason") == "no_geometry")
     r_values = [float(r["r_multiple"]) for r in scored]
     wins = sum(1 for v in r_values if v > 0)
     pnls = []
@@ -317,6 +358,10 @@ def summarize(rows: list[dict]) -> dict:
         "rows_per_move": (len(rows) / moves) if moves else None,
         "scored": len(scored),
         "unscored": len(rows) - len(scored),
+        # Named apart because the fixes differ: one ages out on its own, the
+        # other is a producer-side fault that does not.
+        "unscored_awaiting_stamp": awaiting,
+        "unscored_no_geometry": no_geometry,
         "wins": wins,
         "losses": len(r_values) - wins,
         "win_rate": (wins / len(r_values)) if r_values else None,

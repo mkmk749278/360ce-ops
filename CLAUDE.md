@@ -233,12 +233,27 @@ Three rules the page carries, all ports rather than inventions:
 - **R, not portfolio %.** A portfolio return needs an assumed position size, and the
   engine's `MAX_SAME_DIRECTION_GLOBAL=3` means two users on identical settings get
   different fills — so a percentage would not be a fact about anyone.
-  `R = pnl_pct / sl_distance_pct` is the same denominator the SAR arm and the edge
-  matrix divide by, so a number here is comparable with one there.
-- **Refuse, don't clamp.** A record without a usable `stop_loss` has no R: counted in
-  the trade count, excluded from every R figure, and the shortfall stated on screen.
-  Scoring it 0R would drag the averages toward zero and make missing data read as
-  mediocre performance.
+  `R = pnl_pct / sl_distance_pct_at_entry` is the same denominator the SAR arm and
+  the edge matrix divide by, so a number here is comparable with one there.
+- **Divide by the risk taken, not the stop on the record (2026-08-01).** This page
+  divided by `stop_loss` for its first three days, and the engine *moves* a signal's
+  stop in place as the trade runs — BE shift, TP1 park, trail — so that field is the
+  stop as of the **exit**. A trade BE-shifted and then stopped out for −0.1% scored
+  exactly −1.00R, indistinguishable from one that gave back its whole designed risk:
+  9 of 28 SL_HITs in the owner's window, and the closed book read −0.088R against a
+  true +0.160R. **The sign of the headline was an artifact of the denominator.** Ask
+  of every ratio here whether its denominator is still the thing it was when the
+  numerator started. Engine `sl_distance_pct_at_entry` (#817's class, fixed the same
+  way) is the one to use.
+- **Refuse, don't clamp — and name the reason.** A record without a usable entry
+  risk has no R: counted in the trade count, excluded from every R figure, and the
+  shortfall stated on screen. Scoring it 0R would drag the averages toward zero and
+  make missing data read as mediocre performance. The shortfall is split on screen
+  into `awaiting_engine_stamp` (closed before the field existed — unrecoverable,
+  because the stop has already moved, and it shrinks on its own) and `no_geometry`
+  (stamped by today's engine and still unusable — a producer fault that does *not*
+  age out). Pooling them would report a live fault that is not happening, which is
+  this repo's own "blank needs a cause before it gets a caption" rule.
 - **Bucket by CLOSE time.** A day's PnL is the PnL realised that day; bucketing by
   entry credits Monday with a trade that closed Thursday.
 
