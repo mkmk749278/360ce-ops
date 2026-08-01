@@ -262,3 +262,37 @@ class TestRouteOrdering:
             "entry_features must be registered before signal_detail, whose "
             "/signals/{signal_id} route matches any /signals/<literal>"
         )
+
+
+class TestRegimeProvenance:
+    """The regime on a joined row comes from the closed-signal record.
+
+    Engine-side, ``sig.entry_regime`` is written by
+    ``scanner._populate_signal_context`` — which runs AFTER the evaluator that
+    produces the stamp. The first cut of the stamp read the attribute there and
+    recorded "" on every row; nothing crashed, and the per-regime split would
+    have silently described one undifferentiated bucket.
+
+    Fixed on the producing side. This page prefers the record regardless,
+    because the scanner's value is the finalised one.
+    """
+
+    def test_the_record_wins_over_the_stamp(self):
+        joined, _ = join_outcomes(
+            [_stamp("s1", entry_regime="RANGING")],
+            [_rec("s1", 1.0, entry_regime="TRENDING_UP")],
+        )
+        assert joined[0]["entry_regime"] == "TRENDING_UP"
+
+    def test_the_stamp_is_the_fallback_when_the_record_predates_the_field(self):
+        joined, _ = join_outcomes(
+            [_stamp("s1", entry_regime="VOLATILE")], [_rec("s1", 1.0)]
+        )
+        assert joined[0]["entry_regime"] == "VOLATILE"
+
+    def test_neither_source_yields_unplaced_not_an_empty_string(self):
+        """An empty label renders as a nameless bucket that reads like a real
+        one. UNPLACED says which rows could not be placed — the same word
+        /track-record uses for pre-#817 records."""
+        joined, _ = join_outcomes([_stamp("s1")], [_rec("s1", 1.0)])
+        assert joined[0]["entry_regime"] == "UNPLACED"

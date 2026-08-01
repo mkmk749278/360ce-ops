@@ -150,6 +150,16 @@ def join_outcomes(stamps: Any, records: Any) -> tuple[list[dict], dict]:
             "r": (pnl / sl_pct) if (pnl is not None and sl_pct and sl_pct > 0) else None,
             "outcome_label": str(rec.get("outcome_label") or ""),
             "symbol": str(rec.get("symbol") or s.get("symbol") or ""),
+            # The closed-signal record is authoritative: the scanner finalises
+            # entry_regime in _populate_signal_context, which runs after the
+            # evaluator that produced the stamp. The stamp carries the
+            # evaluator's own view and is the fallback. Where the two disagree
+            # the scanner reclassified between evaluation and dispatch — that
+            # is information, not a conflict, so neither overwrites the other
+            # in the ledger.
+            "entry_regime": str(
+                rec.get("entry_regime") or s.get("entry_regime") or ""
+            ) or "UNPLACED",
         })
         joined.append(row)
     return joined, {
