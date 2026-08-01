@@ -209,6 +209,49 @@ Two rules the page learned the day after it shipped:
   publishes **both** denominators — every marked row, and only the rows still being
   advanced — which agree while the lane is healthy and diverge exactly when it is not.
 
+## `/signals/entry-features` — now vs later, on the same rows
+
+Added 2026-08-01 (engine `src/entry_features.py`) for the owner's question:
+*"taking entry is matter, how we are taking entry based on only EMA or what,
+what if we add some more data to that"* — and *"we need to know the difference
+as of now vs later"*.
+
+`MOVER_TREND_PULLBACK` is ~94% of the delivered book and takes its entry from
+price against three **simple** MAs (SMA7/25/99 on 15m) plus one ATR. It reads the
+15m volume series and hands it only to `_mover_consol_break`; `fast_pullback` and
+`deep_pullback` — the two triggers carrying nearly all the volume — never look at
+volume. `smc_data` arrives at that same call carrying CVD, order-book depth,
+funding, liquidation clusters and the level book, and the path reads none of it.
+The engine now stamps all of them at signal creation and applies nothing.
+
+Rules specific to this page:
+
+- **Three buckets, never two.** `keep` / `drop` / **`unknown`**. Folding rows
+  whose feature never computed into `keep` is how a candidate rule takes credit
+  for rows it never filtered. The unknown count is on screen for every split.
+- **The baseline does not move.** "Now" is the whole joined book on every row of
+  the table, so the only thing changing down the page is which subset a rule
+  keeps. A test asserts `now` is identical across two different thresholds — if
+  it drifted, every Δ would be measured against a different thing.
+- **Read n and kept-fraction before Δ.** A rule keeping 95% of the book has not
+  been tested whatever its Δ says. The window that prompted the work had 46 MVRTP
+  signals and 19 tested cells, one of which cleared 95% *in the backwards
+  direction* against a ~62% familywise chance of a spurious hit.
+- **Both denominators, as everywhere else.** R divides by the engine's
+  `sl_distance_pct_at_entry` (#848); gross % sits beside it because the R-scored
+  subset is not a random sample of the book.
+- **An em-dash is not a zero.** A missing order book is not balanced depth; a
+  missing level book is not a clear path. The engine returns `None` with a reason
+  and this page renders the dash.
+
+**Route ordering, paid for on the first cut:** `signal_detail` registers
+`/signals/{signal_id}`, which matches any `/signals/<literal>`. This page was
+included *after* it, so requests 404'd while its route object sat in `app.routes`
+looking perfectly registered — the debugging cost was entirely in trusting the
+route list over the request. Every literal page under `/signals/` must be
+included **before** `signal_detail.router`; `tests/test_entry_features.py`
+asserts the ordering in `app/main.py` as well as the live request.
+
 ## Recorded vs reconstructed — the line `/track-record` must not cross
 
 Added 2026-07-28 (#98) for the owner's paper-trading problem: per-user paper books

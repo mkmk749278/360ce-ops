@@ -56,6 +56,15 @@ DARK_EMISSION_FILE = f"dark_signals_live_v{DARK_EMISSION_VERSION}.json"
 DARK_SAR_VERSION = 1
 DARK_SAR_FILE = f"dark_sar_arms_v{DARK_SAR_VERSION}.json"
 
+#: MVRTP entry-feature stamps (engine ``src/entry_features.py``). What CVD,
+#: book depth, funding, the level book and pullback shape said at the moment
+#: each MOVER_TREND_PULLBACK signal was created — inputs that path has never
+#: read. Stamps only: this file carries no outcomes, because outcomes come from
+#: ``signal_performance.json`` joined on ``signal_id``. Deliberately no second
+#: forward-resolver anywhere in this lane.
+ENTRY_FEATURES_VERSION = 1
+ENTRY_FEATURES_FILE = f"entry_features_v{ENTRY_FEATURES_VERSION}.json"
+
 _SAR_LIVE_RE = re.compile(r"^sar_live_arms_v(\d+)\.json$")
 
 
@@ -76,6 +85,21 @@ class DataVolumeReader:
 
     def signal_performance(self) -> Any:
         return self._load("signal_performance.json")
+
+    def entry_features(self) -> Any:
+        """MVRTP entry-time feature stamps (engine ``src/entry_features.py``).
+
+        Shape::
+
+            {"schema": 1, "written_at": <epoch>, "rows": [<stamp>, ...]}
+
+        Each row is one MOVER_TREND_PULLBACK signal at creation, carrying the
+        inputs the evaluator ignores. **No outcome fields** — those are joined
+        from ``signal_performance()`` on ``signal_id``, so this lane inherits
+        the closed-signal record's correctness (including the #848 entry-risk
+        denominator) instead of growing a resolver of its own.
+        """
+        return self._load(ENTRY_FEATURES_FILE)
 
     def invalidation_records(self) -> Any:
         return self._load("invalidation_records.json")
