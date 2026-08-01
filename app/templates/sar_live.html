@@ -326,7 +326,7 @@
         {% if tab == 'resolved' %}
         <th>Anchor</th><th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th>R @level</th><th>R @confirm</th><th>R @level, risk</th><th>Confirm cost</th><th>Bars</th>
         {% else %}
-        <th>Last advance</th><th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>SAR risk</th><th>MFE</th><th>Bars</th>
+        <th>Last advance</th><th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>SAR risk</th><th title="maximum favourable excursion">MFE</th><th title="maximum adverse excursion — how far this arm went against us first">MAE</th><th>Bars</th>
         {% endif %}
       </tr>
     </thead>
@@ -399,6 +399,9 @@
             {% if r.get('handover_wider_than_sl') %}<span class="badge sev-high" title="SAR took over at a stop wider than the signal's own SL — this arm carries more risk than the trade was sized for">wider</span>{% endif %}
             {% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{% if r.mfe_pct is not none %}{{ "%.2f"|format(r.mfe_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if r.get('mae_pct') %}neg{% endif %}"
+            title="how far this arm went against us before it resolved">
+          {% if r.get('mae_pct') is not none %}{{ "%.2f"|format(r.get('mae_pct')) }}%{% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{{ r.bars_seen }}</td>
         {% endif %}
       </tr>

@@ -722,3 +722,45 @@ def test_the_page_says_the_empty_panel_is_not_a_fault():
         client.__exit__(None, None, None)
     assert "No row has both verdicts yet" in r.text
     assert "not a fault" in r.text
+
+
+class TestAdverseExcursionReachesTheSurface:
+    """MAE is only useful if it is readable — a field the engine writes and no
+    page renders is the #817 shape, and this one exists specifically to settle
+    an argument the owner is having right now.
+
+    Without it, "would a tighter stop have helped" can only be bounded: on the
+    2026-08-01 window the optimistic answer (+0.203R) and the pessimistic one
+    differed by more than the whole edge under discussion, because the gap is
+    exactly "did the winners survive the tighter stop" and nothing counted it.
+    """
+
+    def test_the_export_carries_both_halves_of_the_excursion(self):
+        from app.routes.dark_signals_live import _DARK_COLS
+
+        assert "mfe_pct" in _DARK_COLS
+        assert "mae_pct" in _DARK_COLS, (
+            "MFE without MAE cannot answer any stop-distance question"
+        )
+
+    def test_the_export_carries_the_walk_coverage_and_its_cause(self):
+        """An expiry is only as good as the walk behind it, and INSUFFICIENT has
+        two causes that must never be pooled."""
+        from app.routes.dark_signals_live import _DARK_COLS
+
+        assert "window_coverage" in _DARK_COLS
+        assert "insufficient_reason" in _DARK_COLS
+
+    def test_the_page_renders_mae_beside_mfe(self):
+        row = _row(status="CLOSED_SL", r=-1.0)
+        row["mfe_pct"] = 0.42
+        row["mae_pct"] = 3.10
+
+        client = _client(payload=_payload([row]))
+        try:
+            page = client.get("/signals/dark-live").text
+        finally:
+            client.__exit__(None, None, None)
+
+        assert "MAE" in page, "the column must be labelled, not just exported"
+        assert "3.10" in page, "and the value must actually render"

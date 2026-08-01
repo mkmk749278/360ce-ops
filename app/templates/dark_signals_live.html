@@ -291,7 +291,7 @@
          The owner reads this page on a phone, and the first cut put Status/PnL
          behind the setup name and the full gate token — so the only columns the
          page was asked for sat off the right edge. #}
-      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Status</th><th title="how long ago the ENGINE last advanced this row on real bars — not when this page loaded, and not when the price beside it was fetched">Measured</th><th>Entry</th><th>Now</th><th title="unrealized while open, realized once closed — the two never share a column">PnL</th><th>R</th><th title="how far price sits from each level; negative means the level was already crossed while the row still says open">→SL / →TP1</th><th>MFE</th><th title="what the SAR exit arm on this same entry did — RUNNING until SAR flips, which is normally later than the row&#39;s own stop. Blank means no arm: the engine refuses to open one whose anchor bar is stale, so blank is a refusal rather than a null result.">SAR exit</th><th>Conf</th><th>Regime</th><th>Carried past</th></tr>
+      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Status</th><th title="how long ago the ENGINE last advanced this row on real bars — not when this page loaded, and not when the price beside it was fetched">Measured</th><th>Entry</th><th>Now</th><th title="unrealized while open, realized once closed — the two never share a column">PnL</th><th>R</th><th title="how far price sits from each level; negative means the level was already crossed while the row still says open">→SL / →TP1</th><th title="maximum FAVOURABLE excursion — how far the trade ran our way">MFE</th><th title="maximum ADVERSE excursion — how far it went against us first. Every stop-distance question turns on this: &#39;would a tighter stop have helped&#39; is exactly &#39;did the winners survive it&#39;, and without this column that can only be assumed.">MAE</th><th title="what the SAR exit arm on this same entry did — RUNNING until SAR flips, which is normally later than the row&#39;s own stop. Blank means no arm: the engine refuses to open one whose anchor bar is stale, so blank is a refusal rather than a null result.">SAR exit</th><th>Conf</th><th>Regime</th><th>Carried past</th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
@@ -343,6 +343,11 @@
             {% if r.get('level_crossed') %}<span class="badge sev-high" title="price is already through this level while the row still says open — the resolver walks bars in order and would have closed it, so those bars never arrived">{{ r.get('level_crossed') }} crossed</span>{% endif %}
           {% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{% if r.get('mfe_pct') is not none %}{{ "%.2f"|format(r.get('mfe_pct')) }}%{% else %}—{% endif %}</td>
+        {# The adverse half, beside the favourable one. A row cannot say whether
+           a tighter stop would have survived unless both are on it. #}
+        <td class="{% if r.get('mae_pct') %}neg{% endif %}"
+            title="how far this trade went AGAINST us before it resolved — the number every stop-distance question turns on">
+          {% if r.get('mae_pct') is not none %}{{ "%.2f"|format(r.get('mae_pct')) }}%{% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="small">
           {% set arm = r.get('sar_best') %}
           {% if arm %}
