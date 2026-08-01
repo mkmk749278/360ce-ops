@@ -84,6 +84,12 @@ STATUS_EXPIRED = "EXPIRED"
 #: measurement, and pooling them would divide a rate by rows nobody scored.
 STATUS_INSUFFICIENT = "INSUFFICIENT"
 
+#: Why a row retired unmeasured. Mirrors the engine's own constants — a row
+#: whose candles never arrived and one whose walk had holes are different
+#: faults, and the second was silently scored 0R as an expiry until 2026-08-01.
+INSUFFICIENT_PARTIAL_WINDOW = "partial_window"
+INSUFFICIENT_NO_WALK = "no_walk"
+
 #: The engine flushes this file on its 5-min resolve cycle, so "stale" is a much
 #: looser bound than the SAR live tab's 60s heartbeat. Two missed cycles.
 STALE_SEC = 900.0
@@ -310,18 +316,29 @@ def summarize(rows: list[dict]) -> dict:
     and folding the two together is the #685 fabrication class. The win rate
     divides by **decided** rows (TP1 + SL) for the same reason.
 
-    ``INSUFFICIENT`` is terminal but unmeasured — the engine retires a row whose
-    candles never arrived rather than leaving it open forever. It is counted in
-    its own column and kept out of ``resolved``, so no rate here is ever divided
-    by a population that includes rows nobody scored. Unrealized marks live in
-    ``summarize_open`` and never enter this table.
+    ``INSUFFICIENT`` is terminal but unmeasured, and it now has **two** causes
+    that are counted apart (engine 2026-08-01):
+
+    * ``no_walk`` — the candles never arrived, so the row was never walkable.
+    * ``partial_window`` — the row *was* walked, but the walk did not cover its
+      window, so "nothing happened" would be a claim about bars nobody looked at.
+      In the owner's window ROBOUSDT expired on 309 bars of a 362-minute window
+      and ARBUSDT on 329 of 365; a touch inside the missing 89 minutes would have
+      been booked as a 0R expiry.
+
+    Pooling them would report one fault while the other is what is happening —
+    this repo's own "blank needs a cause before it gets a caption" rule. Both are
+    kept out of ``resolved``, so no rate here is ever divided by a population
+    that includes rows nobody scored. Unrealized marks live in ``summarize_open``
+    and never enter this table.
     """
     by_setup: dict[str, dict] = {}
     for row in rows:
         setup = str(row.get("setup_class") or "UNKNOWN")
         agg = by_setup.setdefault(setup, {
             "setup_class": setup, "n": 0, "open": 0, "tp1": 0, "sl": 0,
-            "expired": 0, "insufficient": 0, "sum_r": 0.0, "n_r": 0, "gates": {},
+            "expired": 0, "insufficient": 0, "insufficient_no_walk": 0,
+            "insufficient_partial_window": 0, "sum_r": 0.0, "n_r": 0, "gates": {},
             "sum_conf": 0.0, "n_conf": 0,
         })
         agg["n"] += 1
@@ -337,6 +354,12 @@ def summarize(rows: list[dict]) -> dict:
             continue
         if status == STATUS_INSUFFICIENT:
             agg["insufficient"] += 1
+            # Split by the engine's stamped reason. A missing series and a
+            # series with holes are different faults with different fixes.
+            if str(row.get("insufficient_reason") or "") == INSUFFICIENT_PARTIAL_WINDOW:
+                agg["insufficient_partial_window"] += 1
+            else:
+                agg["insufficient_no_walk"] += 1
             continue
         if status == STATUS_TP1:
             agg["tp1"] += 1

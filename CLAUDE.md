@@ -198,6 +198,14 @@ Two rules the page learned the day after it shipped:
   never one per row, because a page whose cost scales with open trades is the hot-path
   shape the cost rules forbid. Unrealized numbers stay out of every realized column
   and out of the per-path table entirely.
+- **`INSUFFICIENT` has two causes and they must never be pooled** (2026-08-01).
+  `no_walk` is a series that never arrived; `partial_window` is a row that *was*
+  walked, where the walk did not cover its window. The second used to be called
+  an EXPIRED and scored 0R — a claim about bars nobody looked at. ROBOUSDT
+  expired on 309 bars of a 362-minute window and ARBUSDT on 329 of 365, so 89
+  minutes of unexamined bars were reported as the setup doing nothing, and a
+  touch inside them would have been booked as a zero. Different faults, different
+  fixes: "blank needs a cause before it gets a caption", applied to a status.
 - **…and a mark is only honest beside a row that can say whether it is still true.**
   This is #108 one page over, and it was avoided rather than paid for a third time:
   freshness is graded on the **engine's** stamps (`last_resolved_at`, `bars_behind`,
@@ -214,15 +222,48 @@ Two rules the page learned the day after it shipped:
 Added 2026-08-01 (engine `src/entry_features.py`) for the owner's question:
 *"taking entry is matter, how we are taking entry based on only EMA or what,
 what if we add some more data to that"* — and *"we need to know the difference
-as of now vs later"*.
+as of now vs later"*. Extended the same day to every dark-feed path, on the
+owner's follow-up: *"concentrate on entry, on which bases entry is confirming
+especially on Trend pullback EMA and mover AVWAP"*.
 
-`MOVER_TREND_PULLBACK` is ~94% of the delivered book and takes its entry from
-price against three **simple** MAs (SMA7/25/99 on 15m) plus one ATR. It reads the
-15m volume series and hands it only to `_mover_consol_break`; `fast_pullback` and
-`deep_pullback` — the two triggers carrying nearly all the volume — never look at
-volume. `smc_data` arrives at that same call carrying CVD, order-book depth,
-funding, liquidation clusters and the level book, and the path reads none of it.
-The engine now stamps all of them at signal creation and applies nothing.
+**A feature set is not portable just because the code that computes it is.** The
+first cut of that extension copied MVRTP's feature list onto every path, and the
+owner caught it: that list was chosen for MVRTP's blindness — a three-SMA
+pullback trigger that never looks at volume — so it measures nothing on paths
+that fail elsewhere. What each path needs comes from reading *its* mechanism:
+
+| Path | Confirms on | What it has no notion of |
+|---|---|---|
+| `MOVER_TREND_PULLBACK` | price vs SMA7/25/99 + one ATR | volume, and everything in `smc_data` |
+| `TREND_PULLBACK_EMA` | 1H EMA21/50, then six **booleans** on 5m | the magnitude of any of them |
+| `MOVER_AVWAP_SCALP` | anchored VWAP + slope + volume | where in the move it is |
+
+TPE records *that* each threshold was crossed and never by how much, so its
+features are the magnitudes behind its own gates (1H trend separation, where in
+the 40–60 RSI band it fired, how far `prev_high` broke, how much of the impulse
+leg the pullback gave back). MVAVW already gates on volume and slope; the anchor
+is computed and then used only to produce a VWAP, so its age, the leg's size and
+the number of prior returns to it are unconsulted — and `leg_move_pct` is exactly
+what `execution:overextended` is about, the gate carried past on 21 of the 65
+dark rows.
+
+**The registry is not mirrored here.** Which features a path declares, in what
+order, and which way a rule filters all arrive in the ledger's `spec` block,
+written by the engine that decides them. `FALLBACK_SPEC` exists only so a
+pre-`spec` ledger still renders, and the page **says on screen** when it is used
+— a silent fallback is a mirror nobody knows is a mirror. This is the direct
+lesson of `MEASUREMENT_SUFFIXES`, which drifted for a week: the fix for a
+drifting mirror is not a second mirror, it is one writer and one reader.
+
+**`tp1_r_multiple` is the row to read first**, and it is not a candidate filter
+like the others — it is chosen by the evaluator, exact at stamp time, and it
+bounds what every other row can achieve. `TREND_PULLBACK_EMA` ran a median
+designed R:R of **0.79** in the 2026-08-01 dark window (TP1 nearer than the
+stop), needing 54% to break even and posting 35% over 17 decided rows; TP1 is the
+nearest 5m swing extreme, capped by ATR percentile, with nothing flooring it,
+while `_enforce_tp_ladder_monotonicity` floors tp2 at 2.0R and tp3 at 4.0R.
+Changing that is TP/SL shape and therefore owner-sign-off — the page only makes
+it visible.
 
 Rules specific to this page:
 
@@ -243,6 +284,22 @@ Rules specific to this page:
 - **An em-dash is not a zero.** A missing order book is not balanced depth; a
   missing level book is not a clear path. The engine returns `None` with a reason
   and this page renders the dash.
+- **Never pool timeframes silently.** TPE triggers on 5m and the mover paths on
+  15m; a volume ratio over 5m bars and one over 15m bars are different
+  measurements. Every split reports the timeframes it covered and badges itself
+  `mixed` when there is more than one, and the unfiltered view says on screen
+  that it is pooling paths at all.
+- **A directional feature must be signed toward the trade.** `cvd_slope` and
+  `book_imbalance` shipped raw in schema 1 and were split with a single "higher
+  is better" rule, which scores every SHORT backwards — a falling CVD is the dip
+  being sold, bad for a long and exactly what a short wants. The delivered book
+  is ~50/50 by side, so the error did not show up as an empty column; it just
+  made both features look like noise. They are `_aligned` from schema 2 on.
+- **Say how many cells you drew.** "Best of N" is not a fact about the winner
+  until N is on screen — the top row of a long table beats a coin flip by
+  construction. The page prints the count and names
+  `FAILED_AUCTION_RECLAIM` (+0.846R on three rows, CI [−1.00, +2.00], promotion
+  requested within the day) as the standing example.
 
 **Route ordering, paid for on the first cut:** `signal_detail` registers
 `/signals/{signal_id}`, which matches any `/signals/<literal>`. This page was

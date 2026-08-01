@@ -2,20 +2,55 @@
 {% block title %}Entry features{% endblock %}
 {% block content %}
 
-<h1>Entry features — MVRTP</h1>
+<h1>Entry features{% if filter_setup %} — {{ filter_setup }}{% endif %}</h1>
 <p class="muted small">
-  <code>MOVER_TREND_PULLBACK</code> takes its entry from price against three simple
-  moving averages (SMA7 / SMA25 / SMA99 on 15m) plus one ATR for the stop buffer.
-  It reads the 15m volume series and passes it only to <code>consol_break</code> —
-  the two triggers that carry almost all the volume, <code>fast_pullback</code> and
-  <code>deep_pullback</code>, never look at volume at all. Everything below was
-  already sitting in <code>smc_data</code> at that same call and was never read.
+  On what basis is each path actually confirming an entry? Every feature below was
+  available in <code>smc_data</code> or in the evaluator's own scope at the moment
+  the signal was created, and none of it was read.
+  <strong>The feature sets differ per path on purpose</strong> — the paths are not
+  blind in the same place, and a list chosen for one measures nothing on another.
 </p>
+
+<div class="actions">
+  <a class="btn {% if not filter_setup %}btn-active{% endif %}"
+     href="/signals/entry-features">All paths</a>
+  {% for name, n in setup_options %}
+  <a class="btn {% if filter_setup == name %}btn-active{% endif %}"
+     href="/signals/entry-features?setup={{ name }}">{{ name }} ({{ n }})</a>
+  {% endfor %}
+</div>
+
+{% if filter_setup == "TREND_PULLBACK_EMA" %}
+<p class="muted small">
+  This path applies nothing but <strong>booleans</strong>: EMA21 was tagged, the
+  close got back above both EMAs, close &gt; prev_close, close &gt; prev_high, RSI
+  is inside 40–60 and rising, the close sat in the trend-direction half of its own
+  range. It records <em>that</em> each threshold was crossed and never by how much,
+  so the features below are the magnitudes behind its own gates.
+</p>
+{% elif filter_setup == "MOVER_AVWAP_SCALP" %}
+<p class="muted small">
+  This path is not blind the way the SMA pullbacks are — it already gates on volume
+  and on AVWAP slope. What it has no notion of is <strong>where in the move it
+  is</strong>: the anchor is computed and then used only to produce a VWAP, so its
+  age, how far the leg has already travelled, and how many times price has already
+  returned to it are all available at that point and none is consulted.
+  <code>leg_move_pct</code> is the quantity <code>execution:overextended</code> is
+  about — the gate carried past on 21 of the 65 rows in the dark window.
+</p>
+{% elif not filter_setup %}
+<p class="warn small">
+  <strong>Showing every path at once.</strong> The paths do not share a trigger, a
+  timeframe or a stop geometry, so a split drawn across them moves with the setup
+  mix as much as with the feature. Pick a path above before reading a Δ.
+</p>
+{% endif %}
+
 <p class="warn small">
   <strong>Nothing on this page is applied.</strong> Every “keep” column is a
   question, not a change. The engine emits the identical signal whether this
-  measurement is on or off, and a test on the producing side pins that by
-  comparing the emitted signal both ways.
+  measurement is on or off, and tests on the producing side drive the real
+  evaluators both ways to pin that.
 </p>
 
 {% if error %}
@@ -40,14 +75,23 @@
     because the R-scored subset is not a random sample — rows closed before that
     field existed carry no denominator.
   </p>
+  {% if coverage.spec_source == "ops_fallback" %}
+  <p class="warn small">
+    <strong>Feature registry: ops fallback.</strong> This ledger predates the engine
+    shipping its own <code>spec</code>, so the column list and split directions come
+    from a copy held here. That copy is a mirror and mirrors drift — the numbers
+    above are trustworthy only while it matches. It clears itself the next time the
+    engine writes the ledger.
+  </p>
+  {% endif %}
   {% else %}
   <p class="muted small">
     No stamped signal has closed yet. This is the <em>quiet</em> state, not a
-    fault: stamping happens when a MVRTP signal is created, and a row appears here
-    only once that signal reaches a terminal outcome. If the engine were not
-    stamping at all, the coverage counts above would stay at zero while
-    <code>/track-record</code> kept adding MVRTP rows — that is the comparison to
-    make before calling this broken.
+    fault: stamping happens when a signal is created, and a row appears here only
+    once that signal reaches a terminal outcome. If the engine were not stamping
+    at all, the coverage counts above would stay at zero while
+    <code>/track-record</code> kept adding rows on these same paths — that is the
+    comparison to make before calling this broken.
   </p>
   {% endif %}
 </section>
@@ -74,7 +118,14 @@
     <tbody>
       {% for s in splits %}
       <tr>
-        <td><strong>{{ s.label }}</strong><br><span class="muted small">{{ s.asks }}</span></td>
+        <td>
+          <strong>{{ s.label }}</strong>
+          {% if s.mixed_timeframes %}
+          <span class="badge st-partial"
+                title="these rows were read from more than one series — a volume ratio over 5m bars and one over 15m bars are different measurements">mixed {{ s.timeframes | join("/") }}</span>
+          {% endif %}
+          <br><span class="muted small">{{ s.asks }}</span>
+        </td>
         <td><code>{{ s.direction }} {{ "%.4g"|format(s.threshold) }}</code></td>
         <td>{% if s.now.avg_r is not none %}{{ "%+.3f"|format(s.now.avg_r) }}<span class="muted small"> (n={{ s.now.scored }})</span>{% else %}—{% endif %}</td>
         <td>{% if s.keep.avg_r is not none %}{{ "%+.3f"|format(s.keep.avg_r) }}<span class="muted small"> (n={{ s.keep.scored }})</span>{% else %}—{% endif %}</td>
@@ -99,6 +150,25 @@
     <strong>Unknown</strong> rows are counted apart on purpose: a rule cannot be
     credited with an outcome it could not have seen, and folding them into “keep”
     is how a filter takes credit for rows it never filtered.
+  </p>
+  <p class="muted small">
+    <strong>{{ cells_drawn }} cells drawn on this view.</strong> “Best of {{ cells_drawn }}”
+    is not a fact about the winner until that number is on screen — the top row of a
+    table this long beats a coin flip by construction. Treat the leader as a
+    candidate for <em>more evidence</em>, never as a result;
+    <code>FAILED_AUCTION_RECLAIM</code> read +0.846R on three rows and a bootstrap CI
+    of [−1.00, +2.00], and the promotion request followed within the day.
+  </p>
+  <p class="muted small">
+    <code>tp1_r_multiple</code> is the row to read first, and it is not a candidate
+    filter like the others — it is chosen by the evaluator, exact at stamp time, and
+    it bounds what every other row can achieve. In the 2026-08-01 dark window
+    <code>TREND_PULLBACK_EMA</code> ran a median designed R:R of <strong>0.79</strong>
+    (TP1 nearer than the stop), needing a 54% win rate to break even and posting 35%
+    over 17 decided rows. TP1 is the nearest 5m swing extreme, capped by ATR
+    percentile, with nothing flooring it — while the ladder helper floors tp2 at 2.0R
+    and tp3 at 4.0R. Changing that is a TP/SL-shape decision and therefore
+    owner-sign-off; this page only makes it visible.
   </p>
 </section>
 {% endif %}
@@ -133,36 +203,43 @@
 {% if rows %}
 <section class="card">
   <h2>Stamped signals</h2>
-  <div class="actions"><a class="btn" href="/signals/entry-features/export.csv">Download CSV (all rows)</a></div>
+  <div class="actions">
+    <a class="btn" href="/signals/entry-features/export.csv{% if filter_setup %}?setup={{ filter_setup }}{% endif %}">Download CSV</a>
+  </div>
   <div class="table-scroll">
   <table>
     <thead>
       <tr>
-        <th>Signal</th><th>Symbol</th><th>Side</th><th>Trigger</th><th>Conf</th>
-        <th>Vol ratio</th><th>CVD slope</th><th>Depth (ATR)</th><th>Ext %</th>
-        <th>Lvl dist (R)</th><th>Book imb</th><th>Funding</th>
+        <th>Signal</th><th>Symbol</th><th>Side</th>
+        {% if not filter_setup %}<th>Setup</th>{% endif %}
+        <th>Trigger</th><th title="the series the features were read from">TF</th><th>Conf</th>
+        {# Columns come from the engine's own registry, so a feature added there
+           appears here without ops being edited — and a per-path feature is only
+           a column on the pages where that path is shown. #}
+        {% for c in columns %}
+        <th title="{{ (feature_copy.get(c) or {}).get('asks', '') }}">{{ (feature_copy.get(c) or {}).get('label', c) }}</th>
+        {% endfor %}
         <th>Profile</th><th>PnL %</th><th>R</th><th>Outcome</th>
       </tr>
     </thead>
     <tbody>
       {% for r in rows %}
       <tr>
-        <td><code class="small">{{ r.signal_id }}</code></td>
-        <td>{{ r.symbol }}</td>
-        <td>{{ r.side }}</td>
-        <td><span class="small">{{ r.entry_trigger }}</span></td>
-        <td>{% if r.confidence is not none %}{{ "%.0f"|format(r.confidence) }}{% else %}—{% endif %}</td>
-        <td>{% if r.pullback_vol_ratio is not none %}{{ "%.2f"|format(r.pullback_vol_ratio) }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if r.cvd_slope is not none %}{{ "%+.4g"|format(r.cvd_slope) }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if r.pullback_depth_atr is not none %}{{ "%.2f"|format(r.pullback_depth_atr) }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if r.extension_pct is not none %}{{ "%+.1f"|format(r.extension_pct) }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if r.level_dist_r is not none %}{{ "%.2f"|format(r.level_dist_r) }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if r.book_imbalance is not none %}{{ "%+.2f"|format(r.book_imbalance) }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if r.funding_rate is not none %}{{ "%+.4g"|format(r.funding_rate) }}{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if r.profile_would_reject is true %}<span class="badge st-partial" title="the pair-tier spread/volume thresholds would have rejected this — MVRTP does not pass `profile` to _pass_basic_filters, so they never applied">would reject</span>{% elif r.profile_would_reject is false %}ok{% else %}<span class="muted">—</span>{% endif %}</td>
-        <td class="{% if r.pnl_pct and r.pnl_pct > 0 %}pos{% elif r.pnl_pct and r.pnl_pct < 0 %}neg{% endif %}">{% if r.pnl_pct is not none %}{{ "%+.2f"|format(r.pnl_pct) }}{% else %}—{% endif %}</td>
-        <td class="{% if r.r and r.r > 0 %}pos{% elif r.r and r.r < 0 %}neg{% endif %}">{% if r.r is not none %}{{ "%+.2f"|format(r.r) }}{% else %}<span class="muted" title="no entry-risk stamp on the closed-signal record">—</span>{% endif %}</td>
-        <td><span class="small">{{ r.outcome_label }}</span></td>
+        <td><code class="small">{{ r.get('signal_id') }}</code></td>
+        <td>{{ r.get('symbol') }}</td>
+        <td>{{ r.get('side') }}</td>
+        {% if not filter_setup %}<td><span class="small">{{ r.get('setup_class') }}</span></td>{% endif %}
+        <td><span class="small">{{ r.get('entry_trigger') }}</span></td>
+        <td><span class="small">{{ r.get('tf_name') or "—" }}</span></td>
+        <td>{% if r.get('confidence') is not none %}{{ "%.0f"|format(r.get('confidence')) }}{% else %}—{% endif %}</td>
+        {% for c in columns %}
+        {% set v = r.get(c) %}
+        <td>{% if v is not none %}{{ "%+.4g"|format(v) if v is number else v }}{% else %}<span class="muted" title="this input was not available for this signal — not that it read zero">—</span>{% endif %}</td>
+        {% endfor %}
+        <td>{% if r.get('profile_would_reject') is true %}<span class="badge st-partial" title="the pair-tier spread/volume thresholds would have rejected this — the path does not pass `profile` to _pass_basic_filters, so they never applied">would reject</span>{% elif r.get('profile_would_reject') is false %}ok{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="{% if r.get('pnl_pct') and r.get('pnl_pct') > 0 %}pos{% elif r.get('pnl_pct') and r.get('pnl_pct') < 0 %}neg{% endif %}">{% if r.get('pnl_pct') is not none %}{{ "%+.2f"|format(r.get('pnl_pct')) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.get('r') and r.get('r') > 0 %}pos{% elif r.get('r') and r.get('r') < 0 %}neg{% endif %}">{% if r.get('r') is not none %}{{ "%+.2f"|format(r.get('r')) }}{% else %}<span class="muted" title="no entry-risk stamp on the closed-signal record">—</span>{% endif %}</td>
+        <td><span class="small">{{ r.get('outcome_label') }}</span></td>
       </tr>
       {% endfor %}
     </tbody>
