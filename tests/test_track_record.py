@@ -12,7 +12,9 @@ tab's free-run / dark-signals / exit-backtest pages, which are counterfactuals.
 The rules these tests pin were all learned on other pages first:
 
 * R, not portfolio %, because a portfolio return needs an invented position size.
-* Refuse rather than clamp — a record without a stop has no R and is never 0R.
+* Refuse rather than clamp — a record without a usable entry risk has no R
+  and is never 0R. The denominator is the risk the trade was SIZED for, never the
+  stop on the record: the engine moves that stop in place as the trade runs.
 * Bucket by CLOSE time, because a day's PnL is the PnL realised that day.
 * Disclose concentration — the rule /signals/sar needed twice.
 """
@@ -35,15 +37,26 @@ from app.routes.track_record import (  # noqa: E402
     reduce_records,
     resolve_range,
     summarize,
+    unscored_reason,
 )
 
 NOW = datetime(2026, 7, 28, 12, 0, tzinfo=timezone.utc)
 
 
+_UNSET = object()
+
+
 def _rec(*, closed: datetime | None = NOW, entry=100.0, stop=99.0, pnl=2.0,
          symbol="BTCUSDT", direction="LONG", setup="SR_FLIP_RETEST",
-         regime="TRENDING_UP", **kw) -> dict:
-    """A record in ``signal_performance.json``'s real shape (asdict(SignalRecord))."""
+         regime="TRENDING_UP", sl_dist_pct=_UNSET, **kw) -> dict:
+    """A record in ``signal_performance.json``'s real shape (asdict(SignalRecord)).
+
+    ``sl_dist_pct`` defaults to the entry→stop distance, which is what the engine
+    stamps for a trade whose stop never moved. Pass it explicitly to model a
+    moved stop (BE shift / trail), where the two diverge — that divergence is the
+    whole reason the field exists. Pass ``None`` to model a pre-2026-08-01
+    record, which carries no stamp at all.
+    """
     rec = {
         "signal_id": kw.pop("signal_id", "sig"),
         "channel": "360_SCALP",
@@ -59,6 +72,20 @@ def _rec(*, closed: datetime | None = NOW, entry=100.0, stop=99.0, pnl=2.0,
         "entry_regime": regime,
         "terminal_outcome_timestamp": closed.timestamp() if closed else None,
     }
+    if sl_dist_pct is _UNSET:
+        # A record with no usable stop is one the engine could not stamp either
+        # — both come from a signal that never recorded its entry geometry — so
+        # deriving a distance from a zero/absent stop would invent a 100% risk.
+        try:
+            sl_dist_pct = (
+                abs(float(entry) - float(stop)) / float(entry) * 100.0
+                if entry and stop
+                else 0.0
+            )
+        except (TypeError, ValueError, ZeroDivisionError):
+            sl_dist_pct = 0.0
+    if sl_dist_pct is not None:
+        rec["sl_distance_pct_at_entry"] = sl_dist_pct
     rec.update(kw)
     return rec
 
@@ -88,6 +115,62 @@ class TestR:
     def test_a_junk_record_refuses_rather_than_raising(self):
         assert record_r({"entry": "abc", "stop_loss": 1, "pnl_pct": 1}) is None
         assert record_r({}) is None
+
+    def test_a_break_even_stop_out_is_not_a_full_loss(self):
+        """The nine rows that changed this denominator (2026-08-01).
+
+        The engine moves a signal's stop in place, so a trade BE-shifted and then
+        stopped out for −0.1% arrives here with ``stop_loss == entry``. Dividing
+        by *that* made it −1.00R — identical to a trade that gave back its whole
+        designed 3% risk. It is a −0.03R scratch.
+        """
+        rec = _rec(entry=100.0, stop=100.0, pnl=-0.1, sl_dist_pct=3.0)
+        assert record_r(rec) == pytest.approx(-0.1 / 3.0)
+
+    def test_a_trailed_winner_divides_by_the_risk_taken_not_the_trailed_stop(self):
+        """Same defect, other sign. A stop trailed into profit shrinks or inverts
+        the old denominator and silently rescales the win."""
+        rec = _rec(entry=100.0, stop=101.5, pnl=4.0, sl_dist_pct=2.0)
+        assert record_r(rec) == pytest.approx(2.0)
+
+    def test_a_pre_stamp_record_refuses_rather_than_falling_back_to_the_stop(self):
+        """Records closed before the engine carried the field have no honest
+        denominator — their stop has already been moved. Falling back to
+        ``stop_loss`` here would silently reinstate the bug for exactly the rows
+        that have it."""
+        rec = _rec(entry=100.0, stop=97.0, pnl=-3.0, sl_dist_pct=None)
+        assert "sl_distance_pct_at_entry" not in rec
+        assert record_r(rec) is None
+
+
+class TestUnscoredReasons:
+    """Not-yet-stamped and could-not-be-stamped are different states with
+    different fixes, so the page never pools them into one sentence."""
+
+    def test_a_scored_record_has_no_reason(self):
+        assert unscored_reason(_rec(entry=100.0, stop=97.0)) is None
+
+    def test_a_pre_stamp_record_is_awaiting_not_a_fault(self):
+        rec = _rec(sl_dist_pct=None)
+        assert unscored_reason(rec) == "awaiting_engine_stamp"
+
+    def test_a_current_engine_record_with_no_geometry_is_a_fault(self):
+        """Stamped by today's engine and still zero — that is upstream failing to
+        record an entry→SL distance, and it does not age out."""
+        rec = _rec(sl_dist_pct=0.0)
+        assert unscored_reason(rec) == "no_geometry"
+
+    def test_the_two_are_counted_apart_in_the_summary(self):
+        rows = reduce_records([
+            _rec(signal_id="a", entry=100.0, stop=97.0, pnl=-3.0),
+            _rec(signal_id="b", sl_dist_pct=None),
+            _rec(signal_id="c", sl_dist_pct=0.0),
+        ])
+        s = summarize(rows)
+        assert s["scored"] == 1
+        assert s["unscored"] == 2
+        assert s["unscored_awaiting_stamp"] == 1
+        assert s["unscored_no_geometry"] == 1
 
 
 class TestCloseTimeBucketing:

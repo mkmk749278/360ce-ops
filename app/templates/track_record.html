@@ -103,11 +103,23 @@
 
   {% if summary.unscored %}
   <p class="warn small">
-    <strong>{{ summary.unscored }} of {{ summary.n }}</strong> trades carry no usable stop
-    on their record, so they have no R and are excluded from every R figure above
-    (which divide by {{ summary.scored }}). They are <em>not</em> scored 0R — a missing
-    stop is "cannot score", not "scored flat", and averaging them in would read as
+    <strong>{{ summary.unscored }} of {{ summary.n }}</strong> trades carry no usable
+    entry risk, so they have no R and are excluded from every R figure above (which
+    divide by {{ summary.scored }}). They are <em>not</em> scored 0R — a missing
+    denominator is "cannot score", not "scored flat", and averaging them in would read as
     mediocre performance rather than as missing data.
+    {% if summary.unscored_awaiting_stamp %}
+    <br><strong>{{ summary.unscored_awaiting_stamp }}</strong> of them closed before the
+    engine recorded <code>sl_distance_pct_at_entry</code> (2026-08-01). R divides by the
+    risk a trade was <em>sized for</em>, and the stop on those older records had already
+    been moved by the break-even shift or the trail — so there is nothing honest to
+    divide by and no backfill that would not be a guess. This count only shrinks.
+    {% endif %}
+    {% if summary.unscored_no_geometry %}
+    <br><strong>{{ summary.unscored_no_geometry }}</strong> were stamped by the current
+    engine and are still unusable — an evaluator that recorded no entry→SL distance.
+    That does <em>not</em> age out; if this number is not falling, the fault is upstream.
+    {% endif %}
   </p>
   {% endif %}
 
