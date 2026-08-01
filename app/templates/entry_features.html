@@ -165,10 +165,25 @@
     it bounds what every other row can achieve. In the 2026-08-01 dark window
     <code>TREND_PULLBACK_EMA</code> ran a median designed R:R of <strong>0.79</strong>
     (TP1 nearer than the stop), needing a 54% win rate to break even and posting 35%
-    over 17 decided rows. TP1 is the nearest 5m swing extreme, capped by ATR
-    percentile, with nothing flooring it — while the ladder helper floors tp2 at 2.0R
-    and tp3 at 4.0R. Changing that is a TP/SL-shape decision and therefore
-    owner-sign-off; this page only makes it visible.
+    over 17 decided rows.
+  </p>
+  <p class="warn small">
+    <strong>That is not an argument for raising TP1</strong> — it was written here as
+    though it were, and testing it against the same data showed the opposite.
+    Simulated on the 2026-08-01 11:00 window (55 decided rows), flooring TP1 at 1.0R
+    takes the book from −0.081R to between −0.186R and −0.404R; at 1.5R, to between
+    −0.245R and −0.536R — and it reproduces on the earlier export, so the direction is
+    not one window's artefact. The winners barely clear their current targets (TPE's
+    hit at a median 0.59R against a 0.89R peak) and only 27% of decided trades ever
+    moved 1R in our favour. Median favourable excursion across the book is
+    <strong>0.53R</strong>. The low target is not the defect; it is what harvests a
+    move this small.
+  </p>
+  <p class="muted small">
+    So read this column as a <em>description of what the book can earn</em>, not as a
+    lever: it says the trades are small relative to the risk they are sized for, which
+    points at entry quality and at loss size. Any change to it is a TP/SL-shape
+    decision and therefore owner-sign-off; this page only makes it visible.
   </p>
 </section>
 {% endif %}
