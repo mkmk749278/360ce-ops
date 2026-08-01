@@ -648,7 +648,11 @@ _DARK_COLS = [
     "regime", "context_key", "pair_admission", "entry", "stop_loss", "tp1",
     "sl_distance_pct",
     "emitted_at", "status", "closed_at", "exit_price", "pnl_pct", "r_multiple",
-    "mfe_pct", "bars_seen", "ambiguous_bar",
+    # Both halves of the excursion. MFE alone cannot answer any question about
+    # stop distance — "would a tighter stop have helped" is exactly "did the
+    # winners survive it", and only MAE counts that instead of assuming it.
+    "mfe_pct", "mae_pct", "bars_seen", "ambiguous_bar",
+    "window_coverage", "insufficient_reason",
     # The mark and what it implies. An export is a surface and inherits the
     # page's rules — the SAR export that first showed a 2h-old stop had no
     # column that could have said so, so it read as healthy too.

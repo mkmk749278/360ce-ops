@@ -760,7 +760,9 @@ _ARM_COLS = [
     "status", "exit_reason", "bars_seen",
     "fill_level", "fill_confirm", "pnl_level_pct", "pnl_confirm_pct",
     "r_level", "r_confirm", "confirm_slippage_pct",
-    "mfe_pct", "current_price", "unrealized_pct", "stop_distance_pct",
+    # Both halves of the excursion — see the dark export for why MFE alone
+    # cannot settle a stop-distance question.
+    "mfe_pct", "mae_pct", "current_price", "unrealized_pct", "stop_distance_pct",
     "ambiguous_bar",
     "sar_risk_pct", "max_sar_risk_pct", "handover_risk_pct",
     "handover_wider_than_sl",

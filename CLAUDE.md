@@ -198,6 +198,14 @@ Two rules the page learned the day after it shipped:
   never one per row, because a page whose cost scales with open trades is the hot-path
   shape the cost rules forbid. Unrealized numbers stay out of every realized column
   and out of the per-path table entirely.
+- **MFE without MAE bounds nothing.** Every lane recorded how far a trade ran in
+  our favour and none recorded how far it went against us first, so no question
+  about stop distance could be answered — the optimistic reading of "tighten the
+  stop" and the pessimistic one differed by more than the whole edge under
+  discussion, because the gap is exactly *did the winners survive it*. Both
+  halves now render side by side on `/signals/dark-live` and `/signals/sar-live`,
+  and both are in the exports; a one-sided excursion column looks complete and
+  silently answers nothing.
 - **`INSUFFICIENT` has two causes and they must never be pooled** (2026-08-01).
   `no_walk` is a series that never arrived; `partial_window` is a row that *was*
   walked, where the walk did not cover its window. The second used to be called
