@@ -26,6 +26,7 @@ os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
 from app.routes.entry_features import (  # noqa: E402
     FALLBACK_SPEC,
     FEATURE_COPY,
+    entry_quality_panel,
     features_for,
     join_outcomes,
     setups_present,
@@ -262,7 +263,7 @@ class TestTheSelectorDescribesTheWholeBook:
 
 
 class TestRoute:
-    def _client(self, monkeypatch, stamps, records):
+    def _client(self, monkeypatch=None, stamps=(), records=()):
         from fastapi.testclient import TestClient
 
         from app.main import app
@@ -280,17 +281,26 @@ class TestRoute:
     def _login(self, client):
         client.post("/login", data={"password": os.environ["OPS_AUTH_TOKEN"]})
 
-    def test_the_page_renders_and_says_nothing_is_applied(self, monkeypatch):
+    def test_the_page_separates_what_is_applied_from_what_is_a_question(self):
+        """Copy is part of the measurement, and this page's copy changed.
+
+        It said "Nothing on this page is applied" for its first day, and that
+        sentence became false the moment the entry-quality gate shipped. A page
+        that carries a live gate and a what-if table has to say which is which
+        — a reader who conflates them will read a shadow Δ as a live effect.
+        """
         client = self._client(
-            monkeypatch,
-            [_stamp("a", pullback_vol_ratio=2.0)],
-            [_rec("a", 3.0)],
+            monkeypatch=None,
+            stamps=[_stamp("a", pullback_vol_ratio=2.0)],
+            records=[_rec("a", 3.0)],
         )
         with client:
             self._login(client)
             r = client.get("/signals/entry-features")
             assert r.status_code == 200
-            assert "Nothing on this page is applied" in r.text
+            assert "Nothing on this page is applied" not in r.text
+            assert "Live entry-quality rules" in r.text
+            assert "applied nowhere" in r.text
 
     def test_an_empty_lane_says_quiet_not_broken(self, monkeypatch):
         """The dark page reported a fault that was not happening on exactly this
@@ -515,3 +525,126 @@ class TestPerPathRendering:
             # ...but every path's columns are present, so a per-path column does
             # not vanish because of the current filter.
             assert "anchor_age_bars" in csv
+
+
+class TestTheLiveGatePanel:
+    """The consuming half of this lane, and the ways it could flatter itself.
+
+    The gate's own populations are the trap here: a candidate it suppressed
+    never delivered, so it has no closed-signal record and cannot appear in the
+    join every other panel on this page is measured on. A panel built on
+    ``joined`` would silently exclude exactly the rows the gate acted on and
+    render a live gate that had done nothing.
+    """
+
+    @staticmethod
+    def _annotated(sid, rule, verdict, live, enforced=""):
+        return {
+            "signal_id": sid,
+            "setup_class": "MOVER_TREND_PULLBACK",
+            "eq_enforced_by": enforced,
+            "eq_budget_suspended": False,
+            "eq_rules": [{
+                "rule": rule, "verdict": verdict, "live": live,
+                "value": 1.0, "threshold": None, "feature": "profile_would_reject",
+            }],
+        }
+
+    def test_a_suppressed_candidate_is_counted_even_though_it_never_delivered(self):
+        """Read from the stamps, not the join — the whole reason this panel
+        takes both."""
+        stamps = [self._annotated("s1", "profile_reject", "reject", True,
+                                  enforced="profile_reject")]
+        panel = entry_quality_panel(stamps, joined=[])
+        assert panel["rules"][0]["enforced"] == 1
+        assert panel["rules"][0]["live"] is True
+
+    def test_a_shadow_rejection_carries_the_outcome_a_promotion_would_read(self):
+        stamps = [self._annotated("s1", "tpe_smc_zone", "reject", False)]
+        joined = [{"signal_id": "s1", "pnl_pct": -2.0, "r": -0.5}]
+        panel = entry_quality_panel(stamps, joined)
+        rule = panel["rules"][0]
+        assert rule["shadow_reject"] == 1
+        assert rule["enforced"] == 0
+        assert rule["would_remove"]["n"] == 1
+        assert rule["would_remove"]["avg_pnl_pct"] == pytest.approx(-2.0)
+
+    def test_a_suppression_contributes_no_outcome_because_none_exists(self):
+        """It cannot, and the page must not imply otherwise: the gate killed it
+        before it could deliver. Those verdicts live in the suppression audit."""
+        stamps = [self._annotated("s1", "profile_reject", "reject", True,
+                                  enforced="profile_reject")]
+        joined = [{"signal_id": "s1", "pnl_pct": -2.0}]   # cannot happen live
+        panel = entry_quality_panel(stamps, joined)
+        assert panel["rules"][0]["would_remove"]["n"] == 0
+
+    def test_unknown_is_its_own_bucket_and_never_a_pass(self):
+        stamps = [{
+            "signal_id": "s1", "setup_class": "MOVER_TREND_PULLBACK",
+            "eq_enforced_by": "", "eq_rules": [{
+                "rule": "profile_reject", "verdict": "unknown", "live": True,
+                "unknown_reason": "feature_none", "feature": "profile_would_reject",
+            }],
+        }]
+        rule = entry_quality_panel(stamps, [])["rules"][0]
+        assert rule["unknown"] == 1
+        assert rule["pass"] == 0
+        assert rule["unknown_reasons"] == {"feature_none": 1}
+
+    def test_an_enforcing_rule_that_abstains_on_nearly_everything_is_badged_blind(self):
+        """Inert and working look identical on every other count."""
+        stamps = [{
+            "signal_id": f"s{i}", "setup_class": "MOVER_TREND_PULLBACK",
+            "eq_enforced_by": "", "eq_rules": [{
+                "rule": "profile_reject", "verdict": "unknown", "live": True,
+                "unknown_reason": "feature_none", "feature": "profile_would_reject",
+            }],
+        } for i in range(25)]
+        assert entry_quality_panel(stamps, [])["rules"][0]["blind"] is True
+
+    def test_a_shadow_rule_is_never_badged_blind(self):
+        """Abstaining costs nothing while nothing is being enforced, and
+        flagging it would fill the signal that is meant to make a real fault
+        stand out."""
+        stamps = [{
+            "signal_id": f"s{i}", "setup_class": "MOVER_TREND_PULLBACK",
+            "eq_enforced_by": "", "eq_rules": [{
+                "rule": "tpe_smc_zone", "verdict": "unknown", "live": False,
+                "unknown_reason": "feature_absent", "feature": "smc_zone_dist_atr",
+            }],
+        } for i in range(25)]
+        assert entry_quality_panel(stamps, [])["rules"][0]["blind"] is False
+
+    def test_rows_stamped_before_the_gate_are_counted_apart_not_as_passes(self):
+        """A missing stamp is not a pass — the ledger deliberately did not bump
+        its schema for the verdict, so these rows stay in the population."""
+        stamps = [{"signal_id": "old", "setup_class": "MOVER_TREND_PULLBACK"}]
+        panel = entry_quality_panel(stamps, [])
+        assert panel["not_evaluated"] == 1
+        assert panel["evaluated"] == 0
+        assert panel["rules"] == []
+
+    def test_a_held_back_suppression_is_its_own_state(self):
+        """Over the blast-radius cap the gate degrades to shadow. A panel that
+        could not tell that from 'the rule passed' would read a suspended gate
+        as a healthy one."""
+        stamps = [dict(self._annotated("s1", "profile_reject", "reject", True),
+                       eq_budget_suspended=True)]
+        assert entry_quality_panel(stamps, [])["budget_suspended"] == 1
+
+    def test_the_delivered_book_is_published_as_the_comparison_denominator(self):
+        """'This rule would have removed rows averaging −2%' means nothing
+        without what the book averaged."""
+        joined = [{"signal_id": "s1", "pnl_pct": 1.0}, {"signal_id": "s2", "pnl_pct": -3.0}]
+        panel = entry_quality_panel([], joined)
+        assert panel["delivered"]["n"] == 2
+        assert panel["delivered"]["avg_pnl_pct"] == pytest.approx(-1.0)
+
+    def test_the_mode_is_read_off_the_rows_the_gate_decided(self):
+        """Not mirrored from a copy of the engine's registry — ops kept its own
+        copy of MEASUREMENT_SUFFIXES once and it drifted for a week."""
+        stamps = [self._annotated("s1", "profile_reject", "pass", False)]
+        assert entry_quality_panel(stamps, [])["rules"][0]["live"] is False
+        assert entry_quality_panel(
+            [self._annotated("s2", "profile_reject", "pass", True)], []
+        )["rules"][0]["live"] is True
