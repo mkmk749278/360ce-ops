@@ -419,18 +419,138 @@ def split_by_feature(
     }
 
 
+def entry_quality_panel(stamps: list[dict], joined: list[dict]) -> dict:
+    """What the live gate did, and what the shadow rules would have done.
+
+    Read from the **stamps**, not from the joined book, and the difference is
+    the whole point: a candidate the gate suppressed never delivered, so it has
+    no closed-signal record and can never appear in a join. Measuring this panel
+    on ``joined`` would silently exclude exactly the population the gate acted
+    on — the page would show a live gate that had done nothing.
+
+    Three buckets per rule, and they answer different questions:
+
+    * ``enforced`` — the gate killed it. Its outcome is **not here and cannot
+      be**: it never delivered. The suppression audit forward-measures those on
+      real candles, and that is the surface that says whether the rule is
+      earning its place. This panel says only how many.
+    * ``shadow_reject`` — the rule fired and did not act. These *did* emit, so
+      their outcomes are known, and they are the only evidence a promotion may
+      read.
+    * ``unknown`` — the rule could not read its feature. Its own bucket, never
+      folded into "passed": an enforcing rule that abstains on everything is
+      inert and reads exactly like one that is working.
+
+    Rows stamped before the gate existed carry no ``eq_*`` keys at all. They are
+    counted apart as ``not_evaluated`` rather than as passes — a missing stamp
+    is not a pass, and this lane's own ledger deliberately did not bump its
+    schema for the verdict, so those rows are here to stay for a while.
+    """
+    rules: dict[str, dict] = {}
+    not_evaluated = 0
+    budget_suspended = 0
+    outcomes_by_id = {
+        str(r.get("signal_id") or ""): r for r in joined if isinstance(r, dict)
+    }
+
+    for row in stamps:
+        if not isinstance(row, dict):
+            continue
+        per_rule = row.get("eq_rules")
+        if not isinstance(per_rule, list):
+            not_evaluated += 1
+            continue
+        if row.get("eq_budget_suspended"):
+            budget_suspended += 1
+        enforced_by = str(row.get("eq_enforced_by") or "")
+        for outcome in per_rule:
+            if not isinstance(outcome, dict):
+                continue
+            key = str(outcome.get("rule") or "")
+            if not key:
+                continue
+            slot = rules.setdefault(key, {
+                "key": key,
+                # Which feature the rule reads, so this panel can label it from
+                # the same copy the splits below use. Carried on the stamp by
+                # the engine rather than derived here — ops does not decide
+                # which feature a rule is about.
+                "feature": str(outcome.get("feature") or ""),
+                # Mode is read off the rows the gate actually decided, not
+                # mirrored from a copy of the engine's registry. A rule the
+                # owner flips in ops changes these stamps within one cache TTL.
+                "live": False,
+                "threshold": outcome.get("threshold"),
+                "seen": 0, "reject": 0, "pass": 0, "unknown": 0,
+                "enforced": 0, "shadow_reject": 0,
+                "shadow_reject_rows": [],
+                "unknown_reasons": {},
+            })
+            slot["seen"] += 1
+            if outcome.get("live"):
+                slot["live"] = True
+            verdict = str(outcome.get("verdict") or "")
+            if verdict in ("reject", "pass", "unknown"):
+                slot[verdict] += 1
+            if verdict == "unknown":
+                reason = str(outcome.get("unknown_reason") or "unspecified")
+                slot["unknown_reasons"][reason] = slot["unknown_reasons"].get(reason, 0) + 1
+            if verdict != "reject":
+                continue
+            if enforced_by == key:
+                slot["enforced"] += 1
+                continue
+            slot["shadow_reject"] += 1
+            matched = outcomes_by_id.get(str(row.get("signal_id") or ""))
+            if matched is not None:
+                slot["shadow_reject_rows"].append(matched)
+
+    out: list[dict] = []
+    for slot in rules.values():
+        seen = slot["seen"] or 0
+        copy = FEATURE_COPY.get(str(slot.get("feature") or ""), {})
+        # What the rule would have removed, measured only on the rows that
+        # actually delivered and closed — beside the whole delivered book, so
+        # the reader sees what is being compared to what.
+        would_remove = _agg(slot.pop("shadow_reject_rows"))
+        out.append({
+            **slot,
+            "label": copy.get("label", slot["key"]),
+            "unknown_frac": (slot["unknown"] / seen) if seen else None,
+            "reject_frac": (slot["reject"] / seen) if seen else None,
+            "would_remove": would_remove,
+            # An enforcing rule that abstains on nearly everything is a dead
+            # gate wearing a live gate's label. Named on screen rather than
+            # left for someone to notice in a percentage.
+            "blind": bool(
+                slot["live"] and seen >= 20 and (slot["unknown"] / seen) >= 0.8
+            ),
+        })
+    out.sort(key=lambda r: (not r["live"], -r["enforced"], -r["shadow_reject"]))
+    return {
+        "rules": out,
+        "evaluated": sum(1 for r in stamps if isinstance(r, dict) and isinstance(r.get("eq_rules"), list)),
+        "not_evaluated": not_evaluated,
+        "budget_suspended": budget_suspended,
+        "any_live": any(r["live"] for r in out),
+        # The delivered book, as the denominator every "would remove" is against.
+        "delivered": _agg(joined),
+    }
+
+
 def _rows_and_coverage(
     request: Request,
-) -> tuple[list[dict], dict, dict, Optional[str]]:
+) -> tuple[list[dict], dict, dict, Optional[str], list[dict]]:
     dv = request.app.state.data_volume
     try:
         payload = dv.entry_features()
         perf = dv.signal_performance()
     except Exception as exc:  # noqa: BLE001
-        return [], {}, dict(FALLBACK_SPEC), f"engine data volume unavailable: {exc}"
+        return [], {}, dict(FALLBACK_SPEC), f"engine data volume unavailable: {exc}", []
     if not isinstance(payload, dict):
-        return [], {}, dict(FALLBACK_SPEC), None
+        return [], {}, dict(FALLBACK_SPEC), None, []
     stamps = payload.get("rows")
+    stamps = stamps if isinstance(stamps, list) else []
     joined, coverage = join_outcomes(stamps, perf)
     coverage["written_at"] = payload.get("written_at")
     coverage["schema"] = payload.get("schema")
@@ -443,7 +563,7 @@ def _rows_and_coverage(
     else:
         spec = dict(FALLBACK_SPEC)
         coverage["spec_source"] = "ops_fallback"
-    return joined, coverage, spec, None
+    return joined, coverage, spec, None, stamps
 
 
 def setups_present(rows: list[dict]) -> list[tuple[str, int]]:
@@ -461,7 +581,7 @@ def setups_present(rows: list[dict]) -> list[tuple[str, int]]:
 
 @router.get("/signals/entry-features")
 async def entry_features_page(request: Request, setup: str = Query("")):
-    joined, coverage, spec, error = _rows_and_coverage(request)
+    joined, coverage, spec, error, stamps = _rows_and_coverage(request)
 
     # Counted with every filter applied except its own, so the selector
     # describes the whole book rather than only the option already chosen.
@@ -469,6 +589,15 @@ async def entry_features_page(request: Request, setup: str = Query("")):
 
     if setup:
         joined = [r for r in joined if str(r.get("setup_class") or "") == setup]
+        # Filtered on the same axis as the table beside it — a gate panel
+        # measured over the whole ledger above a table showing one path is not
+        # a summary of anything the reader is looking at (#90).
+        stamps = [
+            r for r in stamps
+            if isinstance(r, dict) and str(r.get("setup_class") or "") == setup
+        ]
+
+    quality = entry_quality_panel(stamps, joined)
 
     splits = [
         split_by_feature(
@@ -504,6 +633,7 @@ async def entry_features_page(request: Request, setup: str = Query("")):
             "request": request,
             "error": error,
             "coverage": coverage,
+            "quality": quality,
             "splits": splits,
             "rows": joined[:200],
             "row_cap_bit": len(joined) > 200,
@@ -521,13 +651,18 @@ async def entry_features_page(request: Request, setup: str = Query("")):
 
 @router.get("/signals/entry-features/export.csv")
 async def entry_features_export(request: Request, setup: str = Query("")):
-    joined, _cov, spec, _err = _rows_and_coverage(request)
+    joined, _cov, spec, _err, _stamps = _rows_and_coverage(request)
     if setup:
         joined = [r for r in joined if str(r.get("setup_class") or "") == setup]
     cols = [
         "signal_id", "symbol", "side", "setup_class", "entry_trigger",
         "tf_name", "entry_ref_name", "confidence", "entry_regime",
         "sl_dist_pct", "profile_would_reject",
+        # What the live gate did to this row. Exported because the promotion
+        # question — would this rule have helped — is answered by joining
+        # `eq_would_reject_by` to the outcome columns below, and that is an
+        # analysis nobody should have to re-derive from the page.
+        "eq_would_reject_by", "eq_enforced_by", "eq_budget_suspended",
         # Every feature any path declares, so one export covers the whole book
         # and a per-path column does not vanish because of the current filter.
         *features_for(spec, ""),

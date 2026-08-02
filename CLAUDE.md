@@ -333,6 +333,41 @@ move that small. Read the column as *what the book can possibly earn*; it points
 at entry quality and loss size, and away from the targets. Any change to it is
 TP/SL shape and therefore owner-sign-off either way.
 
+**2026-08-02: this page is no longer only a what-if.** The owner asked for the
+lane to be live, and engine `src/entry_quality.py` now runs a real gate in the
+scanner's post-scoring chain. So the page carries **two** kinds of thing and must
+never let them read as one:
+
+- the **Live entry-quality rules** panel — rules that actually run and can cost a
+  candidate its emission;
+- the splits below it — what-ifs computed here and applied nowhere.
+
+The old blanket *"Nothing on this page is applied"* copy is gone, and a route
+test asserts it does not come back. Rules for the panel:
+
+- **Measure it on the stamps, not on the join.** A candidate the gate suppressed
+  never delivered, so it has no closed-signal record and cannot appear in
+  `join_outcomes` — a panel built on the joined book would silently exclude
+  exactly the population the gate acted on and render a live gate that had done
+  nothing.
+- **A suppression has no outcome here, and never will.** That column is a count.
+  The forward measurement lives in the suppression audit (Strategy Lab → gate
+  audit), because an enforcing gate starves its own evidence and stamping is the
+  only thing that keeps its verdict arriving.
+- **"Would have removed" colours inverted.** It is the performance of rows the
+  rule would have *dropped*, so negative is the rule looking right — and it is
+  published beside the delivered book's own average, because a removal figure
+  with no denominator means nothing.
+- **Unknown is its own bucket, and an enforcing rule that abstains is badged.**
+  Fail-open is deliberate engine-side; the cost is that an inert rule reads
+  exactly like a working one on every count except this column.
+- **The mode is read off the rows the gate decided**, never mirrored from a copy
+  of the engine's rule registry. `MEASUREMENT_SUFFIXES` drifted for a week; the
+  fix for a drifting mirror is not a second mirror.
+- **The panel filters with the table.** A gate summary over the whole ledger above
+  a table showing one path is not a summary of anything the reader is looking at
+  (#90, again).
+
 Rules specific to this page:
 
 - **Three buckets, never two.** `keep` / `drop` / **`unknown`**. Folding rows

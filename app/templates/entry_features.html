@@ -6,9 +6,10 @@
 <p class="muted small">
   On what basis is each path actually confirming an entry? Every feature below was
   available in <code>smc_data</code> or in the evaluator's own scope at the moment
-  the signal was created, and none of it was read.
+  the signal was created, and the evaluators read almost none of it.
   <strong>The feature sets differ per path on purpose</strong> — the paths are not
   blind in the same place, and a list chosen for one measures nothing on another.
+  A small set of these readings is now <em>applied</em>: see the live rules below.
 </p>
 
 <div class="actions">
@@ -47,11 +48,134 @@
 {% endif %}
 
 <p class="warn small">
-  <strong>Nothing on this page is applied.</strong> Every “keep” column is a
-  question, not a change. The engine emits the identical signal whether this
-  measurement is on or off, and tests on the producing side drive the real
-  evaluators both ways to pin that.
+  <strong>The splits below are still questions; the panel above them is not.</strong>
+  Every “keep” column further down is a what-if computed here and applied nowhere.
+  What <em>is</em> applied is the small set of rules in <strong>Live entry-quality
+  rules</strong> — those run in the engine's gate chain and can cost a candidate its
+  emission. Read the two sections as what they are: one is exploration, one is
+  live behaviour.
 </p>
+
+<section class="card">
+  <h2>Live entry-quality rules</h2>
+  <p class="muted small">
+    The consuming half of this lane. A rule here runs in the scanner
+    <em>after</em> the confidence floor, so a suppression is always a candidate
+    that would otherwise have emitted — the count means “signals this gate cost
+    us”, not “signals that were dying anyway”.
+    <strong>A rule ships live only when enforcing it invents no number</strong>:
+    it repairs a filter the engine already computes and then discards. A rule
+    whose threshold is a judgement stays in shadow until this page has the
+    evidence to move it. Flip either from
+    <a href="/control">Control → Signal gating</a>.
+  </p>
+
+  {% if quality.rules %}
+  <div class="summary-row">
+    <span class="stat"><span class="n">{{ quality.evaluated }}</span> candidates judged</span>
+    <span class="stat"><span class="n">{{ quality.not_evaluated }}</span> stamped before the gate existed</span>
+    {% if quality.budget_suspended %}
+    <span class="stat warn"><span class="n">{{ quality.budget_suspended }}</span> held back by the cap</span>
+    {% endif %}
+  </div>
+
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Rule</th><th>Mode</th>
+        <th title="the gate killed it — no outcome exists, and none can">Suppressed</th>
+        <th title="the rule fired and did not act; these emitted, so their outcome is known">Would have removed</th>
+        <th title="what those rows actually did, against the delivered book beside it">Their result</th>
+        <th title="the rule could not read its feature and abstained">Unknown</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in quality.rules %}
+      <tr>
+        <td>
+          <strong>{{ r.label }}</strong>
+          {% if r.blind %}
+          <span class="badge st-open"
+                title="an enforcing rule that abstains on nearly every candidate is inert — it passes everything and reads exactly like a rule that is working">blind</span>
+          {% endif %}
+          <br><span class="muted small"><code>{{ r.key }}</code>{% if r.threshold is not none %} · threshold {{ "%.4g"|format(r.threshold) }}{% endif %}</span>
+        </td>
+        <td>
+          {% if r.live %}<span class="badge st-owner">enforcing</span>
+          {% else %}<span class="badge st-partial">shadow</span>{% endif %}
+        </td>
+        <td>{% if r.enforced %}<strong>{{ r.enforced }}</strong>{% else %}0{% endif %}</td>
+        <td>{{ r.shadow_reject }}<span class="muted small"> of {{ r.seen }}</span></td>
+        <td>
+          {% if r.would_remove.n %}
+            {% if r.would_remove.avg_pnl_pct is not none %}
+            <strong class="{% if r.would_remove.avg_pnl_pct > 0 %}neg{% else %}pos{% endif %}">{{ "%+.2f"|format(r.would_remove.avg_pnl_pct) }}%</strong>
+            {% else %}—{% endif %}
+            <span class="muted small">over {{ r.would_remove.n }}, book
+              {% if quality.delivered.avg_pnl_pct is not none %}{{ "%+.2f"|format(quality.delivered.avg_pnl_pct) }}%{% else %}—{% endif %}
+              over {{ quality.delivered.n }}</span>
+          {% else %}
+            <span class="muted small">nothing it flagged has closed yet</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if r.unknown %}<span class="warn">{{ r.unknown }}</span>
+            <span class="muted small">({{ "%.0f"|format((r.unknown_frac or 0) * 100) }}%{% for reason, n in r.unknown_reasons.items() %} · {{ reason }} {{ n }}{% endfor %})</span>
+          {% else %}0{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <p class="warn small">
+    <strong>“Their result” colours the other way round on purpose.</strong> It is
+    the performance of rows the rule would have <em>removed</em>, so a negative
+    number is the rule looking right. It is measured only on rows that emitted and
+    closed — a rule already enforcing does not produce them, which is why the
+    <strong>Suppressed</strong> column carries no result and never will.
+    An enforcing rule starves its own evidence, so every suppression is stamped
+    into the suppression audit instead and forward-measured on real candles:
+    <a href="/strategy-lab">Strategy Lab → gate audit</a> is where an enforcing
+    rule keeps earning or losing its place.
+  </p>
+  <p class="muted small">
+    <strong>Unknown is not a pass.</strong> A feature that did not compute makes
+    its rule abstain — deliberately, because a fail-closed rule here would kill
+    the whole feed the moment an upstream went dark, and that failure is
+    indistinguishable from a quiet market. The cost is that an inert rule looks
+    like a working one on every count except this column, which is why it is a
+    column and why an enforcing rule that abstains on 80%+ of its own population
+    is badged <em>blind</em> and pages the liveness watchdog.
+  </p>
+  <p class="muted small">
+    <strong>The cap is a blast radius, not a filter.</strong> Neither rule's
+    rejection volume had ever been measured before it went live. Once the gate
+    has rejected more than its configured fraction of recent decisions it degrades
+    to shadow — it keeps stamping and stops suppressing — until the window
+    recovers. That state is counted above rather than left to look like a quiet
+    market, and it is order-dependent by construction: the honest cost of a bound
+    that could not be computed in advance.
+  </p>
+  {% elif quality.not_evaluated %}
+  <p class="muted small">
+    <strong>{{ quality.not_evaluated }} stamps, none judged by the gate.</strong>
+    Every row in this ledger predates the entry-quality gate, so none carries a
+    verdict — that is a missing stamp, not a pass, and it clears itself as new
+    signals arrive. If it does not clear, the gate's measurement flag
+    (<code>entry_quality_enabled</code>) is off.
+  </p>
+  {% else %}
+  <p class="muted small">
+    No stamped candidate has reached the gate yet. Quiet, not broken: the same
+    comparison applies as for coverage below — <code>/track-record</code> adding
+    rows on these paths while this stays empty is the signal that something is
+    wrong.
+  </p>
+  {% endif %}
+</section>
 
 {% if error %}
 <section class="card"><h2>Ledger unavailable</h2><p class="warn">{{ error }}</p></section>
