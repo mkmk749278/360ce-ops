@@ -110,8 +110,8 @@
     <thead>
       <tr>
         <th>Feature</th><th>Rule</th>
-        <th>Now (avg R)</th><th>Keep (avg R)</th><th>Δ avg R</th>
-        <th>Now (avg %)</th><th>Keep (avg %)</th><th>Δ avg %</th>
+        <th title="the money — sizing is a fixed notional, so a percent is proportional to money and R is not">Now (avg %)</th><th>Keep (avg %)</th><th>Δ avg %</th>
+        <th class="muted" title="normalised by each trade's own stop; the bridge to the Strategy Lab, which is keyed in R">Now (avg R)</th><th class="muted">Keep (avg R)</th><th class="muted">Δ avg R</th>
         <th>Kept</th><th>Dropped</th><th title="feature never computed — the rule could not have judged these">Unknown</th>
       </tr>
     </thead>
@@ -127,12 +127,12 @@
           <br><span class="muted small">{{ s.asks }}</span>
         </td>
         <td><code>{{ s.direction }} {{ "%.4g"|format(s.threshold) }}</code></td>
-        <td>{% if s.now.avg_r is not none %}{{ "%+.3f"|format(s.now.avg_r) }}<span class="muted small"> (n={{ s.now.scored }})</span>{% else %}—{% endif %}</td>
-        <td>{% if s.keep.avg_r is not none %}{{ "%+.3f"|format(s.keep.avg_r) }}<span class="muted small"> (n={{ s.keep.scored }})</span>{% else %}—{% endif %}</td>
-        <td class="{% if s.delta_avg_r and s.delta_avg_r > 0 %}pos{% elif s.delta_avg_r and s.delta_avg_r < 0 %}neg{% endif %}">{% if s.delta_avg_r is not none %}{{ "%+.3f"|format(s.delta_avg_r) }}{% else %}—{% endif %}</td>
-        <td>{% if s.now.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.now.avg_pnl_pct) }}%{% else %}—{% endif %}</td>
-        <td>{% if s.keep.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.keep.avg_pnl_pct) }}%{% else %}—{% endif %}</td>
-        <td class="{% if s.delta_avg_pnl_pct and s.delta_avg_pnl_pct > 0 %}pos{% elif s.delta_avg_pnl_pct and s.delta_avg_pnl_pct < 0 %}neg{% endif %}">{% if s.delta_avg_pnl_pct is not none %}{{ "%+.2f"|format(s.delta_avg_pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td><strong>{% if s.now.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.now.avg_pnl_pct) }}%{% else %}—{% endif %}</strong><span class="muted small"> (n={{ s.now.n }})</span></td>
+        <td><strong>{% if s.keep.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.keep.avg_pnl_pct) }}%{% else %}—{% endif %}</strong><span class="muted small"> (n={{ s.keep.n }})</span></td>
+        <td class="{% if s.delta_avg_pnl_pct and s.delta_avg_pnl_pct > 0 %}pos{% elif s.delta_avg_pnl_pct and s.delta_avg_pnl_pct < 0 %}neg{% endif %}"><strong>{% if s.delta_avg_pnl_pct is not none %}{{ "%+.2f"|format(s.delta_avg_pnl_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="muted small">{% if s.now.avg_r is not none %}{{ "%+.3f"|format(s.now.avg_r) }}R<span class="muted"> (n={{ s.now.scored }})</span>{% else %}—{% endif %}</td>
+        <td class="muted small">{% if s.keep.avg_r is not none %}{{ "%+.3f"|format(s.keep.avg_r) }}R{% else %}—{% endif %}</td>
+        <td class="muted small">{% if s.delta_avg_r is not none %}{{ "%+.3f"|format(s.delta_avg_r) }}R{% else %}—{% endif %}</td>
         <td>{{ s.keep.n }}{% if s.kept_fraction is not none %} <span class="muted small">({{ "%.0f"|format(s.kept_fraction * 100) }}%)</span>{% endif %}</td>
         <td>{{ s.drop.n }}</td>
         <td>{% if s.unknown.n %}<span class="warn">{{ s.unknown.n }}</span>{% else %}0{% endif %}</td>

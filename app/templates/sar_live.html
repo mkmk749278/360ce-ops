@@ -179,31 +179,58 @@
   from open trades, so this stays blank rather than borrowing a number from the live tab.</p>
   {% else %}
   <table class="tbl">
-    <thead><tr><th>Fill</th><th>Trades</th><th>Win rate</th><th>Avg R <span class="muted">÷ designed SL</span></th><th>Avg R @risk <span class="muted">÷ risk parked</span></th></tr></thead>
+    <thead><tr>
+      <th>Fill</th><th>Trades</th><th>Win rate</th>
+      <th title="the money: what this mechanism actually returned per trade. Position sizing is a fixed $500 notional, so a percent IS proportional to money and R is not.">Avg PnL %</th>
+      <th title="sum of the per-trade percentages across the selection">Total PnL %</th>
+      <th class="muted" title="normalised by each trade's own stop. Kept as the bridge to the Strategy Lab and the edge matrix, which speak R — but sizing ignores the stop, so this is NOT proportional to money.">Avg R <span class="muted">÷ designed SL</span></th>
+      <th class="muted">Avg R @risk <span class="muted">÷ risk parked</span></th>
+    </tr></thead>
     <tbody>
       <tr>
         <td>Stop touched intrabar <span class="muted">(@level)</span></td>
-        <td>{{ summary.n_r }}</td>
+        <td>{{ summary.n_pnl }}</td>
         <td>{% if summary.win_rate_level is not none %}{{ "%.0f"|format(summary.win_rate_level * 100) }}%{% else %}—{% endif %}</td>
-        <td class="{% if summary.avg_r_level is not none and summary.avg_r_level > 0 %}pos{% elif summary.avg_r_level is not none and summary.avg_r_level < 0 %}neg{% endif %}">
-          {% if summary.avg_r_level is not none %}{{ "%+.3f"|format(summary.avg_r_level) }}R{% else %}—{% endif %}</td>
-        <td class="{% if summary.avg_r_level_risk is not none and summary.avg_r_level_risk > 0 %}pos{% elif summary.avg_r_level_risk is not none and summary.avg_r_level_risk < 0 %}neg{% endif %}">
-          {% if summary.avg_r_level_risk is not none %}{{ "%+.3f"|format(summary.avg_r_level_risk) }}R{% else %}—{% endif %}</td>
+        <td class="{% if summary.avg_pnl_level_pct is not none and summary.avg_pnl_level_pct > 0 %}pos{% elif summary.avg_pnl_level_pct is not none and summary.avg_pnl_level_pct < 0 %}neg{% endif %}">
+          <strong>{% if summary.avg_pnl_level_pct is not none %}{{ "%+.3f"|format(summary.avg_pnl_level_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="{% if summary.total_pnl_level_pct is not none and summary.total_pnl_level_pct > 0 %}pos{% elif summary.total_pnl_level_pct is not none and summary.total_pnl_level_pct < 0 %}neg{% endif %}">
+          {% if summary.total_pnl_level_pct is not none %}{{ "%+.1f"|format(summary.total_pnl_level_pct) }}%{% else %}—{% endif %}</td>
+        <td class="muted small">{% if summary.avg_r_level is not none %}{{ "%+.3f"|format(summary.avg_r_level) }}R{% else %}—{% endif %}</td>
+        <td class="muted small">{% if summary.avg_r_level_risk is not none %}{{ "%+.3f"|format(summary.avg_r_level_risk) }}R{% else %}—{% endif %}</td>
       </tr>
       <tr>
         <td>Confirmed flip, market out <span class="muted">(@confirm)</span></td>
-        <td>{{ summary.n_r }}</td>
+        <td>{{ summary.n_pnl }}</td>
         <td>{% if summary.win_rate_confirm is not none %}{{ "%.0f"|format(summary.win_rate_confirm * 100) }}%{% else %}—{% endif %}</td>
-        <td class="{% if summary.avg_r_confirm is not none and summary.avg_r_confirm > 0 %}pos{% elif summary.avg_r_confirm is not none and summary.avg_r_confirm < 0 %}neg{% endif %}">
-          {% if summary.avg_r_confirm is not none %}{{ "%+.3f"|format(summary.avg_r_confirm) }}R{% else %}—{% endif %}</td>
-        <td class="{% if summary.avg_r_confirm_risk is not none and summary.avg_r_confirm_risk > 0 %}pos{% elif summary.avg_r_confirm_risk is not none and summary.avg_r_confirm_risk < 0 %}neg{% endif %}">
-          {% if summary.avg_r_confirm_risk is not none %}{{ "%+.3f"|format(summary.avg_r_confirm_risk) }}R{% else %}—{% endif %}</td>
+        <td class="{% if summary.avg_pnl_confirm_pct is not none and summary.avg_pnl_confirm_pct > 0 %}pos{% elif summary.avg_pnl_confirm_pct is not none and summary.avg_pnl_confirm_pct < 0 %}neg{% endif %}">
+          <strong>{% if summary.avg_pnl_confirm_pct is not none %}{{ "%+.3f"|format(summary.avg_pnl_confirm_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="{% if summary.total_pnl_confirm_pct is not none and summary.total_pnl_confirm_pct > 0 %}pos{% elif summary.total_pnl_confirm_pct is not none and summary.total_pnl_confirm_pct < 0 %}neg{% endif %}">
+          {% if summary.total_pnl_confirm_pct is not none %}{{ "%+.1f"|format(summary.total_pnl_confirm_pct) }}%{% else %}—{% endif %}</td>
+        <td class="muted small">{% if summary.avg_r_confirm is not none %}{{ "%+.3f"|format(summary.avg_r_confirm) }}R{% else %}—{% endif %}</td>
+        <td class="muted small">{% if summary.avg_r_confirm_risk is not none %}{{ "%+.3f"|format(summary.avg_r_confirm_risk) }}R{% else %}—{% endif %}</td>
       </tr>
     </tbody>
   </table>
+  <p class="warn small">
+    <strong>Read the PnL column, not the R.</strong> Every position is sized at a fixed
+    $500 notional — <code>raw_qty = notional / entry_price</code> — so the stop distance
+    appears nowhere in the sizing. R divides each outcome by its own stop, which only
+    equalises trades when size is scaled inversely to that stop, and it is not. A trade
+    losing 0.80% and one losing 6.14% both read exactly <code>−1.00R</code> while costing
+    $4.00 and $30.70 of the same $500.
+    <strong>It changes conclusions, not just presentation</strong>: on the 2026-08-02 arms
+    R read +0.035R and PnL read −0.041% — the sign flipped — because the winners sat on
+    tighter stops than the losers, so dividing by the stop inflated the wins.
+    R stays on the page only as the bridge to the Strategy Lab and the edge matrix, which
+    are keyed in R.
+  </p>
   <p class="muted small">
-    Win rate is stated once: a positive denominator cannot change a sign, so it is identical under
-    both R's and printing it twice would imply two populations.
+    Win rate is stated once and counted on the money: it agrees row-by-row with R (a
+    positive denominator cannot change a sign) but the populations differ — R silently
+    drops rows with no entry-risk stamp and PnL keeps them, because a percentage needs no
+    denominator.
+    {% if summary.n_r != summary.n_pnl %}<strong>{{ summary.n_r }}</strong> of
+    {{ summary.n_pnl }} rows carry an entry-risk stamp and so appear in the R columns.{% endif %}
     {% if summary.n_r_risk != summary.n_r %}<strong>{{ summary.n_r_risk }}</strong> of
     {{ summary.n_r }} rows carry a usable risk denominator; the rest are excluded from
     <em>R @risk</em> only.{% endif %}
@@ -249,7 +276,7 @@
     risked more"</em> would arrive as one number wearing the other's name. Split here so they don't.
   </p>
   <table class="tbl">
-    <thead><tr><th>SAR stop at handover</th><th>Resolved</th><th>Avg risk taken</th><th>Win @level</th><th>Avg R @level</th></tr></thead>
+    <thead><tr><th>SAR stop at handover</th><th>Resolved</th><th>Avg risk taken</th><th>Win @level</th><th>Avg PnL @level</th><th class="muted">Avg R @level</th></tr></thead>
     <tbody>
       {% for key, label in [('inside', 'Inside the designed SL'), ('wider', 'Wider than the designed SL'), ('unknown', 'Never handed over')] %}
       {% set b = by_risk[key] %}
@@ -260,8 +287,9 @@
         <td>{{ b.measurable }}</td>
         <td>{% if b.avg_risk_pct is not none %}{{ "%.2f"|format(b.avg_risk_pct) }}%{% else %}—{% endif %}</td>
         <td>{% if b.win_rate_level is not none %}{{ "%.0f"|format(b.win_rate_level * 100) }}%{% else %}—{% endif %}</td>
-        <td class="{% if b.avg_r_level is not none and b.avg_r_level > 0 %}pos{% elif b.avg_r_level is not none and b.avg_r_level < 0 %}neg{% endif %}">
-          {% if b.avg_r_level is not none %}{{ "%+.3f"|format(b.avg_r_level) }}R{% else %}—{% endif %}</td>
+        <td class="{% if b.avg_pnl_level_pct is not none and b.avg_pnl_level_pct > 0 %}pos{% elif b.avg_pnl_level_pct is not none and b.avg_pnl_level_pct < 0 %}neg{% endif %}">
+          <strong>{% if b.avg_pnl_level_pct is not none %}{{ "%+.3f"|format(b.avg_pnl_level_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="muted small">{% if b.avg_r_level is not none %}{{ "%+.3f"|format(b.avg_r_level) }}R{% else %}—{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -278,7 +306,7 @@
 <section class="card">
   <h2 class="small">5m vs 15m — same signals, different arms</h2>
   <table class="tbl">
-    <thead><tr><th>Timeframe</th><th>Resolved</th><th>Handovers</th><th>Win @level</th><th>Avg R @level</th><th>Avg R @confirm</th><th>Confirm cost</th></tr></thead>
+    <thead><tr><th>Timeframe</th><th>Resolved</th><th>Handovers</th><th>Win @level</th><th>Avg PnL @level</th><th>Avg PnL @confirm</th><th class="muted">Avg R @level</th><th class="muted">Avg R @confirm</th><th>Confirm cost</th></tr></thead>
     <tbody>
       {% for tf in by_timeframe %}
       <tr>
@@ -286,10 +314,12 @@
         <td>{{ tf.measurable }}</td>
         <td>{{ tf.handovers }}</td>
         <td>{% if tf.win_rate_level is not none %}{{ "%.0f"|format(tf.win_rate_level * 100) }}%{% else %}—{% endif %}</td>
-        <td class="{% if tf.avg_r_level is not none and tf.avg_r_level > 0 %}pos{% elif tf.avg_r_level is not none and tf.avg_r_level < 0 %}neg{% endif %}">
-          {% if tf.avg_r_level is not none %}{{ "%+.3f"|format(tf.avg_r_level) }}R{% else %}—{% endif %}</td>
-        <td class="{% if tf.avg_r_confirm is not none and tf.avg_r_confirm > 0 %}pos{% elif tf.avg_r_confirm is not none and tf.avg_r_confirm < 0 %}neg{% endif %}">
-          {% if tf.avg_r_confirm is not none %}{{ "%+.3f"|format(tf.avg_r_confirm) }}R{% else %}—{% endif %}</td>
+        <td class="{% if tf.avg_pnl_level_pct is not none and tf.avg_pnl_level_pct > 0 %}pos{% elif tf.avg_pnl_level_pct is not none and tf.avg_pnl_level_pct < 0 %}neg{% endif %}">
+          <strong>{% if tf.avg_pnl_level_pct is not none %}{{ "%+.3f"|format(tf.avg_pnl_level_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="{% if tf.avg_pnl_confirm_pct is not none and tf.avg_pnl_confirm_pct > 0 %}pos{% elif tf.avg_pnl_confirm_pct is not none and tf.avg_pnl_confirm_pct < 0 %}neg{% endif %}">
+          <strong>{% if tf.avg_pnl_confirm_pct is not none %}{{ "%+.3f"|format(tf.avg_pnl_confirm_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="muted small">{% if tf.avg_r_level is not none %}{{ "%+.3f"|format(tf.avg_r_level) }}R{% else %}—{% endif %}</td>
+        <td class="muted small">{% if tf.avg_r_confirm is not none %}{{ "%+.3f"|format(tf.avg_r_confirm) }}R{% else %}—{% endif %}</td>
         <td>{% if tf.avg_confirm_slippage_pct is not none %}{{ "%+.3f"|format(tf.avg_confirm_slippage_pct) }}%{% else %}—{% endif %}</td>
       </tr>
       {% endfor %}
@@ -324,7 +354,7 @@
         <th>Symbol</th><th>Side</th><th>TF</th><th>Setup</th>
         <th>SAR@entry</th><th>Governor</th><th>Entry</th>
         {% if tab == 'resolved' %}
-        <th>Anchor</th><th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th>R @level</th><th>R @confirm</th><th>R @level, risk</th><th>Confirm cost</th><th>Bars</th>
+        <th>Anchor</th><th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th title="the money this arm returned — sizing is a fixed notional, so a percent is proportional to money and R is not">PnL @level</th><th>PnL @confirm</th><th class="muted">R @level</th><th class="muted">R @confirm</th><th class="muted">R @level, risk</th><th>Confirm cost</th><th>Bars</th>
         {% else %}
         <th>Last advance</th><th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>SAR risk</th><th title="maximum favourable excursion">MFE</th><th title="maximum adverse excursion — how far this arm went against us first">MAE</th><th>Bars</th>
         {% endif %}
@@ -359,10 +389,16 @@
         <td class="small">{{ r.exit_reason or '—' }}</td>
         <td>{% if r.fill_level is not none %}{{ "%.6g"|format(r.fill_level) }}{% else %}—{% endif %}</td>
         <td>{% if r.fill_confirm is not none %}{{ "%.6g"|format(r.fill_confirm) }}{% else %}—{% endif %}</td>
-        <td class="{% if r.r_level is not none and r.r_level > 0 %}pos{% elif r.r_level is not none and r.r_level < 0 %}neg{% endif %}">
-          {% if r.r_level is not none %}{{ "%+.2f"|format(r.r_level) }}{% else %}—{% endif %}</td>
-        <td class="{% if r.r_confirm is not none and r.r_confirm > 0 %}pos{% elif r.r_confirm is not none and r.r_confirm < 0 %}neg{% endif %}">
-          {% if r.r_confirm is not none %}{{ "%+.2f"|format(r.r_confirm) }}{% else %}—{% endif %}</td>
+        {# The money, per row. The engine has always written these and this page
+           never showed them (owner, 2026-08-02) — so every row read as an R
+           normalised by a stop that position sizing ignores. #}
+        <td class="{% if r.get('pnl_level_pct') is not none and r.get('pnl_level_pct') > 0 %}pos{% elif r.get('pnl_level_pct') is not none and r.get('pnl_level_pct') < 0 %}neg{% endif %}">
+          <strong>{% if r.get('pnl_level_pct') is not none %}{{ "%+.2f"|format(r.get('pnl_level_pct')) }}%{% else %}—{% endif %}</strong></td>
+        <td class="{% if r.get('pnl_confirm_pct') is not none and r.get('pnl_confirm_pct') > 0 %}pos{% elif r.get('pnl_confirm_pct') is not none and r.get('pnl_confirm_pct') < 0 %}neg{% endif %}">
+          <strong>{% if r.get('pnl_confirm_pct') is not none %}{{ "%+.2f"|format(r.get('pnl_confirm_pct')) }}%{% else %}—{% endif %}</strong></td>
+        <td class="muted small" title="normalised by this trade's own stop — not proportional to money, because sizing is a fixed notional">
+          {% if r.r_level is not none %}{{ "%+.2f"|format(r.r_level) }}R{% else %}—{% endif %}</td>
+        <td class="muted small">{% if r.r_confirm is not none %}{{ "%+.2f"|format(r.r_confirm) }}R{% else %}—{% endif %}</td>
         <td class="{% if r.get('r_level_risk') is not none and r.get('r_level_risk') > 0 %}pos{% elif r.get('r_level_risk') is not none and r.get('r_level_risk') < 0 %}neg{% endif %}">
           {% if r.get('r_level_risk') is not none %}{{ "%+.2f"|format(r.get('r_level_risk')) }}
             <span class="muted small" title="the risk this arm actually parked — the SAR stop at handover, or the original SL when it never handed over">/ {{ "%.2f"|format(r.get('risk_denominator_pct')) }}%</span>

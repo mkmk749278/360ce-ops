@@ -458,10 +458,30 @@ def summarize_resolved(rows: list[dict]) -> dict:
     the cost of confirmation, and choosing one before that cost is known would
     be picking the answer.
 
+    **PnL % is the primary measure and R is subordinate to it** (owner,
+    2026-08-02: *"that R is purely confusing — 3% SL still only 1R"*).
+
+    ``signal_dispatch`` sizes every position at a **fixed $500 notional**
+    (``raw_qty = notional / entry_price``) — the stop distance appears nowhere in
+    that formula. R divides each outcome by its own stop, which only equalises
+    trades when size is scaled inversely to the stop. It is not. So a trade that
+    loses 0.80% and one that loses 6.14% both read exactly −1.00R while costing
+    $4.00 and $30.70 of the same $500.
+
+    That is not a presentation quibble; it changes conclusions. On the
+    2026-08-02 arms R reads **+0.035R** and PnL reads **−0.041%** — *the sign
+    flips* — because the winners sit on tighter stops (mean 3.25%) than the
+    losers (3.46%), so dividing by the stop inflates the wins and shrinks the
+    losses.
+
+    R is still computed and still shown, because the Strategy Lab and the edge
+    matrix speak R and a reader moving between them needs the bridge. It is
+    never the headline here.
+
     Rows with no usable R (no SL distance at entry) are counted in ``n`` and
     excluded from every R figure, with the shortfall stated — scoring them 0R
     would drag the averages toward zero and make missing data read as mediocre
-    performance.
+    performance. PnL % has no such shortfall: it needs no denominator.
     """
     closed = [r for r in rows if r.get("status") in RESOLVED_STATUSES]
     scored = [r for r in closed if r.get("status") != STATUS_INSUFFICIENT]
@@ -479,10 +499,19 @@ def summarize_resolved(rows: list[dict]) -> dict:
     r_confirm_risk = [_f(r.get("r_confirm_risk")) for r in measurable]
     r_level_risk = [x for x in r_level_risk if x is not None]
     r_confirm_risk = [x for x in r_confirm_risk if x is not None]
+    # The money. Needs no denominator, so its population is every measurable
+    # arm rather than the subset carrying an entry-risk stamp.
+    pnl_level = [_f(r.get("pnl_level_pct")) for r in measurable]
+    pnl_confirm = [_f(r.get("pnl_confirm_pct")) for r in measurable]
+    pnl_level = [x for x in pnl_level if x is not None]
+    pnl_confirm = [x for x in pnl_confirm if x is not None]
     slip = [_f(r.get("confirm_slippage_pct")) for r in measurable]
     slip = [x for x in slip if x is not None]
-    wins_level = sum(1 for x in r_level if x > 0)
-    wins_confirm = sum(1 for x in r_confirm if x > 0)
+    # Win rate counts on the MONEY, not on R: they agree per row (a positive
+    # denominator cannot change a sign) but the populations differ, because R
+    # silently drops rows with no entry-risk stamp and PnL keeps them.
+    wins_level = sum(1 for x in pnl_level if x > 0)
+    wins_confirm = sum(1 for x in pnl_confirm if x > 0)
 
     def _avg(xs: list[float]) -> Optional[float]:
         return (sum(xs) / len(xs)) if xs else None
@@ -498,6 +527,12 @@ def summarize_resolved(rows: list[dict]) -> dict:
             1 for r in measurable if r.get("anchor_verdict") == ANCHOR_UNVERIFIED
         ),
         "no_r": len(measurable) - len(r_level),
+        # Primary. Listed first because it is what the owner reads to decide.
+        "n_pnl": len(pnl_level),
+        "avg_pnl_level_pct": _avg(pnl_level),
+        "avg_pnl_confirm_pct": _avg(pnl_confirm),
+        "total_pnl_level_pct": sum(pnl_level) if pnl_level else None,
+        "total_pnl_confirm_pct": sum(pnl_confirm) if pnl_confirm else None,
         "n_r": len(r_level),
         "n_r_risk": len(r_level_risk),
         "avg_r_level": _avg(r_level),
@@ -508,8 +543,8 @@ def summarize_resolved(rows: list[dict]) -> dict:
         # printing them twice would imply two populations.
         "avg_r_level_risk": _avg(r_level_risk),
         "avg_r_confirm_risk": _avg(r_confirm_risk),
-        "win_rate_level": (wins_level / len(r_level)) if r_level else None,
-        "win_rate_confirm": (wins_confirm / len(r_confirm)) if r_confirm else None,
+        "win_rate_level": (wins_level / len(pnl_level)) if pnl_level else None,
+        "win_rate_confirm": (wins_confirm / len(pnl_confirm)) if pnl_confirm else None,
         "avg_confirm_slippage_pct": _avg(slip),
         "by_exit": {
             reason: sum(1 for r in measurable if r.get("exit_reason") == reason)
