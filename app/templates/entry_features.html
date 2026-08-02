@@ -97,9 +97,9 @@
           <strong>{{ r.label }}</strong>
           {% if r.blind %}
           <span class="badge st-open"
-                title="an enforcing rule that abstains on nearly every candidate is inert — it passes everything and reads exactly like a rule that is working">blind</span>
+                title="{% if r.live %}an enforcing rule that abstains on nearly every candidate is inert — it passes everything and reads exactly like a rule that is working{% else %}a shadow rule that never reads its feature can never accumulate the evidence its own promotion depends on — a measurement flat-lining, not a quiet one{% endif %}">blind</span>
           {% endif %}
-          <br><span class="muted small"><code>{{ r.key }}</code>{% if r.threshold is not none %} · threshold {{ "%.4g"|format(r.threshold) }}{% endif %}</span>
+          <br><span class="muted small"><code>{{ r.key }}</code>{% if r.feature %} · reads <code>{{ r.feature }}</code>{% endif %}{% if r.threshold is not none %} · threshold {{ "%.4g"|format(r.threshold) }}{% endif %}</span>
         </td>
         <td>
           {% if r.live %}<span class="badge st-owner">enforcing</span>

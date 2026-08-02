@@ -602,10 +602,13 @@ class TestTheLiveGatePanel:
         } for i in range(25)]
         assert entry_quality_panel(stamps, [])["rules"][0]["blind"] is True
 
-    def test_a_shadow_rule_is_never_badged_blind(self):
-        """Abstaining costs nothing while nothing is being enforced, and
-        flagging it would fill the signal that is meant to make a real fault
-        stand out."""
+    def test_a_totally_blind_shadow_rule_is_badged_too(self):
+        """The first cut badged only enforcing rules, and that is exactly how
+        `smc_zone_dist_atr` hid: `zone_distance_atr` read key names `FVGZone`
+        does not carry, so `tpe_smc_zone` abstained on 100% of its population —
+        0 of 57 TPE rows on the VPS — while the badge stayed off because the
+        rule was in shadow. A shadow rule that never reads its feature can never
+        accumulate the evidence its own promotion depends on."""
         stamps = [{
             "signal_id": f"s{i}", "setup_class": "MOVER_TREND_PULLBACK",
             "eq_enforced_by": "", "eq_rules": [{
@@ -613,6 +616,21 @@ class TestTheLiveGatePanel:
                 "unknown_reason": "feature_absent", "feature": "smc_zone_dist_atr",
             }],
         } for i in range(25)]
+        assert entry_quality_panel(stamps, [])["rules"][0]["blind"] is True
+
+    def test_a_shadow_rule_with_some_sight_is_not_badged(self):
+        """Only *total* blindness is a shadow fault. Badging a rule that is
+        working is how the badge stops meaning anything."""
+        stamps = []
+        for i in range(25):
+            verdict = "pass" if i % 5 == 0 else "unknown"
+            stamps.append({
+                "signal_id": f"s{i}", "setup_class": "MOVER_TREND_PULLBACK",
+                "eq_enforced_by": "", "eq_rules": [{
+                    "rule": "tpe_smc_zone", "verdict": verdict, "live": False,
+                    "feature": "smc_zone_dist_atr",
+                }],
+            })
         assert entry_quality_panel(stamps, [])["rules"][0]["blind"] is False
 
     def test_rows_stamped_before_the_gate_are_counted_apart_not_as_passes(self):

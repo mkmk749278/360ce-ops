@@ -519,11 +519,22 @@ def entry_quality_panel(stamps: list[dict], joined: list[dict]) -> dict:
             "unknown_frac": (slot["unknown"] / seen) if seen else None,
             "reject_frac": (slot["reject"] / seen) if seen else None,
             "would_remove": would_remove,
-            # An enforcing rule that abstains on nearly everything is a dead
-            # gate wearing a live gate's label. Named on screen rather than
-            # left for someone to notice in a percentage.
+            # A blind rule is a fault in either mode, and the first cut of this
+            # panel judged only the enforcing ones. That is exactly how
+            # `smc_zone_dist_atr` hid: `zone_distance_atr` read key names
+            # `FVGZone` does not carry, so `tpe_smc_zone` abstained on 100% of
+            # its population — 0 of 57 TPE rows — and the badge stayed off
+            # because the rule was in shadow.
+            #
+            # Two thresholds, because the faults differ. An ENFORCING rule
+            # mostly-blind is an inert gate wearing a live gate's label (0.8,
+            # while it still has some sight). A SHADOW rule *totally* blind can
+            # never accumulate the evidence its own promotion depends on (1.0
+            # only — a shadow rule with any sight is working, and badging it
+            # would make the badge stop meaning anything).
             "blind": bool(
-                slot["live"] and seen >= 20 and (slot["unknown"] / seen) >= 0.8
+                seen >= 20
+                and (slot["unknown"] / seen) >= (0.8 if slot["live"] else 1.0)
             ),
         })
     out.sort(key=lambda r: (not r["live"], -r["enforced"], -r["shadow_reject"]))
