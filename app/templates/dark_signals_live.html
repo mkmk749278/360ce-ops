@@ -225,7 +225,7 @@
   <h2 class="small">Per path — what emitting actually produced</h2>
   <table class="tbl">
     <thead>
-      <tr><th>Setup</th><th>Dark signals</th><th>Open</th><th>TP1</th><th>SL</th><th>Expired</th><th title="past the horizon with candles that never arrived — terminal, and deliberately unscored">Unmeasured</th><th>Win @decided</th><th>Avg R</th><th>Avg conf</th><th>Gate carried past</th></tr>
+      <tr><th>Setup</th><th>Dark signals</th><th>Open</th><th>TP1</th><th>SL</th><th>Expired</th><th title="past the horizon with candles that never arrived — terminal, and deliberately unscored">Unmeasured</th><th>Win @decided</th><th title="the money: what this path returned per scored row. Position sizing is a fixed notional, so a percent is proportional to money and R is not.">Avg PnL %</th><th title="sum across this path's scored rows">Total PnL %</th><th class="muted" title="normalised by each trade's own stop — the bridge to the Strategy Lab, which is keyed in R. Not proportional to money.">Avg R</th><th>Avg conf</th><th>Gate carried past</th></tr>
     </thead>
     <tbody>
       {% for a in summary.by_setup %}
@@ -246,8 +246,11 @@
         <td>{% if a.win_rate is not none %}{{ "%.0f"|format(a.win_rate * 100) }}%
             <span class="muted small">of {{ a.decided }}</span>
             {% else %}<span class="muted" title="nothing has been decided for this path yet — not the same as none of them winning">—</span>{% endif %}</td>
-        <td class="{% if a.avg_r is not none and a.avg_r > 0 %}pos{% elif a.avg_r is not none and a.avg_r < 0 %}neg{% endif %}">
-          {% if a.avg_r is not none %}{{ "%+.3f"|format(a.avg_r) }}R{% else %}—{% endif %}</td>
+        <td class="{% if a.avg_pnl_pct is not none and a.avg_pnl_pct > 0 %}pos{% elif a.avg_pnl_pct is not none and a.avg_pnl_pct < 0 %}neg{% endif %}">
+          <strong>{% if a.avg_pnl_pct is not none %}{{ "%+.3f"|format(a.avg_pnl_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="{% if a.total_pnl_pct is not none and a.total_pnl_pct > 0 %}pos{% elif a.total_pnl_pct is not none and a.total_pnl_pct < 0 %}neg{% endif %}">
+          {% if a.total_pnl_pct is not none %}{{ "%+.1f"|format(a.total_pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td class="muted small">{% if a.avg_r is not none %}{{ "%+.3f"|format(a.avg_r) }}R{% else %}—{% endif %}</td>
         <td>{% if a.avg_confidence is not none %}{{ "%.1f"|format(a.avg_confidence) }}{% else %}—{% endif %}</td>
         <td class="mono small">{{ a.top_gate }}</td>
       </tr>

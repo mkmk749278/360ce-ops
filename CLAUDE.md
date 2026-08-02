@@ -53,6 +53,57 @@ Control doctrine (non-negotiable for every write surface):
 - **PRG + confirm.** Control routes use POST→redirect→GET so a refresh can't re-fire an action; destructive actions (engage kill switch, switch to LIVE) require an explicit confirm.
 - **The engine is the source of truth.** Ops never holds control state locally; it reads it back from the engine after every write.
 
+## PnL % leads; R is the bridge, never the headline
+
+Owner, 2026-08-02: *"that R is purely confusing — 3% SL still only 1R and 0.3 SL
+0.3R. only show PnL, calculate only that."*
+
+**He is right, and the engine settles it.** `signal_dispatch` sizes every
+position at a **fixed notional** — `raw_qty = notional / entry_price` — so the
+stop distance appears **nowhere** in the sizing formula. R divides each outcome
+by its own stop, which equalises trades only when size is scaled inversely to
+that stop. It is not. So a trade losing 0.80% and one losing 6.14% both read
+exactly `−1.00R` while costing $4.00 and $30.70 of the same $500.
+
+That is not presentation, it changes conclusions:
+
+- **It misranks paths.** On the 2026-08-02 window `MEAN_REVERT` reads
+  worst-in-book by R (−0.481R) while losing **$2.02** per trade;
+  `MA_CROSS_TREND_SHIFT` reads mid-table (−0.293R) while losing **$11.05** —
+  five times more money from the path R called healthier, because its median stop
+  is 5.15% against MEAN_REVERT's 1.09%.
+- **It flipped a sign.** The same day's SAR arms read **+0.035R** and
+  **−0.041%** — R said the mechanism made money, the money said it lost — because
+  the winners sat on tighter stops (3.25%) than the losers (3.46%), so dividing
+  by the stop inflated the wins and shrank the losses.
+
+So every measurement page leads with **PnL %**, computes its aggregates and win
+rates from it, and ranks by it. R stays visible, muted, one column, because the
+Strategy Lab and the edge matrix are keyed in R and a reader moving between them
+needs the bridge — but it is never what a verdict is read from here.
+
+Corollary: **a percentage needs no denominator, so it cannot shrink its own
+population.** R silently drops rows with no entry-risk stamp; PnL keeps them.
+Where the two counts differ, say so on screen.
+
+**The open question this raises is the owner's, not ours:** either keep showing
+money (done), or size positions by risk so that R becomes meaningful and the book
+is equalised. The second is a money-path change and needs sign-off — do not
+re-derive it as a display fix.
+
+## Re-check the claim before you test it (mirrors 360-v2's)
+
+The engine's `CLAUDE.md` carries the full rule; it applies here with extra force,
+because **this repo's output is sentences as much as numbers.** A page states what
+its figures mean, and a wrong sentence over correct figures is still a wrong page
+— "copy is part of the measurement", one level up.
+
+On 2026-08-01 `/signals/entry-features` shipped a paragraph telling the owner that
+`TREND_PULLBACK_EMA`'s TP1 sat inside its stop and implying the fix was to raise
+it. Both numbers in that paragraph were right and the implication was wrong;
+testing it took one query against data already exported. Before writing a
+sentence that recommends an action, falsify the action, not just the number.
+
 ## Change-management protocol (mirrors 360-v2's)
 
 Every change ships via PR. Fresh topic branch off `main`. Design-summary in the PR body before code review. Never push to `main` directly — auto-deploy on `main` push ships in ~60s and bypasses review.
@@ -270,8 +321,17 @@ designed R:R of **0.79** in the 2026-08-01 dark window (TP1 nearer than the
 stop), needing 54% to break even and posting 35% over 17 decided rows; TP1 is the
 nearest 5m swing extreme, capped by ATR percentile, with nothing flooring it,
 while `_enforce_tp_ladder_monotonicity` floors tp2 at 2.0R and tp3 at 4.0R.
-Changing that is TP/SL shape and therefore owner-sign-off — the page only makes
-it visible.
+
+**That is a description, not a lever, and this page said otherwise for half a
+day.** Simulated on the 11:00 window (55 decided rows), flooring TP1 at 1.0R moves
+the book from −0.081R to between −0.186R and −0.404R; at 1.5R, to between −0.245R
+and −0.536R. It reproduces on the 08:26 window, so the direction is not one
+export's artefact. The winners barely clear their current targets — TPE's hit at a
+median 0.59R against a 0.89R peak — and only 27% of decided trades ever moved 1R
+in our favour, with a median excursion of 0.53R. The low target is what harvests a
+move that small. Read the column as *what the book can possibly earn*; it points
+at entry quality and loss size, and away from the targets. Any change to it is
+TP/SL shape and therefore owner-sign-off either way.
 
 Rules specific to this page:
 

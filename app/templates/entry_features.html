@@ -110,8 +110,8 @@
     <thead>
       <tr>
         <th>Feature</th><th>Rule</th>
-        <th>Now (avg R)</th><th>Keep (avg R)</th><th>Δ avg R</th>
-        <th>Now (avg %)</th><th>Keep (avg %)</th><th>Δ avg %</th>
+        <th title="the money — sizing is a fixed notional, so a percent is proportional to money and R is not">Now (avg %)</th><th>Keep (avg %)</th><th>Δ avg %</th>
+        <th class="muted" title="normalised by each trade's own stop; the bridge to the Strategy Lab, which is keyed in R">Now (avg R)</th><th class="muted">Keep (avg R)</th><th class="muted">Δ avg R</th>
         <th>Kept</th><th>Dropped</th><th title="feature never computed — the rule could not have judged these">Unknown</th>
       </tr>
     </thead>
@@ -127,12 +127,12 @@
           <br><span class="muted small">{{ s.asks }}</span>
         </td>
         <td><code>{{ s.direction }} {{ "%.4g"|format(s.threshold) }}</code></td>
-        <td>{% if s.now.avg_r is not none %}{{ "%+.3f"|format(s.now.avg_r) }}<span class="muted small"> (n={{ s.now.scored }})</span>{% else %}—{% endif %}</td>
-        <td>{% if s.keep.avg_r is not none %}{{ "%+.3f"|format(s.keep.avg_r) }}<span class="muted small"> (n={{ s.keep.scored }})</span>{% else %}—{% endif %}</td>
-        <td class="{% if s.delta_avg_r and s.delta_avg_r > 0 %}pos{% elif s.delta_avg_r and s.delta_avg_r < 0 %}neg{% endif %}">{% if s.delta_avg_r is not none %}{{ "%+.3f"|format(s.delta_avg_r) }}{% else %}—{% endif %}</td>
-        <td>{% if s.now.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.now.avg_pnl_pct) }}%{% else %}—{% endif %}</td>
-        <td>{% if s.keep.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.keep.avg_pnl_pct) }}%{% else %}—{% endif %}</td>
-        <td class="{% if s.delta_avg_pnl_pct and s.delta_avg_pnl_pct > 0 %}pos{% elif s.delta_avg_pnl_pct and s.delta_avg_pnl_pct < 0 %}neg{% endif %}">{% if s.delta_avg_pnl_pct is not none %}{{ "%+.2f"|format(s.delta_avg_pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td><strong>{% if s.now.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.now.avg_pnl_pct) }}%{% else %}—{% endif %}</strong><span class="muted small"> (n={{ s.now.n }})</span></td>
+        <td><strong>{% if s.keep.avg_pnl_pct is not none %}{{ "%+.2f"|format(s.keep.avg_pnl_pct) }}%{% else %}—{% endif %}</strong><span class="muted small"> (n={{ s.keep.n }})</span></td>
+        <td class="{% if s.delta_avg_pnl_pct and s.delta_avg_pnl_pct > 0 %}pos{% elif s.delta_avg_pnl_pct and s.delta_avg_pnl_pct < 0 %}neg{% endif %}"><strong>{% if s.delta_avg_pnl_pct is not none %}{{ "%+.2f"|format(s.delta_avg_pnl_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="muted small">{% if s.now.avg_r is not none %}{{ "%+.3f"|format(s.now.avg_r) }}R<span class="muted"> (n={{ s.now.scored }})</span>{% else %}—{% endif %}</td>
+        <td class="muted small">{% if s.keep.avg_r is not none %}{{ "%+.3f"|format(s.keep.avg_r) }}R{% else %}—{% endif %}</td>
+        <td class="muted small">{% if s.delta_avg_r is not none %}{{ "%+.3f"|format(s.delta_avg_r) }}R{% else %}—{% endif %}</td>
         <td>{{ s.keep.n }}{% if s.kept_fraction is not none %} <span class="muted small">({{ "%.0f"|format(s.kept_fraction * 100) }}%)</span>{% endif %}</td>
         <td>{{ s.drop.n }}</td>
         <td>{% if s.unknown.n %}<span class="warn">{{ s.unknown.n }}</span>{% else %}0{% endif %}</td>
@@ -165,10 +165,25 @@
     it bounds what every other row can achieve. In the 2026-08-01 dark window
     <code>TREND_PULLBACK_EMA</code> ran a median designed R:R of <strong>0.79</strong>
     (TP1 nearer than the stop), needing a 54% win rate to break even and posting 35%
-    over 17 decided rows. TP1 is the nearest 5m swing extreme, capped by ATR
-    percentile, with nothing flooring it — while the ladder helper floors tp2 at 2.0R
-    and tp3 at 4.0R. Changing that is a TP/SL-shape decision and therefore
-    owner-sign-off; this page only makes it visible.
+    over 17 decided rows.
+  </p>
+  <p class="warn small">
+    <strong>That is not an argument for raising TP1</strong> — it was written here as
+    though it were, and testing it against the same data showed the opposite.
+    Simulated on the 2026-08-01 11:00 window (55 decided rows), flooring TP1 at 1.0R
+    takes the book from −0.081R to between −0.186R and −0.404R; at 1.5R, to between
+    −0.245R and −0.536R — and it reproduces on the earlier export, so the direction is
+    not one window's artefact. The winners barely clear their current targets (TPE's
+    hit at a median 0.59R against a 0.89R peak) and only 27% of decided trades ever
+    moved 1R in our favour. Median favourable excursion across the book is
+    <strong>0.53R</strong>. The low target is not the defect; it is what harvests a
+    move this small.
+  </p>
+  <p class="muted small">
+    So read this column as a <em>description of what the book can earn</em>, not as a
+    lever: it says the trades are small relative to the risk they are sized for, which
+    points at entry quality and at loss size. Any change to it is a TP/SL-shape
+    decision and therefore owner-sign-off; this page only makes it visible.
   </p>
 </section>
 {% endif %}

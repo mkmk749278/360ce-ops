@@ -311,6 +311,19 @@ def summarize_open(rows: list[dict]) -> dict:
 def summarize(rows: list[dict]) -> dict:
     """Per-path verdict on the rows that actually resolved.
 
+    **PnL % leads and R is subordinate** (owner, 2026-08-02: *"that R is purely
+    confusing — 3% SL still only 1R"*). ``signal_dispatch`` sizes every position
+    at a fixed notional, so the stop distance is absent from the sizing formula;
+    R divides each outcome by its own stop, which equalises trades only when size
+    scales inversely to that stop. It does not.
+
+    This misranks paths, measurably. On the 2026-08-02 window MEAN_REVERT reads
+    worst-in-book by R (−0.481R) while losing $2.02 per trade, and
+    MA_CROSS_TREND_SHIFT reads mid-table (−0.293R) while losing $11.05 — five
+    times more money from the path R called healthier, because its median stop is
+    5.15% against MEAN_REVERT's 1.09%. R is kept as the bridge to the Strategy
+    Lab and the edge matrix, which are keyed in R, and is never the headline.
+
     Open rows are counted and excluded from every rate. An expiry is counted
     apart from a loss and scores 0R: the mechanism did nothing, it did not lose,
     and folding the two together is the #685 fabrication class. The win rate
@@ -338,7 +351,8 @@ def summarize(rows: list[dict]) -> dict:
         agg = by_setup.setdefault(setup, {
             "setup_class": setup, "n": 0, "open": 0, "tp1": 0, "sl": 0,
             "expired": 0, "insufficient": 0, "insufficient_no_walk": 0,
-            "insufficient_partial_window": 0, "sum_r": 0.0, "n_r": 0, "gates": {},
+            "insufficient_partial_window": 0, "sum_r": 0.0, "n_r": 0,
+            "sum_pnl": 0.0, "n_pnl": 0, "gates": {},
             "sum_conf": 0.0, "n_conf": 0,
         })
         agg["n"] += 1
@@ -371,12 +385,21 @@ def summarize(rows: list[dict]) -> dict:
         if r is not None:
             agg["sum_r"] += r
             agg["n_r"] += 1
+        # The money. Primary since 2026-08-02 — see the module docstring for why
+        # R misranks this book. Needs no denominator, so its population is every
+        # scored row rather than the subset carrying an entry-risk stamp.
+        pnl = _f(row.get("pnl_pct"))
+        if pnl is not None:
+            agg["sum_pnl"] += pnl
+            agg["n_pnl"] += 1
     out = []
     for agg in by_setup.values():
         decided = agg["tp1"] + agg["sl"]
         agg["resolved"] = agg["n"] - agg["open"] - agg["insufficient"]
         agg["decided"] = decided
         agg["avg_r"] = (agg["sum_r"] / agg["n_r"]) if agg["n_r"] else None
+        agg["avg_pnl_pct"] = (agg["sum_pnl"] / agg["n_pnl"]) if agg["n_pnl"] else None
+        agg["total_pnl_pct"] = agg["sum_pnl"] if agg["n_pnl"] else None
         agg["win_rate"] = (agg["tp1"] / decided) if decided else None
         agg["avg_confidence"] = (
             (agg["sum_conf"] / agg["n_conf"]) if agg["n_conf"] else None

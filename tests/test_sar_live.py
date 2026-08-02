@@ -174,7 +174,14 @@ def test_summary_reports_both_fills_and_never_picks_one():
 
 
 def test_rows_without_an_entry_stop_are_counted_but_excluded_from_R():
-    """Refuse, don't clamp — scoring them 0R makes missing data read as mediocre."""
+    """Refuse, don't clamp — scoring them 0R makes missing data read as mediocre.
+
+    Since 2026-08-02 the win rate is counted on the **money** rather than on R,
+    so a row with no entry-risk stamp is excluded from the R columns and still
+    contributes to the win rate and the PnL average. That is the point of
+    demoting R: a percentage needs no denominator, so it cannot silently shrink
+    its own population the way R does.
+    """
     _live, resolved = _rows()
     rows = [dict(r) for r in resolved]
     for r in rows:
@@ -186,7 +193,43 @@ def test_rows_without_an_entry_stop_are_counted_but_excluded_from_R():
     assert s["n_r"] == 0
     assert s["no_r"] == 3
     assert s["avg_r_level"] is None
-    assert s["win_rate_level"] is None
+    # ...but the money still reports, on the full measurable population.
+    assert s["n_pnl"] == 3
+    assert s["avg_pnl_level_pct"] is not None
+    assert s["win_rate_level"] is not None
+
+
+def test_pnl_is_the_primary_measure_and_can_disagree_with_R():
+    """Owner, 2026-08-02: *"that R is purely confusing — 3% SL still only 1R"*.
+
+    Position sizing is a fixed $500 notional (`raw_qty = notional / entry_price`),
+    so the stop distance is absent from the sizing formula. R divides each
+    outcome by its own stop, which only equalises trades when size scales
+    inversely to that stop — it does not. Two trades can therefore share a
+    −1.00R and cost wildly different money, and the aggregate sign can differ
+    between the two units.
+
+    This pins that the panel reports the money, using a book where R is positive
+    and PnL is negative: a small win on a tight stop and a bigger loss on a wide
+    one.
+    """
+    rows = [
+        # +1.0% on a 1% stop  -> +1.00R
+        {"status": "CLOSED_SAR_FLIP", "anchor_verdict": "clean",
+         "sl_distance_pct": 1.0, "r_level": 1.0, "r_confirm": 1.0,
+         "pnl_level_pct": 1.0, "pnl_confirm_pct": 1.0},
+        # -3.0% on a 6% stop  -> -0.50R
+        {"status": "CLOSED_SAR_FLIP", "anchor_verdict": "clean",
+         "sl_distance_pct": 6.0, "r_level": -0.5, "r_confirm": -0.5,
+         "pnl_level_pct": -3.0, "pnl_confirm_pct": -3.0},
+    ]
+    s = summarize_resolved(rows)
+
+    assert s["avg_r_level"] == pytest.approx(0.25), "R says this book made money"
+    assert s["avg_pnl_level_pct"] == pytest.approx(-1.0), "the money says it lost"
+    # The two units disagree on the SIGN, which is why the page leads with PnL.
+    assert s["avg_r_level"] > 0 > s["avg_pnl_level_pct"]
+    assert s["total_pnl_level_pct"] == pytest.approx(-2.0)
 
 
 def test_handovers_are_counted_because_only_they_test_the_exit():

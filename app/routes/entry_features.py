@@ -476,10 +476,22 @@ async def entry_features_page(request: Request, setup: str = Query("")):
         )
         for name in features_for(spec, setup)
     ]
-    # Rank by delta, but the page leads with n and kept-fraction: a rule that
-    # drops two rows and looks brilliant is the FAILED_AUCTION_RECLAIM mistake
-    # in a new suit.
-    splits.sort(key=lambda s: (s["delta_avg_r"] is None, -(s["delta_avg_r"] or 0.0)))
+    # Ranked on the MONEY, not on R (owner, 2026-08-02). Sizing is a fixed
+    # notional, so the stop distance is absent from it and R equalises trades
+    # that risk very different amounts — on the same window it ranks
+    # MEAN_REVERT below MA_CROSS_TREND_SHIFT while MEAN_REVERT loses a fifth as
+    # much money per trade. Sorting by R would order this table by the wrong
+    # quantity.
+    #
+    # The page still leads with n and kept-fraction whatever the order: a rule
+    # that drops two rows and looks brilliant is the FAILED_AUCTION_RECLAIM
+    # mistake in a new suit.
+    splits.sort(
+        key=lambda s: (
+            s["delta_avg_pnl_pct"] is None,
+            -(s["delta_avg_pnl_pct"] or 0.0),
+        )
+    )
 
     missing_counts: dict[str, int] = {}
     for row in joined:

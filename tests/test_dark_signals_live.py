@@ -764,3 +764,65 @@ class TestAdverseExcursionReachesTheSurface:
 
         assert "MAE" in page, "the column must be labelled, not just exported"
         assert "3.10" in page, "and the value must actually render"
+
+
+class TestTheMoneyLeadsNotR:
+    """Owner, 2026-08-02: *"that R is purely confusing — 3% SL still only 1R"*.
+
+    `signal_dispatch` sizes every position at a fixed notional
+    (`raw_qty = notional / entry_price`), so the stop distance appears nowhere in
+    the sizing. R divides each outcome by its own stop, which equalises trades
+    only when size scales inversely to that stop — and it does not. Two trades
+    can share a −1.00R while costing wildly different money.
+
+    This is not presentation. On the 2026-08-02 window MEAN_REVERT reads
+    worst-in-book by R (−0.481R) while losing $2.02 per trade, and
+    MA_CROSS_TREND_SHIFT reads mid-table (−0.293R) while losing $11.05 — R ranks
+    the bigger money-loser as the healthier path, because its stops are ~5x wider.
+    """
+
+    @staticmethod
+    def _row_with(setup, pnl, sl_pct):
+        row = _row(setup=setup, status="CLOSED_SL", r=-1.0)
+        row["pnl_pct"] = pnl
+        row["sl_distance_pct"] = sl_pct
+        return row
+
+    def test_the_rollup_reports_the_money(self):
+        agg = summarize([
+            self._row_with("MEAN_REVERT", -1.0, 1.0),
+            self._row_with("MEAN_REVERT", -1.0, 1.0),
+        ])["by_setup"][0]
+
+        assert agg["avg_pnl_pct"] == pytest.approx(-1.0)
+        assert agg["total_pnl_pct"] == pytest.approx(-2.0)
+        # R is still there as the bridge to the Strategy Lab, just not the lead.
+        assert agg["avg_r"] == pytest.approx(-1.0)
+
+    def test_R_and_money_can_rank_two_paths_in_opposite_orders(self):
+        """The exact distortion the owner named, reproduced as a unit test.
+
+        Both paths take a full stop-out, so both read −1.00R. One risks 1% and
+        the other 6%: identical in R, six times apart in money.
+        """
+        out = summarize([
+            self._row_with("TIGHT_STOP_PATH", -1.0, 1.0),
+            self._row_with("WIDE_STOP_PATH", -6.0, 6.0),
+        ])["by_setup"]
+        by_name = {a["setup_class"]: a for a in out}
+
+        tight, wide = by_name["TIGHT_STOP_PATH"], by_name["WIDE_STOP_PATH"]
+        # R cannot tell them apart at all...
+        assert tight["avg_r"] == wide["avg_r"] == pytest.approx(-1.0)
+        # ...while the money says one is six times worse.
+        assert wide["avg_pnl_pct"] == pytest.approx(6.0 * tight["avg_pnl_pct"])
+
+    def test_a_row_without_an_entry_risk_stamp_still_reports_its_money(self):
+        """R silently shrinks its own population; a percentage needs no
+        denominator, so the money column keeps the row."""
+        row = self._row_with("MEAN_REVERT", -2.5, 2.5)
+        row["r_multiple"] = None
+        agg = summarize([row])["by_setup"][0]
+
+        assert agg["avg_r"] is None
+        assert agg["avg_pnl_pct"] == pytest.approx(-2.5)
