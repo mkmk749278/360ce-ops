@@ -144,11 +144,17 @@ FEATURE_COPY: dict[str, dict[str, Any]] = {
                 "one are the same input to this evaluator.",
     },
     "smc_zone_dist_atr": {
-        "label": "Distance to nearest FVG / orderblock (ATR)",
+        "label": "Distance to nearest fair-value gap (ATR)",
         "default": 2.0,
-        "asks": "The measurement this path's SMC gate claims to make. That gate "
-                "tests bool(fvgs) — whether the symbol has any zone anywhere, at "
-                "any price — so a zone 40 ATR away satisfies it.",
+        "asks": "The measurement this path's SMC gate claims to make — and, "
+                "measured, the gate turns out to be making it. The code tests "
+                "bool(fvgs), which on paper any zone at any price satisfies; "
+                "across 89 signals the nearest gap sat at a median 0.13 ATR and "
+                "a maximum of 0.52, because detect_fvg only looks back ~12 bars "
+                "and a gap that recent is still near price. No candidate rule "
+                "on this column can discriminate; it is here as the check that "
+                "would catch the gate drifting. Orderblocks are never populated "
+                "engine-wide, so this reads fair-value gaps only.",
     },
     "rsi_at_entry": {
         "label": "RSI at entry",
