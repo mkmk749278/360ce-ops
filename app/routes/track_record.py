@@ -228,6 +228,35 @@ def _bucket_key(when: datetime, granularity: str) -> str:
     return when.strftime("%Y-%m-%d")
 
 
+def bucket_span(key: str, granularity: str) -> Optional[tuple[datetime, datetime]]:
+    """The calendar extent a bucket key **claims**, `[start, end)` in UTC.
+
+    The inverse of ``_bucket_key``, and the thing that makes "is this bucket
+    complete" answerable: a bucket labelled ``2026-08-02`` claims a whole day, and
+    whether it *measured* one depends on where the window and the current moment
+    fall inside this span.
+
+    Returns None on a key this function cannot parse, so a caller degrades to
+    "cannot say" rather than asserting completeness it did not check.
+    """
+    try:
+        if granularity == "month":
+            first = datetime.strptime(key, "%Y-%m").replace(tzinfo=timezone.utc)
+            # Month lengths vary; step into the next month via day 28 + 4 days.
+            nxt = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+            return first, nxt
+        if granularity == "week":
+            year, week = key.split("-W")
+            first = datetime.fromisocalendar(int(year), int(week), 1).replace(
+                tzinfo=timezone.utc
+            )
+            return first, first + timedelta(days=7)
+        first = datetime.strptime(key, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return first, first + timedelta(days=1)
+    except (TypeError, ValueError):
+        return None
+
+
 def distinct_moves(rows: list[dict]) -> int:
     """How many distinct moves these rows describe.
 
@@ -300,6 +329,21 @@ def resolve_range(
 ) -> tuple[Optional[datetime], Optional[datetime], str]:
     """Turn the window/date inputs into a concrete (start, end, label).
 
+    **Presets snap to whole UTC days** (owner, 2026-08-03). They used to start at
+    ``now - N days`` — a *moment* — while ``bucket_rows`` groups by calendar day,
+    so the oldest bucket of every preset held only the part of that day after the
+    cut and rendered identically to a complete one. On the owner's own export the
+    ``1d`` view showed ``2026-08-02`` as **+12.29% over 3 trades, 3W/0L**; the
+    full day was **−0.40% over 11, 4W/7L**. The window had removed 8 trades, 7 of
+    them losers, and *the sign flipped*. Flooring the start to midnight makes a
+    day on this page mean the whole day, whatever window contains it.
+
+    The bucket count does not change — ``30d`` still renders 31 rows — only the
+    oldest one goes from a fragment to a whole day.
+
+    ``custom`` already floors to midnight (``_parse_iso_date``) with an inclusive
+    end date, so it needs nothing.
+
     An unparseable custom date collapses to open-ended rather than 500ing or —
     worse — silently returning zero rows, which would read as "no trades" when
     it means "bad input".
@@ -316,7 +360,48 @@ def resolve_range(
     days = {"1d": 1, "7d": 7, "30d": 30, "90d": 90}.get(window)
     if days is None:
         return None, None, "all time"
-    return now - timedelta(days=days), None, f"last {days}d"
+    start = _floor_day(now - timedelta(days=days))
+    # The label says what was actually selected. "last 30d" is the exact phrase
+    # that hid the fragment, so it does not survive the fix.
+    whole = "day" if days == 1 else "days"
+    return start, None, f"last {days} whole {whole} + today — from {start:%Y-%m-%d} UTC"
+
+
+def _floor_day(when: datetime) -> datetime:
+    """Midnight UTC of the day ``when`` falls in."""
+    return when.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def local_day_boundary_note(tz_name: str, *, now: Optional[datetime] = None) -> str:
+    """Where a UTC day boundary lands in the owner's own time, e.g. "05:30 IST".
+
+    **This re-buckets nothing.** Every figure on this page is UTC, because the
+    engine is UTC end to end and ops ports the engine's clock rather than
+    inventing one — a local-day boundary here would make an ops day stop matching
+    an engine day. The note exists because a date with no zone is the same class
+    of omission as a percentage with no denominator: on 2026-08-03 a trade that
+    closed 19:48 UTC (01:18 IST the next morning) read as "yesterday" on screen,
+    and the page never said which day it meant.
+
+    Computed at ``now`` rather than hardcoded so a DST zone stays correct. An
+    unknown or empty zone yields "" and the template simply says UTC — a wrong
+    offset is worse than no offset.
+
+    The zone arrives as a parameter rather than being read from config in here,
+    so this stays a pure function the tests can drive without an app.
+    """
+    if not tz_name:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+
+        zone = ZoneInfo(tz_name)
+    except Exception:
+        return ""
+    now = now or datetime.now(tz=timezone.utc)
+    midnight = _floor_day(now) + timedelta(days=1)
+    local = midnight.astimezone(zone)
+    return f"{local:%H:%M} {local:%Z}".strip()
 
 
 def _parse_iso_date(value: str) -> Optional[datetime]:
@@ -476,12 +561,74 @@ def summarize(
     }
 
 
+def bucket_completeness(
+    key: str,
+    granularity: str,
+    *,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    now: Optional[datetime] = None,
+) -> dict:
+    """Did this bucket measure the whole period its label claims?
+
+    A bucket labelled ``2026-08-02`` claims a day. Two different things can leave
+    it holding less than one, and **they are never pooled**, because the reader's
+    next move differs:
+
+    * ``window_cut`` — the selected range starts after (or ends before) the
+      bucket's own span. The data exists; **widening the window reveals it.**
+    * ``in_progress`` — the period has not finished yet. The data does not exist;
+      **only waiting reveals it.**
+
+    Precedence when both apply: ``window_cut``, because it is the one the reader
+    can act on now.
+
+    This is the guard for the fault that prompted it (2026-08-03): a rolling
+    window cut 8 of 11 trades off a day and the table rendered the remaining 3 —
+    all winners — as that day's result, flipping its sign. ``resolve_range`` now
+    snaps presets to midnight so no *day* bucket can be cut, but snapping days is
+    not snapping weeks or months: a 7d window at week granularity still starts
+    mid-ISO-week. It also catches a future regression in ``resolve_range``.
+
+    An unparseable key yields ``partial_reason=None`` with no span — "cannot say"
+    rather than an unchecked claim of completeness.
+    """
+    span = bucket_span(key, granularity)
+    if span is None:
+        return {
+            "partial_reason": None, "covers_from": None, "covers_to": None,
+            "covers_from_iso": "", "span_fraction": None,
+        }
+    span_start, span_end = span
+    cut = (start is not None and start > span_start) or (
+        end is not None and end < span_end
+    )
+    running = now is not None and span_start <= now < span_end
+
+    covers_from = max(span_start, start) if start is not None else span_start
+    covers_to = min(span_end, end) if end is not None else span_end
+    if now is not None and now < covers_to:
+        covers_to = now
+    measured = (covers_to - covers_from).total_seconds()
+    claimed = (span_end - span_start).total_seconds()
+    return {
+        "partial_reason": "window_cut" if cut else ("in_progress" if running else None),
+        "covers_from": covers_from,
+        "covers_to": covers_to,
+        "covers_from_iso": covers_from.isoformat(),
+        "span_fraction": max(0.0, measured / claimed) if claimed else None,
+    }
+
+
 def bucket_rows(
     rows: list[dict],
     granularity: str,
     *,
     amount: float = DEFAULT_AMOUNT_USDT,
     fee_pct: float = DEFAULT_FEE_PCT,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+    now: Optional[datetime] = None,
 ) -> list[dict]:
     """Group into day / week / month buckets, newest first.
 
@@ -490,9 +637,15 @@ def bucket_rows(
 
     ``cum_net_usd`` is accumulated oldest-first and then the list is reversed,
     so the newest row carries the whole book's total rather than one day's.
+
+    ``start`` / ``end`` / ``now`` are only used to mark **completeness** — they
+    filter nothing, because filtering already happened. Pass them and a bucket
+    that measured less than the period its label claims says so; omit them and
+    every bucket reads complete, which is exactly the fault this guards.
     """
     if granularity not in GRANULARITIES:
         granularity = "day"
+    now = now or datetime.now(tz=timezone.utc)
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         when = row.get("closed_at")
@@ -504,6 +657,9 @@ def bucket_rows(
     for key in sorted(grouped):
         bucket = summarize(grouped[key], amount=amount, fee_pct=fee_pct)
         bucket["bucket"] = key
+        bucket.update(
+            bucket_completeness(key, granularity, start=start, end=end, now=now)
+        )
         if bucket["net_usd"] is not None:
             running += bucket["net_usd"]
             bucket["cum_net_usd"] = running
@@ -563,7 +719,11 @@ def sort_rows(rows: list[dict], sort: str, order: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _EXPORT_COLS = [
-    "bucket", "n", "moves", "n_pnl", "wins", "losses", "win_rate",
+    # ``partial_reason`` / ``covers_from`` ride with the numbers rather than
+    # staying on screen: an export that drops the caveat is the same fault one
+    # file over, and a spreadsheet is exactly where a part-day gets averaged in.
+    "bucket", "partial_reason", "covers_from_iso",
+    "n", "moves", "n_pnl", "wins", "losses", "win_rate",
     "total_pnl_pct", "avg_pnl_pct", "best_pnl_pct", "worst_pnl_pct",
     "total_net_pct", "gross_usd", "fee_usd", "net_usd", "cum_net_usd",
 ]
@@ -681,7 +841,13 @@ async def track_record(
     return request.app.state.templates.TemplateResponse("track_record.html", {
         "request": request,
         "active": "track_record",
-        "buckets": bucket_rows(rows, granularity, amount=amount_usdt, fee_pct=fee),
+        "buckets": bucket_rows(
+            rows, granularity, amount=amount_usdt, fee_pct=fee,
+            start=ctx["start"], end=ctx["end"],
+        ),
+        "day_boundary_note": local_day_boundary_note(
+            getattr(request.app.state.settings, "local_tz_hint", "")
+        ),
         "summary": summary,
         "trades": ordered[:PER_TRADE_LIMIT],
         "trades_shown": min(len(ordered), PER_TRADE_LIMIT),
@@ -752,7 +918,10 @@ async def track_record_export(
         regime=regime, setup=setup, symbol=symbol, direction=direction,
     )
     ctx = _page_context(request, **q)
-    buckets = bucket_rows(ctx["rows"], granularity, amount=amount_usdt, fee_pct=fee)
+    buckets = bucket_rows(
+        ctx["rows"], granularity, amount=amount_usdt, fee_pct=fee,
+        start=ctx["start"], end=ctx["end"],
+    )
     data = [[b.get(col) for col in _EXPORT_COLS] for b in buckets]
     return csv_response(f"track_record_{granularity}", _EXPORT_COLS, data)
 

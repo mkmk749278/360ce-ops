@@ -39,11 +39,14 @@ from app.routes.track_record import (  # noqa: E402
     DEFAULT_FEE_PCT,
     PER_TRADE_LIMIT,
     SAME_MOVE_PCT,
+    bucket_completeness,
     bucket_rows,
+    bucket_span,
     decorate_money,
     distinct_moves,
     filter_rows,
     geometry_stamp_reason,
+    local_day_boundary_note,
     money,
     net_pnl_pct,
     peak_concurrency,
@@ -464,11 +467,166 @@ class TestConcentration:
         assert s["net_usd"] == pytest.approx(4.0), "and both must still cost money"
 
 
+class TestPartialBuckets:
+    """A bucket that measured less than the period its label claims must say so.
+
+    Paid for on 2026-08-03: `window=1d` rendered `2026-08-02` as +12.29% over 3
+    trades, 3W/0L. The real day was −0.40% over 11, 4W/7L — the rolling window
+    had cut 8 trades, 7 of them losers, and the sign flipped. The row looked
+    exactly like a complete day.
+    """
+
+    # 12:00 UTC — deliberately mid-day, so an unsnapped window would cut.
+    MID = datetime(2026, 8, 3, 12, 0, tzinfo=timezone.utc)
+
+    def _day(self, key: str, **kw) -> dict:
+        return bucket_completeness(key, "day", now=self.MID, **kw)
+
+    def test_a_snapped_preset_cannot_cut_a_day(self):
+        for window in ("1d", "7d", "30d", "90d"):
+            start, end, _ = resolve_range(window, "", "", now=self.MID)
+            got = self._day("2026-08-02", start=start, end=end)
+            assert got["partial_reason"] is None, f"{window} cut a whole past day"
+            assert got["span_fraction"] == pytest.approx(1.0)
+
+    def test_the_current_day_is_in_progress_and_a_past_day_is_not(self):
+        """Asserted together: a change that flags everything, or nothing, fails."""
+        start, _, _ = resolve_range("7d", "", "", now=self.MID)
+        assert self._day("2026-08-03", start=start)["partial_reason"] == "in_progress"
+        assert self._day("2026-08-02", start=start)["partial_reason"] is None
+
+    def test_an_unsnapped_start_is_still_caught(self):
+        """The guard survives the snap. If `resolve_range` ever regresses, or a
+        caller passes its own start, the badge is still there."""
+        cut = datetime(2026, 8, 2, 6, 52, 42, tzinfo=timezone.utc)
+        got = self._day("2026-08-02", start=cut)
+        assert got["partial_reason"] == "window_cut"
+        assert got["covers_from"] == cut
+        assert got["span_fraction"] == pytest.approx(1 - (6 * 60 + 52.7) / 1440, abs=1e-3)
+
+    def test_snapping_days_is_not_snapping_weeks_or_months(self):
+        """A 7d window does not begin on a Monday, nor a 30d one on the 1st."""
+        wed = datetime(2026, 8, 5, 6, 52, tzinfo=timezone.utc)
+        s7, _, _ = resolve_range("7d", "", "", now=wed)
+        s30, _, _ = resolve_range("30d", "", "", now=wed)
+        week = bucket_completeness("2026-W31", "week", start=s7, now=wed)
+        month = bucket_completeness("2026-07", "month", start=s30, now=wed)
+        assert week["partial_reason"] == "window_cut"
+        assert month["partial_reason"] == "window_cut"
+        # ...and the current week/month are in progress, not cut.
+        assert bucket_completeness(
+            "2026-W32", "week", start=s7, now=wed
+        )["partial_reason"] == "in_progress"
+
+    def test_the_two_reasons_are_never_both_set(self):
+        """window_cut wins — it is the one the reader can act on."""
+        cut = datetime(2026, 8, 3, 6, 0, tzinfo=timezone.utc)   # inside today
+        got = self._day("2026-08-03", start=cut)
+        assert got["partial_reason"] == "window_cut"
+
+    def test_an_end_before_the_bucket_ends_is_also_a_cut(self):
+        _, end, _ = resolve_range("custom", "2026-08-01", "2026-08-02", now=self.MID)
+        # end is exclusive-midnight of the 3rd, so the 2nd is whole...
+        assert self._day("2026-08-02", end=end)["partial_reason"] is None
+        # ...but an end inside the day is not.
+        mid = datetime(2026, 8, 2, 10, 0, tzinfo=timezone.utc)
+        assert self._day("2026-08-02", end=mid)["partial_reason"] == "window_cut"
+
+    def test_all_time_flags_only_the_current_period(self):
+        start, end, _ = resolve_range("all", "", "", now=self.MID)
+        assert start is None and end is None
+        assert self._day("2026-07-01", start=start, end=end)["partial_reason"] is None
+        assert self._day("2026-08-03", start=start, end=end)["partial_reason"] == "in_progress"
+
+    def test_an_unparseable_key_says_cannot_say_rather_than_complete(self):
+        got = bucket_completeness("not-a-date", "day", now=self.MID)
+        assert got["partial_reason"] is None
+        assert got["covers_from"] is None and got["span_fraction"] is None
+
+    def test_the_owners_day_is_whole_again(self):
+        """The reported bug, as data.
+
+        11 trades on 2026-08-02: 8 closing before 06:52 UTC (1W/7L, −12.68%
+        total) and 3 after (3W/0L, +12.29%). Under the old rolling start the
+        bucket showed only the second group and read +12.29%; snapped, it must
+        report the whole day and come out negative.
+        """
+        early = [_rec(signal_id=f"e{i}", pnl=p,
+                      closed=datetime(2026, 8, 2, 3, i, tzinfo=timezone.utc))
+                 for i, p in enumerate([1.4, -1.9, -1.9, -1.8, -1.9, -1.8, -1.9, -2.85])]
+        late = [_rec(signal_id=f"l{i}", pnl=p,
+                     closed=datetime(2026, 8, 2, h, 0, tzinfo=timezone.utc))
+                for i, (h, p) in enumerate([(9, 3.88), (12, 4.54), (19, 3.86)])]
+        rows = reduce_records(early + late)
+
+        start, end, _ = resolve_range("1d", "", "", now=datetime(
+            2026, 8, 3, 6, 52, 42, tzinfo=timezone.utc))
+        kept = filter_rows(rows, start=start, end=end)
+        buckets = bucket_rows(kept, "day", amount=100.0, fee_pct=0.0,
+                              start=start, end=end,
+                              now=datetime(2026, 8, 3, 6, 52, 42, tzinfo=timezone.utc))
+        day = next(b for b in buckets if b["bucket"] == "2026-08-02")
+
+        assert day["n"] == 11, "the window must no longer cut the day"
+        assert (day["wins"], day["losses"]) == (4, 7)
+        assert day["total_pnl_pct"] < 0, "the day was a loss; +12.29% was the tail"
+        assert day["partial_reason"] is None, "and it is a whole day, so no badge"
+
+
+class TestBucketSpan:
+    """The inverse of `_bucket_key` — what a bucket label CLAIMS to cover."""
+
+    def test_a_day_claims_a_day(self):
+        assert bucket_span("2026-08-02", "day") == (
+            datetime(2026, 8, 2, tzinfo=timezone.utc),
+            datetime(2026, 8, 3, tzinfo=timezone.utc),
+        )
+
+    def test_an_iso_week_claims_monday_to_monday(self):
+        start, end = bucket_span("2026-W31", "week")
+        assert start.weekday() == 0 and (end - start) == timedelta(days=7)
+
+    def test_a_month_claims_its_own_length_not_thirty_days(self):
+        """February and July are different lengths; a fixed +30d would misreport
+        the fraction measured on every month."""
+        assert bucket_span("2026-02", "month") == (
+            datetime(2026, 2, 1, tzinfo=timezone.utc),
+            datetime(2026, 3, 1, tzinfo=timezone.utc),
+        )
+        assert bucket_span("2026-12", "month")[1] == datetime(
+            2027, 1, 1, tzinfo=timezone.utc
+        )
+
+    def test_an_unparseable_key_refuses(self):
+        assert bucket_span("fortnight", "day") is None
+        assert bucket_span("", "week") is None
+
+
+class TestDayBoundaryNote:
+    """Every figure is UTC. This only says where a UTC day ends locally."""
+
+    def test_it_names_the_local_rollover(self):
+        assert local_day_boundary_note("Asia/Kolkata", now=NOW) == "05:30 IST"
+
+    def test_utc_reports_itself(self):
+        assert local_day_boundary_note("UTC", now=NOW) == "00:00 UTC"
+
+    def test_an_unknown_or_empty_zone_says_nothing_rather_than_guessing(self):
+        """A wrong offset is worse than no offset — the template then just says
+        UTC, which is true."""
+        assert local_day_boundary_note("Not/AZone", now=NOW) == ""
+        assert local_day_boundary_note("", now=NOW) == ""
+
+
 class TestFiltersAndRange:
-    def test_window_presets_resolve_to_a_start(self):
+    def test_window_presets_snap_to_midnight(self):
+        """NOW is 12:00, so an unsnapped start would land mid-day and cut that
+        day's bucket in half — the 2026-08-03 fault."""
         start, end, label = resolve_range("7d", "", "", now=NOW)
-        assert start == NOW - timedelta(days=7) and end is None
-        assert "7d" in label
+        assert start == datetime(2026, 7, 21, tzinfo=timezone.utc)
+        assert start.hour == 0 and start.minute == 0 and start.second == 0
+        assert end is None
+        assert "7" in label and "2026-07-21" in label
 
     def test_all_is_open_ended(self):
         assert resolve_range("all", "", "", now=NOW) == (None, None, "all time")
@@ -658,6 +816,58 @@ class TestRoute:
             r = client.get("/track-record?window=all&amount=100&balance=150")
             assert r.status_code == 200
             assert "Underfunded" in r.text, "200 needed against 150 entered"
+
+    def test_the_page_states_its_day_boundary(self, monkeypatch):
+        """A date with no zone is the same omission as a percentage with no
+        denominator — it is what let a 01:18-IST trade read as "yesterday"."""
+        self._stub(monkeypatch, [_rec()])
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/track-record?window=all")
+            assert r.status_code == 200
+            assert "UTC" in r.text
+            assert "05:30 IST" in r.text
+
+    def test_the_partial_bucket_note_renders_even_when_nothing_is_flagged(
+        self, monkeypatch
+    ):
+        """A check that appears only when it fires teaches the reader that its
+        absence means "fine" when it equally means the check stopped running."""
+        self._stub(monkeypatch, [_rec(closed=NOW - timedelta(days=3))])
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/track-record?window=all")
+            assert "widening the window brings them back" in r.text
+
+    def test_todays_bucket_is_badged_in_progress(self, monkeypatch):
+        """Asserted on "% elapsed", which only the row badge emits. The footer
+        paragraph also contains the words "in progress", so asserting those would
+        pass even with every badge removed."""
+        self._stub(monkeypatch, [
+            _rec(closed=datetime.now(tz=timezone.utc) - timedelta(minutes=5)),
+        ])
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/track-record?window=1d")
+            assert r.status_code == 200
+            assert "% elapsed" in r.text
+
+    def test_the_bucket_csv_carries_the_caveat(self, monkeypatch):
+        """An export that drops the caveat is the same fault one file over — a
+        spreadsheet is exactly where a part-period gets averaged in.
+
+        Asserted on a VALUE in a data row, not on the header: `_EXPORT_COLS` is
+        static, so a header check passes even when nothing populates the column.
+        """
+        self._stub(monkeypatch, [
+            _rec(closed=datetime.now(tz=timezone.utc) - timedelta(minutes=5)),
+        ])
+        with TestClient(app) as client:
+            _login(client)
+            body = client.get("/track-record/export.csv?window=all").text
+            header, *data = [ln for ln in body.splitlines() if ln.strip()]
+            assert "partial_reason" in header and "covers_from_iso" in header
+            assert any("in_progress" in row for row in data)
 
     def test_a_bad_granularity_does_not_500(self, monkeypatch):
         self._stub(monkeypatch, [_rec()])

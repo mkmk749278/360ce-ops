@@ -477,9 +477,41 @@ Rules the page carries, all ports rather than inventions:
   own) because pooling them reports a live fault that is not happening.
 - **Bucket by CLOSE time.** A day's PnL is the PnL realised that day; bucketing by
   entry credits Monday with a trade that closed Thursday.
+- **A window boundary is not a bucket boundary, and a part-period must never render
+  as a whole one (2026-08-03).** `resolve_range` returned `now - N days` — a
+  *moment* — while `bucket_rows` groups by **calendar day**, so the oldest bucket of
+  every rolling preset held only the tail of that day and looked exactly like a
+  complete one. On the owner's own export `window=1d` showed `2026-08-02` as
+  **+12.29% over 3 trades, 3W/0L**; the day was **−0.40% over 11, 4W/7L**. The window
+  had removed 8 trades, 7 of them losers — **the sign flipped**, and the owner read
+  the row as "yesterday was good". Presets now snap to midnight UTC, so a day is the
+  whole day whatever window contains it, and the bucket count is unchanged.
+  Snapping days is **not** snapping weeks or months (a 7d window does not begin on a
+  Monday), so `bucket_completeness` ships anyway and is the guard against a future
+  `resolve_range` regression. Its two states are never pooled — `window_cut` (the data
+  exists; **widen the window**) against `in_progress` (the period has not finished;
+  **wait**) — because the reader's next move differs, and both stamps ride into the
+  CSV, since a spreadsheet is exactly where a part-period gets averaged in. The
+  explanatory note renders whether or not any row is flagged.
+- **Say which day the date means.** Every figure here is UTC — the engine is UTC end
+  to end and ops ports its clock rather than inventing one, so an ops day and an
+  engine day are the same day. But a UTC day ends at **05:30 IST**, so a trade closing
+  19:48 UTC is 01:18 the next morning locally and reads as "yesterday" on screen. Every
+  bucket label carries `UTC` and the footer names the local rollover
+  (`OPS_LOCAL_TZ_HINT`, display only — it re-buckets nothing). A date with no zone is
+  the same class of omission as a percentage with no denominator.
 - **The row cap is a render bound.** The per-trade table caps at 500 *after* every
   filter and after sorting, and says when it bit; the per-trade CSV is uncapped,
   because a truncated export is #97 wearing a download button.
+- **This page and the Lumin app's "YOUR PAPER P&L" are different books and must never
+  be reconciled.** Traced 2026-08-03 after the owner compared them: the app card reads
+  a **per-user paper book** (`execution/paper_book_registry.py`) that starts empty at
+  enrollment, applies per-user symbol/path/regime prefs and a per-user RiskManager on
+  top of router delivery, sizes at `min(equity × 2%, $100)` — ~$20 on a fresh book,
+  **compounding** — and books each TP-ladder partial on its own day. This page is every
+  delivered closed signal, pooled, at a fixed notional the owner types, one blended
+  `pnl_pct` per row. Different population, different sizing, different exit accounting.
+  Do not "fix" a disagreement between them.
 
 `entry_regime` arrives from engine #817 and **cannot be backfilled** — the regime at
 entry is knowable only at entry — so records closed before that deploy render as their
