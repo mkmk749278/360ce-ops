@@ -591,6 +591,20 @@ def _positive_float(raw: str, default: float) -> float:
     return max(0.0, value)
 
 
+def _optional_float(raw: str) -> Optional[float]:
+    """A number the owner may not have entered at all.
+
+    Blank means "not asked", and so does a typo — falling back to 0.0 would
+    render the underfunded warning against a balance the owner never claimed to
+    have, which is a fault report about the reader rather than the book.
+    """
+    if not str(raw).strip():
+        return None
+    sentinel = -1.0
+    value = _positive_float(raw, sentinel)
+    return None if value == sentinel else value
+
+
 def _page_context(request: Request, **q) -> dict:
     vol = request.app.state.data_volume
     raw = vol.signal_performance()
@@ -649,7 +663,7 @@ async def track_record(
         granularity = "day"
     amount_usdt = _positive_float(amount, DEFAULT_AMOUNT_USDT)
     fee = _positive_float(fee_pct, DEFAULT_FEE_PCT)
-    balance_usdt = _positive_float(balance, 0.0) if balance.strip() else None
+    balance_usdt = _optional_float(balance)
     q = dict(
         window=window, date_from=date_from, date_to=date_to,
         regime=regime, setup=setup, symbol=symbol, direction=direction,

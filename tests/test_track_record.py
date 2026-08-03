@@ -626,13 +626,25 @@ class TestRoute:
 
     def test_a_bad_amount_or_fee_does_not_500(self, monkeypatch):
         """A typo must fall back to the default, never crash and never silently
-        become zero — a zero notional would render a book that earned nothing."""
-        self._stub(monkeypatch, [_rec(pnl=2.0)])
+        become zero — a zero notional would render a book that earned nothing.
+
+        The record carries a real entry stamp so the balance panel has a non-zero
+        requirement to warn against; without one the underfunded assertion below
+        would pass whatever the parsing did.
+        """
+        self._stub(monkeypatch, [
+            _rec(pnl=2.0, dispatch_timestamp=(NOW - timedelta(hours=1)).timestamp()),
+        ])
         with TestClient(app) as client:
             _login(client)
             r = client.get("/track-record?window=all&amount=abc&fee_pct=&balance=xyz")
             assert r.status_code == 200
             assert 'value="100"' in r.text
+            assert "Underfunded" not in r.text, (
+                "an unreadable balance is 'not asked', not 'you have zero' — "
+                "warning against a balance the owner never claimed is a fault "
+                "report about the reader"
+            )
 
     def test_the_balance_panel_flags_an_underfunded_book(self, monkeypatch):
         self._stub(monkeypatch, [
