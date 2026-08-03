@@ -61,6 +61,36 @@ Three rules the SAR live tab paid for and this one inherits:
 * **Unrealized never sits in a realized column.** These numbers are marks, not
   results: they are kept out of the per-path Avg R and win rate entirely, and
   the panel that shows them says so.
+
+Max profit, and the exit methods (2026-08-03, engine #869)
+-----------------------------------------------------------
+Owner: *"implement same like live features in dark feed — max PnL before hitting
+SL, and same exit strategies like Held to stop in dark feed too."*
+
+Neither was answerable from this ledger, and not for want of a column. The
+engine's dark walk **stopped at the first TP1-or-SL touch**, so ``mfe_pct`` on a
+row that closed at TP1 is bounded by TP1 by construction — it says how far the
+trade ran before its own exit and nothing at all about how far it was going to
+run. Everything after that touch was never looked at, which is also why no
+held-to-stop or laddered exit could be priced.
+
+The engine now walks a second arm over the same bars with TP1 removed
+(``dark_emission._walk_hold``): it exits only at the original stop or at the
+six-hour horizon, and it records the peak before the stop, the drawdown on the
+way to that peak, and the highest ladder level reached before it. This page
+prices the Profit tab's strategy catalog off those stamps
+(``app/data_sources/dark_exit_sim.py``) and leads with the peak.
+
+Three things the panels must keep saying:
+
+* **The two arms are different mechanisms and are never blended.** The row's own
+  status is its SL/TP1 geometry; the held arm is what holding would have done.
+  Same rule as the SAR panel below, same reason.
+* **The comparison population is the rows where BOTH decided.** A strategy
+  measured on the subset it happens to be able to price would win on selection.
+* **Rows the arm cannot speak for are counted and named**, never scored zero:
+  still running, retired unmeasured, or written before the arm shipped are three
+  different states with three different next moves.
 """
 from __future__ import annotations
 
@@ -68,6 +98,17 @@ import time
 from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
+
+from app.data_sources.dark_exit_sim import (
+    HOLD_OPEN,
+    DarkRowInputs,
+    build_catalog,
+    compare_strategies,
+    evaluate,
+    get_strategy,
+    hold_coverage,
+    summarize_max_profit,
+)
 
 router = APIRouter()
 
@@ -159,9 +200,17 @@ def mark_freshness(rows: list[dict], *, now: float) -> list[dict]:
     ``None`` — not 0, not False — wherever the engine said nothing. A row from
     before the stamps existed is ``unverified``: an unknown, and unknowns are
     counted in their own bucket rather than quietly passing.
+
+    **A closed row is graded too when its held-to-stop arm is still running.**
+    That arm exits at the stop rather than at TP1, so it routinely outlives the
+    row's own verdict — and while it runs the page prints a mark beside it. A
+    mark with no currency verdict is exactly the thing this function exists to
+    prevent, and "the row is closed" stopped meaning "nothing here is still
+    being measured" the moment the second arm shipped.
     """
     for row in rows:
-        if str(row.get("status") or "") != STATUS_OPEN:
+        hold_running = str(row.get("hold_status") or "") == HOLD_OPEN
+        if str(row.get("status") or "") != STATUS_OPEN and not hold_running:
             continue
         resolved_at = _f(row.get("last_resolved_at"))
         age = None if resolved_at is None else max(0.0, now - resolved_at)
@@ -411,6 +460,33 @@ def summarize(rows: list[dict]) -> dict:
     return {"by_setup": out, "n": len(rows)}
 
 
+def _resolve_target_pct(raw: Optional[float]) -> float:
+    """Clamp the fixed-target / break-even percent to 0.1–20%, default 1%.
+
+    Same band and default as the Profit tab's, so the two pages sweep the same
+    range and a figure copied between them means the same thing.
+    """
+    if raw is None:
+        return 1.0
+    return max(0.1, min(20.0, raw))
+
+
+def _resolve_fee_pct(raw: Optional[float]) -> float:
+    """Round-trip fee, 0–2%, default 0.07 (Binance USD-M maker in + taker out).
+
+    Charged because the cost of trading has run ~10× this book's edge, so a
+    gross-only comparison answers the wrong question — `/track-record`'s rule,
+    applied to a page that compares exit methods, where the fee count differs
+    between a one-leg exit and a three-leg ladder in the reader's head but not
+    in this number. (It is one round trip either way here: the ladder's legs
+    close one position, and modelling a per-leg taker fee would need a fill
+    model this ledger does not carry. Stated rather than silently assumed.)
+    """
+    if raw is None:
+        return 0.07
+    return max(0.0, min(2.0, raw))
+
+
 #: An arm's terminal states, mirrored from the engine's ``sar_live_shadow``.
 #: ``INSUFFICIENT`` is terminal but deliberately unscored — the absence of a
 #: measurement, not a 0R outcome.
@@ -585,12 +661,42 @@ def reduce_state(provenance: dict, rows: list[dict], now: Optional[float] = None
     return {"state": "live", "detail": detail, "stalled": stalled}
 
 
+def attach_strategy(rows: list[dict], strategy_key: str, target_pct: float,
+                    fee_pct: float) -> list[dict]:
+    """Layer the selected exit strategy onto each row, in keys of its own.
+
+    Never into ``pnl_pct``: that column is the row's own SL/TP1 outcome and a
+    what-if written over it would be indistinguishable from a result the engine
+    recorded. A row the strategy cannot price carries the reason rather than a
+    number, so the table can say *why* a cell is blank instead of leaving the
+    reader to assume it is a zero.
+    """
+    strat = get_strategy(strategy_key, target_pct)
+    for row in rows:
+        inp = DarkRowInputs.from_row(row)
+        res = evaluate(inp, strat, be_pct=target_pct) if inp is not None else None
+        if res is None or res.result_pct is None:
+            row["strategy_pct"] = None
+            row["strategy_gross_pct"] = None
+            row["strategy_labels"] = ""
+            row["strategy_skipped"] = res.skipped if res is not None else "no_geometry"
+            continue
+        row["strategy_gross_pct"] = res.result_pct
+        row["strategy_pct"] = res.result_pct - fee_pct
+        row["strategy_labels"] = "+".join(res.filled_labels)
+        row["strategy_skipped"] = ""
+    return rows
+
+
 @router.get("/signals/dark-live")
 async def dark_signals_live(
     request: Request,
     setup: str = Query(""),
     gate: str = Query(""),
     status: str = Query(""),
+    strategy: str = Query("hold"),
+    target_pct: float = Query(1.0),
+    fee_pct: float = Query(0.07),
 ):
     vol = request.app.state.data_volume
     payload = vol.dark_signals()
@@ -629,6 +735,18 @@ async def dark_signals_live(
     # reader is looking at (#90/#91).
     sar_panel = summarize_sar(selected)
 
+    # The held-to-stop arm and the exit-method what-ifs, on the same filtered
+    # selection for the same reason.
+    target = _resolve_target_pct(target_pct)
+    fee = _resolve_fee_pct(fee_pct)
+    catalog = build_catalog(target)
+    if strategy not in catalog:
+        strategy = "hold"
+    max_profit = summarize_max_profit(selected)
+    exits = compare_strategies(selected, target_pct=target, fee_pct=fee)
+    coverage = hold_coverage(selected)
+    attach_strategy(selected, strategy, target, fee)
+
     # Truncate after filtering, never before (#97). The page says when it bit.
     shown = selected[:TABLE_ROW_CAP]
 
@@ -636,6 +754,14 @@ async def dark_signals_live(
         "request": request,
         "active": "dark_live",
         "rows": shown,
+        "max_profit": max_profit,
+        "exits": exits,
+        "hold_coverage": coverage,
+        "strategies": [(k, s.label) for k, s in catalog.items()],
+        "strategy": strategy,
+        "strategy_label": catalog[strategy].label,
+        "target_pct": target,
+        "fee_pct": fee,
         "matched": len(selected),
         "shown": len(shown),
         "row_cap": TABLE_ROW_CAP,
@@ -669,6 +795,10 @@ async def dark_signals_live(
 _DARK_COLS = [
     "signal_id", "symbol", "side", "setup_class", "dark_gate", "confidence",
     "regime", "context_key", "pair_admission", "entry", "stop_loss", "tp1",
+    # The rest of the ladder. Without it a spreadsheet cannot reprice a leg, and
+    # re-deriving one from an R multiple is exactly the invented denominator
+    # this repo keeps refusing.
+    "tp2", "tp3",
     "sl_distance_pct",
     "emitted_at", "status", "closed_at", "exit_price", "pnl_pct", "r_multiple",
     # Both halves of the excursion. MFE alone cannot answer any question about
@@ -685,6 +815,19 @@ _DARK_COLS = [
     "last_resolved_at", "resolve_age_sec", "last_bar_ms", "bars_behind",
     "resolve_misses", "resolve_miss_reason", "stalled", "freshness",
     "window_undated_reason", "unverified_reason",
+    # The held-to-stop arm: TP1 removed, exits only at the original stop or the
+    # horizon. `hold_mfe_pct` is "max PnL before hitting SL" and is the ONLY one
+    # of the two peaks not bounded by TP1 — `mfe_pct` above stops where the row
+    # did, so the two are not the same measurement and a sheet that pooled them
+    # would average a truncated series with a complete one.
+    "hold_status", "hold_result_pct", "hold_mark_pct", "hold_exit_price",
+    "hold_mfe_pct", "hold_mfe_incl_pct", "hold_mae_pre_peak_pct",
+    "hold_peak_bars", "hold_bars", "hold_hit_tp", "hold_ambiguous_bar",
+    "hold_window_coverage", "hold_insufficient_reason", "hold_last_bar_ms",
+    # …and the selected strategy priced on it. Named columns rather than a
+    # bare number, because a what-if in a sheet beside a recorded outcome is
+    # precisely where the two get read as one.
+    "strategy_pct", "strategy_gross_pct", "strategy_labels", "strategy_skipped",
 ]
 
 
@@ -694,6 +837,9 @@ async def dark_signals_export(
     setup: str = Query(""),
     gate: str = Query(""),
     status: str = Query(""),
+    strategy: str = Query("hold"),
+    target_pct: float = Query(1.0),
+    fee_pct: float = Query(0.07),
 ):
     """The current selection as CSV — uncapped, unlike the rendered table."""
     from app.reports import csv_response
@@ -706,5 +852,9 @@ async def dark_signals_export(
         prices = {}
     mark_freshness(rows, now=time.time())
     mark_live_pnl(rows, prices)
+    # The export is a surface and inherits the page's rules — including which
+    # strategy the numbers beside each row were priced under.
+    target = _resolve_target_pct(target_pct)
+    attach_strategy(rows, strategy, target, _resolve_fee_pct(fee_pct))
     data = [[r.get(c) for c in _DARK_COLS] for r in rows]
     return csv_response("dark_signals_live", _DARK_COLS, data)
