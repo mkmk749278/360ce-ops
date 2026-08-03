@@ -88,6 +88,13 @@ class Settings:
     exit_backtest_state_dir: str
     port: int
     log_level: str
+    # Every bucket, timestamp and window on this dashboard is UTC — the engine is
+    # UTC end to end and ops ports the engine's clock rather than inventing one.
+    # This zone is used ONLY to tell the owner where a UTC day boundary lands in
+    # his own time ("a UTC day ends at 05:30 IST"). It re-buckets nothing. On
+    # 2026-08-03 a trade closed 19:48 UTC — 01:18 IST the next morning — and read
+    # as "yesterday" on screen, because the page never said which day it meant.
+    local_tz_hint: str
 
 
 def load_settings() -> Settings:
@@ -176,4 +183,5 @@ def load_settings() -> Settings:
         exit_backtest_state_dir=_env("EXIT_BACKTEST_STATE_DIR", "/data/exit_backtest"),
         port=_env_int("OPS_PORT", 8000),
         log_level=_env("LOG_LEVEL", "INFO"),
+        local_tz_hint=_env("OPS_LOCAL_TZ_HINT", "Asia/Kolkata"),
     )

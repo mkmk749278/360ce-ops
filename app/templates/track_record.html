@@ -201,7 +201,7 @@
   <table>
     <thead>
       <tr>
-        <th>{{ granularity | capitalize }}</th>
+        <th>{{ granularity | capitalize }} <span class="muted small">UTC</span></th>
         <th>Trades</th><th>Moves</th><th>W / L</th><th>Win %</th>
         <th>Net USDT</th><th>Cumulative</th>
         <th>Total %</th><th>Avg %</th><th>Best</th><th>Worst</th>
@@ -210,7 +210,14 @@
     <tbody>
       {% for b in buckets %}
       <tr>
-        <td><code>{{ b.bucket }}</code></td>
+        <td>
+          <code {% if b.partial_reason %}class="muted"{% endif %}>{{ b.bucket }}</code>
+          {%- if b.partial_reason == 'window_cut' %}
+          <br><span class="warn small" title="The selected range starts inside this {{ granularity }}, so it holds only part of one. Widen the window to see the rest.">part {{ granularity }} — from {{ b.covers_from.strftime('%b %d %H:%M') }} UTC{% if b.span_fraction is not none %}, {{ "%.0f"|format(b.span_fraction * 100) }}%{% endif %}</span>
+          {%- elif b.partial_reason == 'in_progress' %}
+          <br><span class="muted small" title="This {{ granularity }} has not finished yet. Nothing is missing — the rest has not happened.">in progress{% if b.span_fraction is not none %} — {{ "%.0f"|format(b.span_fraction * 100) }}% elapsed{% endif %}</span>
+          {%- endif %}
+        </td>
         <td>{{ b.n }}{% if b.no_pnl %} <span class="muted small">({{ b.no_pnl }} no move)</span>{% endif %}</td>
         <td>{{ b.moves }}</td>
         <td>{% if b.n_pnl %}{{ b.wins }} / {{ b.losses }}{% else %}—{% endif %}</td>
@@ -235,6 +242,24 @@
     the reader's head. <strong>Cumulative</strong> runs oldest-first, so the top row
     carries the whole selection. An em-dash means the bucket has trades but none with a
     readable move, never that it was flat.
+  </p>
+  <p class="muted small">
+    <strong>Every date here is a UTC {{ granularity }}</strong>{% if day_boundary_note %} — one
+    ends at <strong>{{ day_boundary_note }}</strong>, so a trade closing late in the UTC
+    evening is already the next morning in local time{% endif %}. The engine is UTC end to
+    end and this page ports its clock rather than inventing one, so an ops
+    {{ granularity }} and an engine {{ granularity }} are the same {{ granularity }}.
+  </p>
+  <p class="muted small">
+    <strong>A row that measured less than the {{ granularity }} it names says so</strong>, and
+    the two reasons are never pooled because what you do about them differs.
+    <em>part {{ granularity }}</em> means the selected range begins inside it — the trades
+    exist, and <strong>widening the window brings them back</strong>. <em>in progress</em>
+    means the period has not finished — nothing is missing and only time fixes it. Window
+    presets snap to whole UTC days, so no <em>day</em> can be cut; a week or month still can,
+    because a 7-day window does not start on a Monday. This note renders whether or not any
+    row is flagged — a check that appears only when it fires teaches you that its absence
+    means "fine" when it equally means the check stopped running.
   </p>
 </section>
 
