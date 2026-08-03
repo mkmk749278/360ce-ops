@@ -82,9 +82,181 @@
       {% endfor %}
     </select>
   </label>
-  <a class="btn" href="/signals/dark-live/export.csv?setup={{ filter_setup }}&gate={{ filter_gate }}&status={{ filter_status }}">Export CSV</a>
+  <label class="small">Exit strategy
+    <select name="strategy" onchange="this.form.submit()">
+      {% for k, label in strategies %}
+      <option value="{{ k }}" {% if strategy == k %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="small" title="the fixed pre-TP target, and the trigger for the break-even stop">Target %
+    <input type="number" name="target_pct" value="{{ "%g"|format(target_pct) }}" step="0.1" min="0.1" max="20" style="width:5em">
+  </label>
+  <label class="small" title="round-trip: Binance USD-M maker in (0.02%) + taker out (0.05%). Charged to every strategy AND to the row's own exit, so the comparison stays apples-to-apples.">Fee %
+    <input type="number" name="fee_pct" value="{{ "%g"|format(fee_pct) }}" step="0.01" min="0" max="2" style="width:5em">
+  </label>
+  <a class="btn" href="/signals/dark-live/export.csv?setup={{ filter_setup }}&gate={{ filter_gate }}&status={{ filter_status }}&strategy={{ strategy }}&target_pct={{ target_pct }}&fee_pct={{ fee_pct }}">Export CSV</a>
   <noscript><button class="btn" type="submit">Apply</button></noscript>
 </form>
+
+<section class="card">
+  <h2 class="small">Max PnL before hitting SL <span class="muted">— how much was on the table</span></h2>
+  {% if max_profit.n %}
+  <table class="tbl">
+    <thead>
+      <tr><th>Setup</th><th>Rows</th>
+          <th title="the best this trade ever showed, on bars strictly BEFORE the one that touched the stop. Not bounded by TP1 — that is the whole point.">Avg peak</th>
+          <th>Median peak</th><th>Best</th>
+          <th class="muted" title="the same peak with the stop bar's favourable wick included. Intrabar order is unknowable from OHLC, so the headline assumes the stop went first; this is the other reading, and the gap between them IS the assumption.">Peak incl. stop bar</th>
+          <th title="how far it went AGAINST us on the way to that peak. Without it the peak bounds nothing: 'would a tighter stop have kept this' is exactly 'did it survive its own drawdown first'.">Avg drawdown to peak</th>
+          <th>Worst</th>
+          <th title="peak minus what the row's own SL/TP1 exit actually captured">Avg given back</th>
+          <th title="how the held arm ended: at the original stop, or forced closed at the six-hour horizon">Stopped / horizon</th></tr>
+    </thead>
+    <tbody>
+      {% for a in max_profit.by_setup %}
+      <tr>
+        <td class="mono">{{ a.setup_class }}</td>
+        <td>{{ a.n }}</td>
+        <td class="{% if a.avg_peak_pct %}pos{% endif %}"><strong>{% if a.avg_peak_pct is not none %}{{ "%.2f"|format(a.avg_peak_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td>{% if a.median_peak_pct is not none %}{{ "%.2f"|format(a.median_peak_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if a.best_peak_pct %}pos{% endif %}">{% if a.best_peak_pct is not none %}{{ "%.2f"|format(a.best_peak_pct) }}%{% else %}—{% endif %}</td>
+        <td class="muted small">{% if a.avg_peak_incl_pct is not none %}{{ "%.2f"|format(a.avg_peak_incl_pct) }}%{% else %}—{% endif %}
+            {% if a.ambiguous %}<span class="badge st-partial" title="{{ a.ambiguous }} row(s) printed their peak inside the very bar that took out the stop, so the two figures describe the same bar read two ways">{{ a.ambiguous }} same-bar</span>{% endif %}</td>
+        <td class="{% if a.avg_drawdown_pre_peak_pct %}neg{% endif %}">{% if a.avg_drawdown_pre_peak_pct is not none %}{{ "%.2f"|format(a.avg_drawdown_pre_peak_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if a.worst_drawdown_pre_peak_pct %}neg{% endif %}">{% if a.worst_drawdown_pre_peak_pct is not none %}{{ "%.2f"|format(a.worst_drawdown_pre_peak_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if a.avg_give_back_pct is not none %}{{ "%.2f"|format(a.avg_give_back_pct) }}%
+            <span class="muted small">of {{ a.n_give }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="small">{{ a.stopped }} / {{ a.horizon }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">
+    <strong>No row has a decided held-to-stop arm in this selection yet.</strong> The arm exits
+    only at the original stop or at the six-hour horizon, so it normally decides <em>later</em>
+    than the row's own TP1 — a blank here is a wait, not a fault, and it is deliberately not
+    filled with whichever rows happen to have finished.
+  </p>
+  {% endif %}
+  <p class="muted small">
+    <strong>This is not the MFE column in the table below.</strong> That one is measured by the
+    row's own walk, which stops at its first TP1-or-SL touch — so on a row that closed at TP1 it
+    is bounded by the TP1 distance <em>by construction</em>, whatever the trade went on to do.
+    The peak here comes from a second arm that walks the same bars with TP1 removed, so it is the
+    only one of the two that can answer “how much was this ever worth”. They are different
+    measurements and are never pooled.
+  </p>
+  <p class="muted small">
+    <strong>The drawdown column is what makes the peak mean anything.</strong> A 6% peak reached
+    after a 4% adverse excursion and one reached in a straight line argue for opposite stops, and
+    a page showing only the peak cannot tell them apart — the optimistic and pessimistic readings
+    of “tighten the stop” have differed by more than the whole edge under discussion. It includes
+    the peak bar's own low, so the question is never answered more favourably than the bars allow.
+  </p>
+  <p class="muted small">
+    Coverage: <strong>{{ hold_coverage.decided }}</strong> of {{ hold_coverage.total }} rows in
+    this selection have a decided arm{% if hold_coverage.hold_running %},
+    {{ hold_coverage.hold_running }} still running{% endif %}{% if hold_coverage.hold_unmeasured %},
+    <span class="neg">{{ hold_coverage.hold_unmeasured }} retired unmeasured</span> (the candles
+    stopped, or the walk did not cover the window — no verdict was earned, so none was
+    invented){% endif %}{% if hold_coverage.no_hold_arm %},
+    {{ hold_coverage.no_hold_arm }} written before the arm shipped{% endif %}. Those three are
+    counted apart because the reader's next move differs: wait, investigate the lane, or nothing
+    at all.
+  </p>
+</section>
+
+<section class="card">
+  <h2 class="small">Exit methods on the same entries <span class="muted">— what-ifs, applied nowhere</span></h2>
+  {% if exits.n %}
+  <table class="tbl">
+    <thead>
+      <tr><th>Exit method</th><th>Rows priced</th><th>Avg PnL %</th><th>Total PnL %</th>
+          <th>Win rate</th>
+          <th class="muted" title="before the round-trip fee">Gross avg</th>
+          <th title="this method's total minus the row's own exit total, over the same rows. Positive = this method would have beaten what the dark row's own SL/TP1 geometry did.">vs the row's own exit</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>The row's own exit</strong> <span class="muted small">— SL / TP1, what the ledger records</span></td>
+        <td>{{ exits.engine.n }}</td>
+        <td class="{% if exits.engine.avg_pct is not none and exits.engine.avg_pct > 0 %}pos{% elif exits.engine.avg_pct is not none and exits.engine.avg_pct < 0 %}neg{% endif %}">
+          {% if exits.engine.avg_pct is not none %}{{ "%+.3f"|format(exits.engine.avg_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if exits.engine.total_pct is not none and exits.engine.total_pct > 0 %}pos{% elif exits.engine.total_pct is not none and exits.engine.total_pct < 0 %}neg{% endif %}">
+          {% if exits.engine.total_pct is not none %}{{ "%+.1f"|format(exits.engine.total_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if exits.engine.win_rate is not none %}{{ "%.0f"|format(exits.engine.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="muted small">{% if exits.engine.avg_gross_pct is not none %}{{ "%+.3f"|format(exits.engine.avg_gross_pct) }}%{% else %}—{% endif %}</td>
+        <td class="muted">— <span class="small">baseline</span></td>
+      </tr>
+      {% for s in exits.strategies %}
+      <tr {% if s.key == strategy %}style="outline:1px solid var(--accent,#6af)"{% endif %}>
+        <td>{{ s.label }}{% if s.key == strategy %} <span class="badge st-open">selected</span>{% endif %}</td>
+        <td>{{ s.stat.n }}{% if s.stat.skipped %}
+            <span class="muted small" title="{% for k, v in s.stat.skips.items() %}{{ v }} {{ k }}{% if not loop.last %}, {% endif %}{% endfor %} — a row this method cannot price is excluded, never scored zero">−{{ s.stat.skipped }}</span>{% endif %}</td>
+        <td class="{% if s.stat.avg_pct is not none and s.stat.avg_pct > 0 %}pos{% elif s.stat.avg_pct is not none and s.stat.avg_pct < 0 %}neg{% endif %}">
+          <strong>{% if s.stat.avg_pct is not none %}{{ "%+.3f"|format(s.stat.avg_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td class="{% if s.stat.total_pct is not none and s.stat.total_pct > 0 %}pos{% elif s.stat.total_pct is not none and s.stat.total_pct < 0 %}neg{% endif %}">
+          {% if s.stat.total_pct is not none %}{{ "%+.1f"|format(s.stat.total_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if s.stat.win_rate is not none %}{{ "%.0f"|format(s.stat.win_rate) }}%
+            <span class="muted small">{{ s.stat.wins }}W/{{ s.stat.losses }}L</span>{% else %}—{% endif %}</td>
+        <td class="muted small">{% if s.stat.avg_gross_pct is not none %}{{ "%+.3f"|format(s.stat.avg_gross_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if s.edge is not none and s.edge > 0 %}pos{% elif s.edge is not none and s.edge < 0 %}neg{% endif %}">
+          {% if s.edge is not none %}{{ "%+.1f"|format(s.edge) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Measured over the <strong>{{ exits.n }}</strong> rows where <em>both</em> the row's own exit
+    and the held-to-stop arm reached a verdict{% if exits.n_excluded %}; {{ exits.n_excluded }}
+    excluded ({% for k, v in exits.excluded.items() %}{{ v }} {{ k }}{% if not loop.last %}, {% endif %}{% endfor %}){% endif %}.
+    A row that resolved while its arm is still running describes one mechanism and not the other,
+    and averaging over the union compares two different sets of trades and calls the difference a
+    result. Every figure is net of a <strong>{{ "%g"|format(fee_pct) }}%</strong> round trip,
+    charged to the baseline as well — a gross-only comparison answers the wrong question on a book
+    whose trading cost has run about ten times its edge.
+  </p>
+  <p class="muted small">
+    <strong>{{ exits.n_cells }} methods are drawn above, and that number belongs on screen.</strong>
+    The best row of a table beats a coin flip by construction, so a leader here is a candidate for
+    more evidence rather than a finding — and this population is a few dozen rows on paths that
+    normally emit nothing. Read <em>rows priced</em> before the average: a method scoring 9 of 40
+    rows has not been tested on this book whatever its number says.
+  </p>
+  {% else %}
+  <p class="muted small">
+    <strong>Nothing can be priced in this selection yet.</strong> An exit method needs a row whose
+    own SL/TP1 outcome is in <em>and</em> whose held-to-stop arm has decided, and the arm normally
+    decides later. That is a wait, not a fault{% if hold_coverage.hold_unmeasured %} — though
+    <span class="neg">{{ hold_coverage.hold_unmeasured }} arm(s) here retired unmeasured</span>,
+    which is worth checking{% endif %}.
+  </p>
+  {% endif %}
+  <p class="muted small">
+    <strong>Nothing on this panel is applied to anything.</strong> These rows never reached a
+    channel, a push, the app feed or an order, and the exit methods above are replays of what the
+    engine already recorded — no candle is re-walked here and no fill is invented. Fill order comes
+    from the engine's stamps: a ladder level counts only if it was touched on a bar <em>strictly
+    before</em> the one that took out the stop, so a same-bar tie was already resolved against the
+    trade upstream rather than being rounded in its favour here.
+  </p>
+  <p class="muted small">
+    <strong>The break-even method is the one approximation, and it leans the other way.</strong> A
+    stop moved to entry exits at the <em>first</em> retrace through entry after the trigger, which
+    can precede a TP1 this model still books — so that row is optimistic where price ran up, came
+    back through entry, and only then reached TP1. It is exact everywhere else. Ported from the
+    Profit tab deliberately, so “BE stop at +{{ "%g"|format(target_pct) }}%” means the same thing
+    on both pages.
+  </p>
+  <p class="muted small">
+    <strong>There is no R here.</strong> Position sizing is a fixed notional, so a percentage is
+    proportional to money and an R is not — and R would let a method that harvests tight-stop
+    trades outrank one that makes more money. The muted R column in the table below stays as the
+    bridge to the Strategy Lab and is not what a verdict is read from.
+  </p>
+</section>
 
 {% if live.open %}
 <section class="card">
@@ -294,7 +466,7 @@
          The owner reads this page on a phone, and the first cut put Status/PnL
          behind the setup name and the full gate token — so the only columns the
          page was asked for sat off the right edge. #}
-      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Status</th><th title="how long ago the ENGINE last advanced this row on real bars — not when this page loaded, and not when the price beside it was fetched">Measured</th><th>Entry</th><th>Now</th><th title="unrealized while open, realized once closed — the two never share a column">PnL</th><th>R</th><th title="how far price sits from each level; negative means the level was already crossed while the row still says open">→SL / →TP1</th><th title="maximum FAVOURABLE excursion — how far the trade ran our way">MFE</th><th title="maximum ADVERSE excursion — how far it went against us first. Every stop-distance question turns on this: &#39;would a tighter stop have helped&#39; is exactly &#39;did the winners survive it&#39;, and without this column that can only be assumed.">MAE</th><th title="what the SAR exit arm on this same entry did — RUNNING until SAR flips, which is normally later than the row&#39;s own stop. Blank means no arm: the engine refuses to open one whose anchor bar is stale, so blank is a refusal rather than a null result.">SAR exit</th><th>Conf</th><th>Regime</th><th>Carried past</th></tr>
+      <tr><th>Symbol</th><th>Side</th><th>Setup</th><th>Status</th><th title="how long ago the ENGINE last advanced this row on real bars — not when this page loaded, and not when the price beside it was fetched. It covers whichever arm is still walking: the held-to-stop arm exits at the stop rather than at TP1, so a closed row is still graded while its arm runs.">Measured</th><th>Entry</th><th>Now</th><th title="unrealized while open, realized once closed — the two never share a column">PnL</th><th>R</th><th title="how far price sits from each level; negative means the level was already crossed while the row still says open">→SL / →TP1</th><th title="maximum FAVOURABLE excursion — how far the trade ran our way">MFE</th><th title="maximum ADVERSE excursion — how far it went against us first. Every stop-distance question turns on this: &#39;would a tighter stop have helped&#39; is exactly &#39;did the winners survive it&#39;, and without this column that can only be assumed.">MAE</th><th title="MAX PnL BEFORE THE SL — the best this trade ever showed, from a second arm that walks the same bars with TP1 removed and exits only at the original stop. The MFE column to the left stops at this row&#39;s own exit, so on a TP1 row it is bounded by TP1 by construction; this one is not. Blank means the arm has not decided yet, which is normal — it exits later than TP1.">Max before SL</th><th title="what the held-to-stop arm itself returned: the stop&#39;s loss if the stop was touched, or the mark at the six-hour horizon if it never was">Held</th><th title="the selected exit method priced on this row, net of the round-trip fee. A what-if — it is never written into the PnL column, and a row this method cannot price says why instead of showing a zero.">Strategy</th><th title="what the SAR exit arm on this same entry did — RUNNING until SAR flips, which is normally later than the row&#39;s own stop. Blank means no arm: the engine refuses to open one whose anchor bar is stale, so blank is a refusal rather than a null result.">SAR exit</th><th>Conf</th><th>Regime</th><th>Carried past</th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
@@ -313,7 +485,10 @@
            row's status: a stalled row's "open" is a claim about bars that stopped
            arriving, and the price beside it is live regardless (#108). #}
         <td class="small">
-          {% if r.get('status') != 'OPEN' %}<span class="muted">—</span>
+          {# Graded whenever anything on this row is still being walked — the
+             held-to-stop arm outlives the row's own TP1, and while it runs the
+             page prints a mark beside it. #}
+          {% if r.get('status') != 'OPEN' and r.get('hold_status') != 'HOLD_OPEN' %}<span class="muted">—</span>
           {% elif r.get('freshness') == 'unverified' %}<span class="badge st-partial" title="{% if r.get('unverified_reason') %}the engine advanced this row, but on bars it could not date — the outcome is real, nothing can say whether the candles behind it are current{% else %}written before the engine stamped when it last advanced this row — an unknown, not a pass; the engine restamps it on its next resolve cycle{% endif %}">unverified</span>
             {% if r.get('unverified_reason') %}<span class="mono small muted" title="why the window could not be dated">{{ r.get('unverified_reason') }}</span>{% endif %}
           {% else %}
@@ -351,6 +526,28 @@
         <td class="{% if r.get('mae_pct') %}neg{% endif %}"
             title="how far this trade went AGAINST us before it resolved — the number every stop-distance question turns on">
           {% if r.get('mae_pct') is not none %}{{ "%.2f"|format(r.get('mae_pct')) }}%{% else %}<span class="muted">—</span>{% endif %}</td>
+        {# The held-to-stop arm. A different mechanism from the row beside it, so
+           it lives in its own columns and is never merged into the PnL one. #}
+        <td class="{% if r.get('hold_status') in ('HOLD_SL', 'HOLD_EXPIRED') and r.get('hold_mfe_pct') %}pos{% endif %}">
+          {% if r.get('hold_status') in ('HOLD_SL', 'HOLD_EXPIRED') and r.get('hold_mfe_pct') is not none %}
+            <strong>{{ "%.2f"|format(r.get('hold_mfe_pct')) }}%</strong>
+            {% if r.get('hold_mae_pre_peak_pct') %}<span class="muted small neg" title="how far it went against us on the way to that peak — the number a tighter stop would have had to survive">−{{ "%.2f"|format(r.get('hold_mae_pre_peak_pct')) }}%</span>{% endif %}
+            {% if r.get('hold_ambiguous_bar') %}<span class="badge sev-high" title="the peak and the stop landed inside one bar, and OHLC cannot order them — the stop is assumed to have gone first, so this figure excludes that bar's favourable wick">same bar</span>{% endif %}
+          {% elif r.get('hold_status') == 'HOLD_OPEN' %}<span class="badge st-partial" title="the arm exits only at the original stop or the six-hour horizon, so it normally decides later than this row's own TP1 — this is a wait, not a fault">running</span>
+          {% elif r.get('hold_status') == 'HOLD_INSUFFICIENT' %}<span class="badge st-partial" title="terminal and deliberately unscored: {{ r.get('hold_insufficient_reason') or 'the candles never arrived' }} — no verdict was earned, so none was invented">unmeasured</span>
+          {% else %}<span class="muted" title="this row was written before the held-to-stop arm existed — an unknown, not a zero">—</span>{% endif %}</td>
+        <td class="{% if r.get('hold_result_pct') is not none and r.get('hold_result_pct') > 0 %}pos{% elif r.get('hold_result_pct') is not none and r.get('hold_result_pct') < 0 %}neg{% endif %}">
+          {% if r.get('hold_result_pct') is not none %}{{ "%+.2f"|format(r.get('hold_result_pct')) }}%
+            {% if r.get('hold_status') == 'HOLD_EXPIRED' %}<span class="muted small" title="the stop was never touched — forced closed at the six-hour horizon, at the last bar's close">horizon</span>{% endif %}
+          {% elif r.get('hold_mark_pct') is not none %}<span class="muted">{{ "%+.2f"|format(r.get('hold_mark_pct')) }}%</span>
+            <span class="muted small" title="the arm is still running — this is a mark on its last walked bar, not a result">mark</span>
+          {% else %}<span class="muted">—</span>{% endif %}</td>
+        <td class="{% if r.get('strategy_pct') is not none and r.get('strategy_pct') > 0 %}pos{% elif r.get('strategy_pct') is not none and r.get('strategy_pct') < 0 %}neg{% endif %}">
+          {% if r.get('strategy_pct') is not none %}{{ "%+.2f"|format(r.get('strategy_pct')) }}%
+            {% if r.get('strategy_labels') %}<span class="muted small" title="which legs filled">{{ r.get('strategy_labels') }}</span>{% endif %}
+          {% elif r.get('strategy_skipped') == 'level_not_stamped' %}<span class="muted small" title="this method prices a leg at a TP level the engine never stamped on this row. The row is excluded rather than having that fraction fall through to the stop, which would book a loss the method may never have taken.">no level</span>
+          {% elif r.get('strategy_skipped') %}<span class="muted small" title="{{ r.get('strategy_skipped') }} — this row's held-to-stop arm has no verdict, so no exit method can be priced on it">—</span>
+          {% else %}<span class="muted">—</span>{% endif %}</td>
         <td class="small">
           {% set arm = r.get('sar_best') %}
           {% if arm %}

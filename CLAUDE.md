@@ -265,6 +265,44 @@ Two rules the page learned the day after it shipped:
   minutes of unexamined bars were reported as the setup doing nothing, and a
   touch inside them would have been booked as a zero. Different faults, different
   fixes: "blank needs a cause before it gets a caption", applied to a status.
+- **A truncated measurement is not a smaller version of the whole one** (2026-08-03,
+  engine #869). The owner asked this page for *"max PnL before hitting SL"* and *"same
+  exit strategies like Held to stop"*, and neither was answerable — not for want of a
+  column, but because the engine's dark walk **stops at the first TP1-or-SL touch**. So
+  `mfe_pct` on a row that closed at TP1 is bounded by the TP1 distance *by
+  construction*: it says how far the trade ran before its own exit and is structurally
+  silent on how far it was going to run. Rendering it under the words "max profit" would
+  have been a number that is always about right and never means what it says. Everything
+  after that touch was never walked, which is the same reason no held-to-stop or
+  laddered exit could be priced. The engine now walks a **second arm** with TP1 removed
+  (`dark_emission._walk_hold`) and ops prices the Profit tab's catalog off its stamps
+  (`app/data_sources/dark_exit_sim.py`). The two peaks render in separate columns and
+  the page says why — pooling a truncated series with a complete one and averaging is
+  how a page reports the market when it is describing its own walk.
+- **A second arm needs its own sweep, or it freezes when the first one finishes.** The
+  held arm exits at the stop, which is normally *later* than the row's own TP1 — so a
+  resolve loop keyed on `status == OPEN` stops advancing exactly the arm built to
+  outlive that exit. Engine-side the population is now "owed a verdict on **either**
+  arm", the freshness stamps grade whichever arm is still walking, and a row is done
+  only when both are. This is #835's shape (a measurement riding another object's
+  lifetime), avoided rather than paid for again — the tell was that "the row is closed"
+  and "there is nothing left to measure" had quietly become the same sentence.
+- **The strategy catalog is one catalog.** `dark_exit_sim.build_catalog` mirrors
+  `exit_sim.build_catalog`'s keys, labels and order, and a test asserts it — a reader
+  moving between `/profit` and `/signals/dark-live` must not have to check which "TP1
+  full" is which. Where the two genuinely differ, the *page* says so rather than the
+  numbers diverging silently: the BE arm is the Profit tab's approximation, ported
+  deliberately, with its optimistic direction named on screen.
+- **Charge the fee to the baseline too.** Every exit method is compared against the
+  row's own SL/TP1 outcome; charging the round trip to the methods and not to the
+  baseline manufactures an edge out of the fee. A test asserts that two identical exits
+  show zero edge.
+- **Refuse a leg you cannot price, and refuse the whole row with it.** A ladder leg at a
+  TP level the engine never stamped cannot fall through to the stop — that books a loss
+  the method may never have taken, and the shortfall then reads as the method performing
+  badly rather than as missing data. `level_not_stamped` is its own skip reason, on
+  screen, counted apart from "the arm is still running" and "written before the arm
+  shipped", because the reader's next move differs for each.
 - **…and a mark is only honest beside a row that can say whether it is still true.**
   This is #108 one page over, and it was avoided rather than paid for a third time:
   freshness is graded on the **engine's** stamps (`last_resolved_at`, `bars_behind`,
@@ -535,6 +573,7 @@ own `UNPLACED` bucket rather than being folded into a real regime.
 | Live-arm freshness test fixture — real engine output, regenerate with 360-v2 `scripts/gen_ops_sar_live_fixture.py` | `tests/fixtures_sar_live_freshness.json` |
 | "Held to stop" free-run replay (Profit tab) | `app/data_sources/free_run.py` |
 | Scaled-exit what-if simulator (Profit tab) | `app/data_sources/exit_sim.py` |
+| Exit-method what-ifs on the dark feed — reads the engine's held-to-stop arm, prices `exit_sim`'s catalog | `app/data_sources/dark_exit_sim.py` |
 
 ## Conventions
 

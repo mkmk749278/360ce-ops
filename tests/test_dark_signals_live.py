@@ -826,3 +826,177 @@ class TestTheMoneyLeadsNotR:
 
         assert agg["avg_r"] is None
         assert agg["avg_pnl_pct"] == pytest.approx(-2.5)
+
+
+# --------------------------------------------------------------------------- #
+# Max profit and the exit methods (owner, 2026-08-03; engine #869)
+#
+# The distinction these guard: the row's own `mfe_pct` stops at its first
+# TP1-or-SL touch, so on a TP1 row it is bounded by the TP1 distance BY
+# CONSTRUCTION. It can never answer "how much was on the table". The held-to-stop
+# arm walks the same bars with TP1 removed and is the only figure that can.
+# --------------------------------------------------------------------------- #
+
+
+def _held_row(**extra):
+    row = _row(status="CLOSED_TP1")
+    row.update({
+        "pnl_pct": 6.0, "r_multiple": 2.0, "mfe_pct": 6.0, "tp2": 112.0,
+        "tp3": 124.0, "hold_status": "HOLD_SL", "hold_result_pct": -3.0,
+        "hold_mfe_pct": 15.0, "hold_mfe_incl_pct": 15.0,
+        "hold_mae_pre_peak_pct": 2.0, "hold_hit_tp": 2, "hold_bars": 40,
+        "hold_peak_bars": 12,
+    })
+    row.update(extra)
+    return row
+
+
+def test_the_page_shows_max_pnl_before_the_stop():
+    client = _client(payload=_payload([_held_row()]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert r.status_code == 200
+    assert "Max PnL before hitting SL" in r.text
+    assert "15.00%" in r.text          # the arm's peak, not the row's 6% MFE
+
+
+def test_the_page_says_the_two_peaks_are_different_measurements():
+    """Copy is part of the measurement. Beside a 6% MFE column, an unexplained
+    15% peak reads as a contradiction rather than as a different mechanism."""
+    client = _client(payload=_payload([_held_row()]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert "not the MFE column" in r.text
+    assert "bounded by the TP1 distance" in r.text
+
+
+def test_the_exit_methods_panel_offers_the_profit_tabs_catalog():
+    client = _client(payload=_payload([_held_row()]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    for label in ("Held to stop", "TP1 full", "50% TP1", "TP1/TP2/TP3 thirds"):
+        assert label in r.text
+
+
+def test_selecting_a_method_prices_it_onto_every_row():
+    client = _client(payload=_payload([_held_row()]))
+    try:
+        r = client.get("/signals/dark-live?strategy=tp1")
+    finally:
+        client.__exit__(None, None, None)
+    assert r.status_code == 200
+    # TP1 reached before the stop → +6% gross, less the default 0.07% fee.
+    assert "+5.93%" in r.text
+
+
+def test_a_row_whose_arm_is_still_running_says_so_instead_of_showing_a_zero():
+    client = _client(payload=_payload([
+        _held_row(hold_status="HOLD_OPEN", hold_result_pct=None, hold_mark_pct=2.0),
+    ]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert r.status_code == 200
+    assert "still running" in r.text or "running" in r.text
+    assert "not a fault" in r.text
+
+
+def test_the_panel_says_how_many_methods_it_drew():
+    """"Best of N" is not a fact about the winner until N is on screen."""
+    client = _client(payload=_payload([_held_row()]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert "methods are drawn above" in r.text
+
+
+def test_the_panel_charges_a_fee_and_names_it():
+    client = _client(payload=_payload([_held_row()]))
+    try:
+        r = client.get("/signals/dark-live?fee_pct=0.07")
+    finally:
+        client.__exit__(None, None, None)
+    assert "net of a <strong>0.07%</strong> round trip" in r.text
+
+
+def test_the_panel_is_measured_on_rows_where_both_verdicts_exist():
+    """A row that resolved while its arm runs describes one mechanism and not
+    the other — the same rule the SAR panel on this page already carries."""
+    client = _client(payload=_payload([
+        _held_row(),
+        _held_row(hold_status="HOLD_OPEN", hold_result_pct=None),
+    ]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert "where <em>both</em> the row" in r.text
+
+
+def test_the_export_carries_the_hold_arm_and_the_selected_method():
+    client = _client(payload=_payload([_held_row()]))
+    try:
+        r = client.get("/signals/dark-live/export.csv?strategy=tp1")
+    finally:
+        client.__exit__(None, None, None)
+    assert r.status_code == 200
+    header = r.text.splitlines()[0]
+    for col in ("hold_status", "hold_mfe_pct", "hold_mfe_incl_pct",
+                "hold_mae_pre_peak_pct", "hold_hit_tp", "tp2", "tp3",
+                "strategy_pct", "strategy_gross_pct", "strategy_skipped"):
+        assert col in header
+
+
+def test_a_ledger_with_no_hold_arm_at_all_still_renders():
+    """Rows written before the arm shipped are their own bucket, not a crash and
+    not a zero."""
+    row = _row(status="CLOSED_TP1")
+    row["pnl_pct"] = 6.0
+    client = _client(payload=_payload([row]))
+    try:
+        r = client.get("/signals/dark-live")
+    finally:
+        client.__exit__(None, None, None)
+    assert r.status_code == 200
+    assert "written before the arm shipped" in r.text
+
+
+def test_the_hold_columns_never_overwrite_the_rows_own_pnl():
+    """A what-if written into a recorded outcome is indistinguishable from the
+    outcome. The strategy result lives in keys of its own."""
+    from app.routes.dark_signals_live import attach_strategy
+
+    rows = [_held_row()]
+    attach_strategy(rows, "tp1", 1.0, 0.07)
+    assert rows[0]["pnl_pct"] == 6.0                      # untouched
+    assert rows[0]["strategy_pct"] == pytest.approx(5.93)
+
+
+def test_a_running_hold_arm_on_a_closed_row_is_still_graded_for_freshness():
+    """The arm outlives the row's TP1, and while it runs the page prints a mark
+    beside it. A mark with no currency verdict is #108 — "the row is closed"
+    stopped meaning "nothing here is still being measured"."""
+    from app.routes.dark_signals_live import mark_freshness
+
+    row = _held_row(hold_status="HOLD_OPEN", hold_result_pct=None,
+                    hold_mark_pct=2.0, last_resolved_at=1_700_000_000.0,
+                    resolve_misses=0)
+    mark_freshness([row], now=1_700_000_060.0)
+    assert row["freshness"] == "current"
+    assert row["resolve_age_sec"] == pytest.approx(60.0)
+
+
+def test_a_row_done_on_both_arms_is_not_graded():
+    from app.routes.dark_signals_live import mark_freshness
+
+    row = _held_row(last_resolved_at=1.0)
+    mark_freshness([row], now=1_700_000_060.0)
+    assert "freshness" not in row
