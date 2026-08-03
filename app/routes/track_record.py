@@ -14,28 +14,38 @@ the owner's explicit call, and it is what separates this page from
 ``free_run`` / ``dark_signals`` / ``exit_backtest``, which are counterfactuals
 and are labelled as such. Do not add a reconstructed number to this page.
 
-Four rules it inherits from the pages that got them wrong first:
+Rules it carries:
 
-* **R is the headline, not portfolio %.** A "+34% last month" needs an invented
-  position size, and the router's ``MAX_SAME_DIRECTION_GLOBAL=3`` cap means two
-  users on identical settings get different fills — so a portfolio return is not
-  a fact about anyone. ``R = pnl_pct / sl_distance_pct_at_entry`` is, and it is
-  the same denominator the SAR arm and the edge matrix use.
-* **Divide by the risk taken, not the stop on the record.** The engine moves a
-  signal's stop in place — BE shift, TP1 park, trail — so ``stop_loss`` is the
-  stop as of the *exit*. This page divided by it until 2026-08-01, which scored
-  a BE-shifted −0.1% stop-out as a full −1.00R loss; 9 of 28 SL_HITs in that
-  window were that row and it flipped the sign of the headline. Engine
-  ``sl_distance_pct_at_entry`` is the risk the trade was sized for.
-* **Refuse, don't clamp.** A record without a usable entry risk has no R. It is
-  counted in the trade count and excluded from the R average, and the page says
-  how many were excluded **and why** — never scored 0R, which would drag every
-  average toward zero and read as mediocrity rather than as missing data.
+* **PnL % leads and nothing here divides by a stop** (owner, 2026-08-03). This
+  page led with R until that date, and R described 6% of it: **421 of 448**
+  trades in the owner's 30d window carry no ``sl_distance_pct_at_entry``, so
+  ``-5.17R total / -0.192R avg / 26% win`` were computed on 27 rows while the
+  ``avg_pnl_pct`` beside them covered all 448, and the page never said the two
+  described different populations. R also equalises nothing here:
+  ``signal_dispatch`` sizes at a **fixed notional** (``raw_qty = notional /
+  entry_price``), so the stop distance is absent from the sizing and a 0.80%
+  loss and a 6.14% loss both read −1.00R at very different cost. A percentage
+  needs no denominator, so it cannot silently shrink its own population. The
+  Strategy Lab remains the R-keyed surface; this one is money.
+* **The position size is an INPUT, not an assumption.** The old copy refused a
+  portfolio figure because it "needs an assumed position size". That objection
+  is about an *assumed* size — here the owner types it, so the page states the
+  assumption on screen beside the number instead of hiding one. Every dollar
+  figure is ``amount × pnl_pct / 100``: fixed size, no compounding, every
+  delivered signal taken.
+* **Charge the fee, and say what it is.** The window above is −$3.21 gross at
+  $100/signal and −$34.57 once a 0.07% round trip is charged — the cost of
+  trading is ~10× the edge, so a gross-only figure answers the wrong question.
+  Gross stays visible beside net so the split is readable.
 * **Bucket by CLOSE time, not entry.** A day's PnL is the PnL realised that day.
   Bucketing by entry would credit Monday with a trade that closed on Thursday.
 * **Disclose concentration.** Overlapping entries into one move are not
   independent evidence — the rule ``/signals/sar`` needed twice. Same
   ``SAME_MOVE_PCT`` definition, mirrored from the engine.
+* **Refuse, don't clamp.** A row with no parseable ``pnl_pct`` is counted in the
+  trade count and excluded from every money figure, and a row with no entry
+  timestamp is named in the concurrency panel rather than assumed never to have
+  overlapped. Neither is scored zero.
 """
 from __future__ import annotations
 
@@ -59,6 +69,26 @@ GRANULARITIES = ("day", "week", "month")
 
 # Window presets. ``custom`` means the from/to dates govern.
 WINDOWS = ("1d", "7d", "30d", "90d", "all", "custom")
+
+# What the owner types when he asks "what if I traded every signal with this".
+# A notional, not a margin: it is what the engine's own sizing means by
+# ``notional`` in ``raw_qty = notional / entry_price``, so $PnL is exactly
+# ``amount * pnl_pct / 100`` with no leverage assumption invented.
+DEFAULT_AMOUNT_USDT = 100.0
+
+# Round-trip cost, both legs, as a percentage of notional. 0.07 = Binance USD-M
+# maker 0.02% on the entry + taker 0.05% on the exit — the owner's default
+# (2026-08-03). Editable, and 0 renders the gross book.
+DEFAULT_FEE_PCT = 0.07
+
+# A render bound, applied in the route AFTER every filter — never inside a
+# reducer. ``reduce_sar_signals`` truncated first and every filter then ran on
+# the newest 300 rows of a 2,000-row ledger (#97); the page says when it bit.
+PER_TRADE_LIMIT = 500
+
+# Sortable columns on the per-trade table, as an allow-list: an arbitrary key
+# from the query string is a way to sort on something the page never showed.
+SORT_KEYS = ("closed_at", "symbol", "setup", "pnl_pct", "net_usd")
 
 
 # ---------------------------------------------------------------------------
@@ -102,53 +132,73 @@ def _close_time(rec: dict) -> Optional[datetime]:
     )
 
 
-def record_r(rec: dict) -> Optional[float]:
-    """R for one closed signal, or None when the record cannot support one.
+def _open_time(rec: dict) -> Optional[datetime]:
+    """When the position was taken — the mirror of ``_close_time``.
 
-    ``R = pnl_pct / sl_distance_pct_at_entry``, the same denominator the SAR arm
-    and the edge matrix divide by, so a number here is comparable with one there.
-
-    **The denominator is the risk the trade was sized for, and ``stop_loss`` is
-    not it.** The engine mutates the signal's stop in place as the trade
-    progresses — BE shift, TP1 park, trail — so the ``stop_loss`` on the record
-    is the stop as of the *exit*. Dividing by it scored a BE-shifted −0.1%
-    stop-out as exactly −1.00R, indistinguishable from a trade that gave back
-    its whole designed risk. On the 2026-07-29→08-01 window that was 9 of 28
-    SL_HITs and it flipped the sign of the book: −0.088R against a true +0.160R
-    (2026-08-01). Engine ``sl_distance_pct_at_entry`` carries the real one.
-
-    Returns None rather than 0.0 when the geometry is missing. A missing
-    denominator is "we cannot score this", not "this scored flat", and the two
-    must stay distinguishable — scoring it 0R would pull every average toward
-    zero and make a data gap read as mediocre performance. Records closed before
-    the engine stamp exists carry no usable risk and are refused here; the page
-    surfaces them as their own bucket rather than silently shrinking the
-    population it averages.
+    Needed only by the concurrency sweep: two trades overlap when one opens
+    before the other closes, and without an entry stamp there is no honest way
+    to say whether they did. ``dispatch_timestamp`` is the fill;
+    ``create_timestamp`` is the signal being written, which is the same moment
+    in practice and the only one older rows are guaranteed to carry.
     """
+    return (
+        _parse_ts(rec.get("dispatch_timestamp"))
+        or _parse_ts(rec.get("create_timestamp"))
+    )
+
+
+def _f(value: Any) -> Optional[float]:
+    """Float or None — never 0.0 as a stand-in for "could not read this"."""
+    if value is None:
+        return None
     try:
-        sl_distance_pct = float(rec.get("sl_distance_pct_at_entry") or 0.0)
-        pnl = float(rec.get("pnl_pct") or 0.0)
+        return float(value)
     except (TypeError, ValueError):
         return None
-    if sl_distance_pct <= 0.0:
-        return None
-    return pnl / sl_distance_pct
 
 
-def unscored_reason(rec: dict) -> Optional[str]:
-    """Why this record has no R — or None when it has one.
+def net_pnl_pct(row: dict, fee_pct: float) -> Optional[float]:
+    """The recorded move minus the round-trip cost of taking it.
 
-    Two states that look identical on a page and have different fixes, so they
-    are never pooled into one sentence:
+    ``fee_pct`` is both legs together as a percentage of notional. It is charged
+    against the **entry** notional for both: charging the exit leg on
+    ``notional * (1 + pnl)`` is a second-order correction worth well under
+    0.0001% against a 0.07% fee, and pretending to that precision would imply a
+    fill model this page does not have.
+
+    None when the row carries no readable ``pnl_pct`` — a missing move is "we
+    cannot say", not a flat trade, and it stays out of every money figure.
+    """
+    gross = _f(row.get("pnl_pct"))
+    return None if gross is None else gross - fee_pct
+
+
+def money(pct: Optional[float], amount: float) -> Optional[float]:
+    """A percentage of the entered notional, in dollars.
+
+    The engine sizes at a fixed notional (``raw_qty = notional / entry_price``),
+    so a percentage move on a fixed size is exactly linear in the amount — which
+    is what makes this multiplication honest rather than a model.
+    """
+    return None if pct is None else amount * pct / 100.0
+
+
+def geometry_stamp_reason(rec: dict) -> Optional[str]:
+    """Whether the engine stamped this record's entry→SL distance, and why not.
+
+    **Nothing on this page divides by it.** R was removed on 2026-08-03 and PnL
+    needs no denominator, so this affects no figure the owner reads here. It is
+    kept because ``no_geometry`` is this repo's only detector for a live
+    producer-side fault, and dropping it silently would lose that signal:
 
     * ``awaiting_engine_stamp`` — closed before the engine carried
-      ``sl_distance_pct_at_entry`` (2026-08-01). The risk it was sized for is
-      genuinely unrecoverable: the stop on the record has already been moved.
-      This population only shrinks, and it shrinks on its own.
+      ``sl_distance_pct_at_entry`` (2026-08-01). Unrecoverable, and it shrinks
+      on its own.
     * ``no_geometry`` — stamped by the current engine and still unusable, i.e.
-      a signal whose evaluator never recorded an entry→SL distance. That is a
-      producer-side fault and does *not* age out; if this count is non-zero and
-      not falling, something upstream is failing to stamp.
+      an evaluator that recorded no entry→SL distance. That does *not* age out;
+      if this count is non-zero and not falling, something upstream is failing.
+
+    Pooling them would report a live fault that is not happening.
     """
     try:
         if float(rec.get("sl_distance_pct_at_entry") or 0.0) > 0.0:
@@ -210,8 +260,10 @@ def distinct_moves(rows: list[dict]) -> int:
 def reduce_records(records: Any) -> list[dict]:
     """Flatten ``signal_performance.json`` into display rows (pure).
 
-    Rows carry their own close timestamp and R so every downstream consumer
-    reads one definition of both rather than re-deriving them.
+    Rows carry their own open and close timestamps so every downstream consumer
+    reads one definition of both rather than re-deriving them. A row with no
+    usable close time keeps its place here — it is counted in the page's
+    "undateable" figure rather than silently dropped — and lands in no bucket.
     """
     out: list[dict] = []
     rows = records if isinstance(records, list) else []
@@ -219,28 +271,7 @@ def reduce_records(records: Any) -> list[dict]:
         if not isinstance(rec, dict):
             continue
         closed = _close_time(rec)
-        if closed is None:
-            # No usable time means it cannot land in any bucket. Counted in the
-            # page's "undateable" figure rather than silently dropped.
-            out.append({
-                "signal_id": str(rec.get("signal_id", "")),
-                "symbol": str(rec.get("symbol", "")),
-                "direction": str(rec.get("direction", "")).upper(),
-                "setup": str(rec.get("setup_class") or "UNKNOWN"),
-                "regime": _regime(rec),
-                "entry": rec.get("entry"),
-                "stop_loss": rec.get("stop_loss"),
-                "pnl_pct": rec.get("pnl_pct"),
-                "r_multiple": record_r(rec),
-                "unscored_reason": unscored_reason(rec),
-                "outcome": str(rec.get("outcome_label") or ""),
-                "hit_sl": bool(rec.get("hit_sl")),
-                "hit_tp": int(rec.get("hit_tp") or 0),
-                "closed_at": None,
-                "closed_at_ts": None,
-                "closed_iso": "",
-            })
-            continue
+        opened = _open_time(rec)
         out.append({
             "signal_id": str(rec.get("signal_id", "")),
             "symbol": str(rec.get("symbol", "")),
@@ -250,14 +281,15 @@ def reduce_records(records: Any) -> list[dict]:
             "entry": rec.get("entry"),
             "stop_loss": rec.get("stop_loss"),
             "pnl_pct": rec.get("pnl_pct"),
-            "r_multiple": record_r(rec),
-            "unscored_reason": unscored_reason(rec),
+            "geometry_stamp_reason": geometry_stamp_reason(rec),
             "outcome": str(rec.get("outcome_label") or ""),
             "hit_sl": bool(rec.get("hit_sl")),
             "hit_tp": int(rec.get("hit_tp") or 0),
+            "opened_at": opened,
+            "opened_at_ts": opened.timestamp() if opened else None,
             "closed_at": closed,
-            "closed_at_ts": closed.timestamp(),
-            "closed_iso": closed.isoformat(),
+            "closed_at_ts": closed.timestamp() if closed else None,
+            "closed_iso": closed.isoformat() if closed else "",
         })
     out.sort(key=lambda r: r.get("closed_at_ts") or 0.0, reverse=True)
     return out
@@ -331,53 +363,133 @@ def filter_rows(
     return out
 
 
-def summarize(rows: list[dict]) -> dict:
-    """Headline over whatever the filters selected.
+def peak_concurrency(rows: list[dict]) -> dict:
+    """How many of these trades were open at once, at the worst moment.
+
+    A sweep line over (open, +1) and (close, −1) events. This is what answers
+    the owner's "can he maintain it in the account": at a fixed notional the
+    balance a book demands is ``peak * amount``, because that is the most it
+    ever had committed at one time.
+
+    Closes are processed before opens at an identical timestamp — a position
+    that closed on the same second another opened did not need funding twice.
+
+    A row that cannot supply a window is **counted and named** rather than
+    assumed simultaneous (which would inflate the requirement) or assumed
+    sequential (which would understate it) — and the two causes are counted
+    apart, because their fixes differ:
+
+    * ``undated`` — no entry or no close stamp. Older records simply predate the
+      field; nothing is wrong upstream.
+    * ``bad_window`` — both stamps present and the close is *before* the open.
+      That is a producer fault, and pooling it into ``undated`` would report
+      missing data where the data is present and wrong.
+    """
+    events: list[tuple[float, int]] = []
+    undated = 0
+    bad_window = 0
+    for row in rows:
+        start = row.get("opened_at_ts")
+        end = row.get("closed_at_ts")
+        if start is None or end is None:
+            undated += 1
+            continue
+        if end < start:
+            bad_window += 1
+            continue
+        events.append((float(start), 1))
+        events.append((float(end), -1))
+    # -1 sorts before +1 at an equal timestamp.
+    events.sort(key=lambda e: (e[0], e[1]))
+    live = 0
+    peak = 0
+    peak_ts: Optional[float] = None
+    for when, delta in events:
+        live += delta
+        if live > peak:
+            peak = live
+            peak_ts = when
+    return {
+        "peak": peak,
+        "peak_at": datetime.fromtimestamp(peak_ts, tz=timezone.utc) if peak_ts else None,
+        "measured": len(rows) - undated - bad_window,
+        "undated": undated,
+        "bad_window": bad_window,
+    }
+
+
+def summarize(
+    rows: list[dict],
+    *,
+    amount: float = DEFAULT_AMOUNT_USDT,
+    fee_pct: float = DEFAULT_FEE_PCT,
+) -> dict:
+    """Headline over whatever the filters selected, in money.
 
     Two denominators, kept apart on purpose:
 
     * ``n`` — every selected trade.
-    * ``scored`` — those with a usable R. The R figures divide by THIS, and the
-      gap between the two is shown rather than absorbed.
+    * ``n_pnl`` — those carrying a readable ``pnl_pct``. Every figure below
+      divides by THIS, and the page says so when the two differ.
+
+    They are normally identical, which is the whole point of the 2026-08-03
+    change: R divided by a stamp 421 of 448 rows did not carry, so it described
+    6% of the book while looking like the book. A percentage needs no
+    denominator, so it cannot shrink its own population that way.
+
+    The geometry-stamp counts ride along for the engine-health line. They gate
+    nothing here.
     """
-    scored = [r for r in rows if r["r_multiple"] is not None]
-    awaiting = sum(1 for r in rows if r.get("unscored_reason") == "awaiting_engine_stamp")
-    no_geometry = sum(1 for r in rows if r.get("unscored_reason") == "no_geometry")
-    r_values = [float(r["r_multiple"]) for r in scored]
-    wins = sum(1 for v in r_values if v > 0)
-    pnls = []
-    for r in rows:
-        try:
-            pnls.append(float(r["pnl_pct"] or 0.0))
-        except (TypeError, ValueError):
-            pass
+    awaiting = sum(1 for r in rows if r.get("geometry_stamp_reason") == "awaiting_engine_stamp")
+    no_geometry = sum(1 for r in rows if r.get("geometry_stamp_reason") == "no_geometry")
+
+    gross = [p for p in (_f(r.get("pnl_pct")) for r in rows) if p is not None]
+    net = [p - fee_pct for p in gross]
+    # The win rate counts on the MONEY — net of the cost of taking the trade,
+    # because a trade that made less than its fee did not make money.
+    wins = sum(1 for p in net if p > 0)
     moves = distinct_moves(rows)
     return {
         "n": len(rows),
         "moves": moves,
         "rows_per_move": (len(rows) / moves) if moves else None,
-        "scored": len(scored),
-        "unscored": len(rows) - len(scored),
-        # Named apart because the fixes differ: one ages out on its own, the
-        # other is a producer-side fault that does not.
-        "unscored_awaiting_stamp": awaiting,
-        "unscored_no_geometry": no_geometry,
+        "n_pnl": len(gross),
+        "no_pnl": len(rows) - len(gross),
         "wins": wins,
-        "losses": len(r_values) - wins,
-        "win_rate": (wins / len(r_values)) if r_values else None,
-        "total_r": sum(r_values) if r_values else None,
-        "avg_r": (sum(r_values) / len(r_values)) if r_values else None,
-        "best_r": max(r_values) if r_values else None,
-        "worst_r": min(r_values) if r_values else None,
-        "avg_pnl_pct": (sum(pnls) / len(pnls)) if pnls else None,
+        "losses": len(net) - wins,
+        "win_rate": (wins / len(net)) if net else None,
+        # The money, at the entered size. Primary — it is what the owner reads.
+        "gross_usd": money(sum(gross), amount) if gross else None,
+        "fee_usd": (amount * fee_pct / 100.0 * len(gross)) if gross else None,
+        "net_usd": money(sum(net), amount) if net else None,
+        # The same book as percentages, size-independent.
+        "total_pnl_pct": sum(gross) if gross else None,
+        "avg_pnl_pct": (sum(gross) / len(gross)) if gross else None,
+        "total_net_pct": sum(net) if net else None,
+        "avg_net_pct": (sum(net) / len(net)) if net else None,
+        "best_pnl_pct": max(gross) if gross else None,
+        "worst_pnl_pct": min(gross) if gross else None,
+        # Engine-data health only. Named apart because the fixes differ: one
+        # ages out on its own, the other is a producer-side fault that does not.
+        "geometry_awaiting_stamp": awaiting,
+        "geometry_no_geometry": no_geometry,
     }
 
 
-def bucket_rows(rows: list[dict], granularity: str) -> list[dict]:
+def bucket_rows(
+    rows: list[dict],
+    granularity: str,
+    *,
+    amount: float = DEFAULT_AMOUNT_USDT,
+    fee_pct: float = DEFAULT_FEE_PCT,
+) -> list[dict]:
     """Group into day / week / month buckets, newest first.
 
     Each bucket carries the same summary shape as the headline, so a bucket and
     the total are never computed two different ways.
+
+    ``cum_net_usd`` is accumulated oldest-first and then the list is reversed,
+    so the newest row carries the whole book's total rather than one day's.
     """
     if granularity not in GRANULARITIES:
         granularity = "day"
@@ -388,11 +500,62 @@ def bucket_rows(rows: list[dict], granularity: str) -> list[dict]:
             continue
         grouped[_bucket_key(when, granularity)].append(row)
     out = []
-    for key in sorted(grouped, reverse=True):
-        bucket = summarize(grouped[key])
+    running = 0.0
+    for key in sorted(grouped):
+        bucket = summarize(grouped[key], amount=amount, fee_pct=fee_pct)
         bucket["bucket"] = key
+        if bucket["net_usd"] is not None:
+            running += bucket["net_usd"]
+            bucket["cum_net_usd"] = running
+        else:
+            # No readable move in the bucket: the curve did not move, and it is
+            # not a gap in the curve either. Carry the level forward.
+            bucket["cum_net_usd"] = running if out else None
         out.append(bucket)
+    out.reverse()
     return out
+
+
+def decorate_money(rows: list[dict], *, amount: float, fee_pct: float) -> list[dict]:
+    """Stamp each row with its own money, so the table and the headline agree.
+
+    Mutates in place and returns the same list — these rows are built fresh by
+    ``reduce_records`` on every request, so there is no shared state to corrupt.
+    """
+    for row in rows:
+        net = net_pnl_pct(row, fee_pct)
+        row["net_pct"] = net
+        row["gross_usd"] = money(_f(row.get("pnl_pct")), amount)
+        row["fee_usd"] = None if net is None else amount * fee_pct / 100.0
+        row["net_usd"] = money(net, amount)
+    return rows
+
+
+def sort_rows(rows: list[dict], sort: str, order: str) -> list[dict]:
+    """Order the per-trade table. Unknown keys fall back to newest-closed-first.
+
+    Rows whose sort value is missing sort last in either direction — a blank is
+    not a low number, and floating it to the top of an ascending sort would make
+    "worst trades" mean "trades we could not read".
+    """
+    if sort not in SORT_KEYS:
+        sort, order = "closed_at", "desc"
+    reverse = order != "asc"
+    numeric = sort in ("pnl_pct", "net_usd", "closed_at")
+
+    def key(row: dict) -> tuple[int, Any]:
+        if sort == "closed_at":
+            value = row.get("closed_at_ts")
+        elif numeric:
+            value = _f(row.get(sort))
+        else:
+            value = str(row.get(sort) or "")
+        if value is None or value == "":
+            # 1 sorts after 0 ascending; negated under reverse so it stays last.
+            return (-1 if reverse else 1, 0 if numeric else "")
+        return (0, value)
+
+    return sorted(rows, key=key, reverse=reverse)
 
 
 # ---------------------------------------------------------------------------
@@ -400,9 +563,46 @@ def bucket_rows(rows: list[dict], granularity: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _EXPORT_COLS = [
-    "bucket", "n", "moves", "scored", "unscored", "wins", "losses",
-    "win_rate", "total_r", "avg_r", "best_r", "worst_r", "avg_pnl_pct",
+    "bucket", "n", "moves", "n_pnl", "wins", "losses", "win_rate",
+    "total_pnl_pct", "avg_pnl_pct", "best_pnl_pct", "worst_pnl_pct",
+    "total_net_pct", "gross_usd", "fee_usd", "net_usd", "cum_net_usd",
 ]
+
+_TRADE_COLS = [
+    "closed_iso", "symbol", "direction", "setup", "regime", "outcome",
+    "entry", "pnl_pct", "net_pct", "gross_usd", "fee_usd", "net_usd",
+]
+
+
+def _positive_float(raw: str, default: float) -> float:
+    """A user-entered number, or the default. Never raises, never negative.
+
+    A bad amount must not 500 and must not silently become zero either — zero is
+    a legitimate fee (the gross book) but a meaningless position size, so an
+    unreadable value falls back to the default and the field echoes what was
+    typed.
+    """
+    try:
+        value = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+    if value != value or value in (float("inf"), float("-inf")):  # NaN / inf
+        return default
+    return max(0.0, value)
+
+
+def _optional_float(raw: str) -> Optional[float]:
+    """A number the owner may not have entered at all.
+
+    Blank means "not asked", and so does a typo — falling back to 0.0 would
+    render the underfunded warning against a balance the owner never claimed to
+    have, which is a fault report about the reader rather than the book.
+    """
+    if not str(raw).strip():
+        return None
+    sentinel = -1.0
+    value = _positive_float(raw, sentinel)
+    return None if value == sentinel else value
 
 
 def _page_context(request: Request, **q) -> dict:
@@ -445,28 +645,60 @@ async def track_record(
     setup: str = Query(""),
     symbol: str = Query(""),
     direction: str = Query(""),
+    amount: str = Query(""),
+    fee_pct: str = Query(""),
+    balance: str = Query(""),
+    sort: str = Query(""),
+    order: str = Query(""),
 ):
-    """Delivered signals, bucketed — the record a new subscriber would read.
+    """Delivered signals, bucketed and priced — the record a subscriber reads.
 
     Deliberately NOT the Profit tab: nothing here is replayed or reconstructed.
-    Every number is what the engine recorded as the trade happened.
+    Every number is what the engine recorded as the trade happened, multiplied
+    by a position size the owner typed.
     """
     if window not in WINDOWS:
         window = "30d"
     if granularity not in GRANULARITIES:
         granularity = "day"
+    amount_usdt = _positive_float(amount, DEFAULT_AMOUNT_USDT)
+    fee = _positive_float(fee_pct, DEFAULT_FEE_PCT)
+    balance_usdt = _optional_float(balance)
     q = dict(
         window=window, date_from=date_from, date_to=date_to,
         regime=regime, setup=setup, symbol=symbol, direction=direction,
     )
     ctx = _page_context(request, **q)
     rows, all_rows, scoped = ctx["rows"], ctx["all_rows"], ctx["scoped"]
+    decorate_money(rows, amount=amount_usdt, fee_pct=fee)
+    summary = summarize(rows, amount=amount_usdt, fee_pct=fee)
+    concurrency = peak_concurrency(rows)
+    required_usdt = concurrency["peak"] * amount_usdt
+    # The row cap is a RENDER bound: applied here, after every filter, never
+    # inside a reducer (#97). The page says when it bit.
+    ordered = sort_rows(rows, sort, order)
 
     return request.app.state.templates.TemplateResponse("track_record.html", {
         "request": request,
         "active": "track_record",
-        "buckets": bucket_rows(rows, granularity),
-        "summary": summarize(rows),
+        "buckets": bucket_rows(rows, granularity, amount=amount_usdt, fee_pct=fee),
+        "summary": summary,
+        "trades": ordered[:PER_TRADE_LIMIT],
+        "trades_shown": min(len(ordered), PER_TRADE_LIMIT),
+        "trades_capped": len(ordered) > PER_TRADE_LIMIT,
+        "per_trade_limit": PER_TRADE_LIMIT,
+        "sort": sort if sort in SORT_KEYS else "closed_at",
+        "order": "asc" if order == "asc" else "desc",
+        "amount": amount_usdt,
+        "fee_pct": fee,
+        "balance": balance_usdt,
+        "concurrency": concurrency,
+        "required_usdt": required_usdt,
+        "return_on_balance": (
+            (summary["net_usd"] / balance_usdt * 100.0)
+            if balance_usdt and summary["net_usd"] is not None
+            else None
+        ),
         "granularity": granularity,
         "granularities": GRANULARITIES,
         "windows": WINDOWS,
@@ -506,16 +738,58 @@ async def track_record_export(
     setup: str = Query(""),
     symbol: str = Query(""),
     direction: str = Query(""),
+    amount: str = Query(""),
+    fee_pct: str = Query(""),
 ):
-    """The buckets as CSV, honouring the current filter."""
+    """The buckets as CSV, honouring the current filter, amount and fee."""
     if granularity not in GRANULARITIES:
         granularity = "day"
+    amount_usdt = _positive_float(amount, DEFAULT_AMOUNT_USDT)
+    fee = _positive_float(fee_pct, DEFAULT_FEE_PCT)
     q = dict(
         window=window if window in WINDOWS else "30d",
         date_from=date_from, date_to=date_to,
         regime=regime, setup=setup, symbol=symbol, direction=direction,
     )
     ctx = _page_context(request, **q)
-    buckets = bucket_rows(ctx["rows"], granularity)
+    buckets = bucket_rows(ctx["rows"], granularity, amount=amount_usdt, fee_pct=fee)
     data = [[b.get(col) for col in _EXPORT_COLS] for b in buckets]
     return csv_response(f"track_record_{granularity}", _EXPORT_COLS, data)
+
+
+@router.get("/track-record/trades.csv")
+async def track_record_trades_export(
+    request: Request,
+    window: str = Query("30d"),
+    date_from: str = Query(""),
+    date_to: str = Query(""),
+    regime: str = Query(""),
+    setup: str = Query(""),
+    symbol: str = Query(""),
+    direction: str = Query(""),
+    amount: str = Query(""),
+    fee_pct: str = Query(""),
+    sort: str = Query(""),
+    order: str = Query(""),
+):
+    """Every selected trade, one row each — the book behind the buckets.
+
+    Deliberately **not** capped at ``PER_TRADE_LIMIT``: that bound exists so a
+    browser does not render 2,000 rows, and a file the owner opens in a
+    spreadsheet has no such problem. A truncated export would be the #97 fault
+    wearing a download button.
+    """
+    amount_usdt = _positive_float(amount, DEFAULT_AMOUNT_USDT)
+    fee = _positive_float(fee_pct, DEFAULT_FEE_PCT)
+    q = dict(
+        window=window if window in WINDOWS else "30d",
+        date_from=date_from, date_to=date_to,
+        regime=regime, setup=setup, symbol=symbol, direction=direction,
+    )
+    ctx = _page_context(request, **q)
+    rows = decorate_money(ctx["rows"], amount=amount_usdt, fee_pct=fee)
+    data = [
+        [r.get(col) for col in _TRADE_COLS]
+        for r in sort_rows(rows, sort, order)
+    ]
+    return csv_response("track_record_trades", _TRADE_COLS, data)
