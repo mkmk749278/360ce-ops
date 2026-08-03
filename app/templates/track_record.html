@@ -66,12 +66,32 @@
       <option value="SHORT" {% if filter_direction == 'SHORT' %}selected{% endif %}>SHORT</option>
     </select>
   </label>
+  <label>Amount per signal (USDT)
+    <input type="text" inputmode="decimal" name="amount" value="{{ "%g"|format(amount) }}" size="7">
+  </label>
+  <label>Round-trip fee %
+    <input type="text" inputmode="decimal" name="fee_pct" value="{{ "%g"|format(fee_pct) }}" size="5">
+  </label>
+  <label>Account balance (USDT)
+    <input type="text" inputmode="decimal" name="balance" value="{% if balance is not none %}{{ "%g"|format(balance) }}{% endif %}" size="8" placeholder="optional">
+  </label>
   <button type="submit">Apply</button>
   <span class="muted">{{ summary.n }} trades &middot; {{ range_label }} &middot; {{ total_records }} in ledger</span>
 </form>
 
+<p class="muted small">
+  <strong>Amount</strong> is the position <em>notional</em>, the same thing the engine's own
+  sizing means by it (<code>raw_qty = notional / entry_price</code>), so no leverage is
+  assumed anywhere on this page. <strong>Fee</strong> is both legs together as a percentage
+  of that notional — the default <code>0.07</code> is Binance USD-M maker 0.02% in + taker
+  0.05% out. Set it to <code>0</code> to read the gross book.
+</p>
+
+{% set qs %}window={{ filter_window | urlencode }}&date_from={{ filter_from | urlencode }}&date_to={{ filter_to | urlencode }}&regime={{ filter_regime | urlencode }}&setup={{ filter_setup | urlencode }}&symbol={{ filter_symbol | urlencode }}&direction={{ filter_direction | urlencode }}&amount={{ "%g"|format(amount) | urlencode }}&fee_pct={{ "%g"|format(fee_pct) | urlencode }}{% if balance is not none %}&balance={{ "%g"|format(balance) | urlencode }}{% endif %}{% endset %}
+
 <div class="actions">
-  <a class="btn" href="/track-record/export.csv?window={{ filter_window | urlencode }}&date_from={{ filter_from | urlencode }}&date_to={{ filter_to | urlencode }}&granularity={{ granularity | urlencode }}&regime={{ filter_regime | urlencode }}&setup={{ filter_setup | urlencode }}&symbol={{ filter_symbol | urlencode }}&direction={{ filter_direction | urlencode }}">Download CSV (current filter)</a>
+  <a class="btn" href="/track-record/export.csv?{{ qs }}&granularity={{ granularity | urlencode }}">Download CSV (by {{ granularity }})</a>
+  <a class="btn" href="/track-record/trades.csv?{{ qs }}&sort={{ sort | urlencode }}&order={{ order | urlencode }}">Download per-trade CSV</a>
   <a class="btn" href="/performance">Rolling stats</a>
 </div>
 
@@ -80,46 +100,34 @@
   <h2>{{ range_label }}
     <span class="muted small">— {{ summary.n }} trades across {{ summary.moves }} distinct moves</span>
   </h2>
-  {% if summary.scored %}
+  {% if summary.n_pnl %}
   <div class="summary-row">
-    <span class="stat"><span class="n {% if summary.total_r > 0 %}pos{% elif summary.total_r < 0 %}neg{% endif %}">{{ "%+.2f"|format(summary.total_r) }}R</span> total</span>
-    <span class="stat"><span class="n {% if summary.avg_r > 0 %}pos{% elif summary.avg_r < 0 %}neg{% endif %}">{{ "%+.3f"|format(summary.avg_r) }}R</span> avg</span>
+    <span class="stat"><span class="n {% if summary.net_usd > 0 %}pos{% elif summary.net_usd < 0 %}neg{% endif %}">{{ "%+.2f"|format(summary.net_usd) }}</span> net USDT</span>
+    <span class="stat muted"><span class="n">{{ "%+.2f"|format(summary.gross_usd) }}</span> gross</span>
+    <span class="stat muted"><span class="n">&minus;{{ "%.2f"|format(summary.fee_usd) }}</span> fees</span>
+    <span class="stat"><span class="n {% if summary.total_net_pct > 0 %}pos{% elif summary.total_net_pct < 0 %}neg{% endif %}">{{ "%+.2f"|format(summary.total_net_pct) }}%</span> total</span>
+    <span class="stat"><span class="n">{{ "%+.3f"|format(summary.avg_net_pct) }}%</span> avg / trade</span>
     <span class="stat"><span class="n">{{ "%.0f"|format(summary.win_rate * 100) }}%</span> win ({{ summary.wins }}W / {{ summary.losses }}L)</span>
-    <span class="stat"><span class="n">{{ "%+.2f"|format(summary.best_r) }}R</span> best</span>
-    <span class="stat"><span class="n">{{ "%+.2f"|format(summary.worst_r) }}R</span> worst</span>
-    {% if summary.avg_pnl_pct is not none %}
-    <span class="stat"><span class="n">{{ "%+.2f"|format(summary.avg_pnl_pct) }}%</span> avg move</span>
-    {% endif %}
+    <span class="stat"><span class="n">{{ "%+.2f"|format(summary.best_pnl_pct) }}%</span> best</span>
+    <span class="stat"><span class="n">{{ "%+.2f"|format(summary.worst_pnl_pct) }}%</span> worst</span>
   </div>
 
   <p class="muted small">
-    <strong>R, not portfolio return.</strong> R is the realised move divided by the
-    signal's own stop distance — the same denominator the SAR arm and the edge
-    matrix use, so a number here is comparable with one there. A portfolio
-    percentage is deliberately absent: it needs an assumed position size, and the
-    router's 3-same-direction cap means two users on identical settings get
-    different fills, so it would not be a fact about anyone.
+    <strong>What this assumes, stated rather than hidden:</strong> every one of these
+    {{ summary.n_pnl }} delivered signals taken at <strong>{{ "%g"|format(amount) }} USDT
+    notional</strong>, the same fixed size each time (no compounding, so a dollar figure
+    scales exactly with the amount above), closed at the price the engine recorded, with
+    <strong>{{ "%g"|format(fee_pct) }}%</strong> charged per round trip. A real subscriber's
+    fill count can differ from the ledger's — per-user dispatch caps mean two users on
+    identical settings do not receive identical books. Win rate counts on the
+    <strong>net</strong> money: a trade that made less than its own fee did not make money.
   </p>
 
-  {% if summary.unscored %}
+  {% if summary.no_pnl %}
   <p class="warn small">
-    <strong>{{ summary.unscored }} of {{ summary.n }}</strong> trades carry no usable
-    entry risk, so they have no R and are excluded from every R figure above (which
-    divide by {{ summary.scored }}). They are <em>not</em> scored 0R — a missing
-    denominator is "cannot score", not "scored flat", and averaging them in would read as
-    mediocre performance rather than as missing data.
-    {% if summary.unscored_awaiting_stamp %}
-    <br><strong>{{ summary.unscored_awaiting_stamp }}</strong> of them closed before the
-    engine recorded <code>sl_distance_pct_at_entry</code> (2026-08-01). R divides by the
-    risk a trade was <em>sized for</em>, and the stop on those older records had already
-    been moved by the break-even shift or the trail — so there is nothing honest to
-    divide by and no backfill that would not be a guess. This count only shrinks.
-    {% endif %}
-    {% if summary.unscored_no_geometry %}
-    <br><strong>{{ summary.unscored_no_geometry }}</strong> were stamped by the current
-    engine and are still unusable — an evaluator that recorded no entry→SL distance.
-    That does <em>not</em> age out; if this number is not falling, the fault is upstream.
-    {% endif %}
+    <strong>{{ summary.no_pnl }} of {{ summary.n }}</strong> trades carry no readable
+    <code>pnl_pct</code>, so every figure above divides by {{ summary.n_pnl }}, not
+    {{ summary.n }}. They are <em>not</em> scored flat — a missing move is "cannot say".
   </p>
   {% endif %}
 
@@ -133,10 +141,59 @@
   </p>
   {% endif %}
   {% else %}
-  <p class="muted small">No trade in this selection carries a usable stop, so there is
-  no R to quote. The trade count is real; the geometry to score it is not there.</p>
+  <p class="muted small">No trade in this selection carries a readable move, so there is
+  nothing to price. The trade count is real; the outcome to value it is not there.</p>
   {% endif %}
 </section>
+
+{% if summary.n_pnl %}
+<section class="card">
+  <h2>Could you hold it?
+    <span class="muted small">— at {{ "%g"|format(amount) }} USDT per signal</span>
+  </h2>
+  <div class="summary-row">
+    <span class="stat"><span class="n">{{ concurrency.peak }}</span> open at once</span>
+    <span class="stat"><span class="n {% if balance is not none and required_usdt > balance %}neg{% endif %}">{{ "%.2f"|format(required_usdt) }}</span> USDT needed</span>
+    {% if balance is not none %}
+    <span class="stat"><span class="n">{{ "%.2f"|format(balance) }}</span> USDT entered</span>
+    {% endif %}
+    {% if return_on_balance is not none %}
+    <span class="stat"><span class="n {% if return_on_balance > 0 %}pos{% elif return_on_balance < 0 %}neg{% endif %}">{{ "%+.2f"|format(return_on_balance) }}%</span> on balance</span>
+    {% endif %}
+  </div>
+
+  {% if balance is not none and required_usdt > balance %}
+  <p class="warn small">
+    <strong>Underfunded.</strong> Taking every one of these signals needed
+    {{ "%.2f"|format(required_usdt) }} USDT at the busiest moment
+    {% if concurrency.peak_at %}({{ concurrency.peak_at.strftime('%Y-%m-%d %H:%M') }} UTC){% endif %}
+    and you entered {{ "%.2f"|format(balance) }}. The money figures above still assume
+    <em>every</em> signal was taken — they are not reduced to what this balance could
+    fund, because which ones you would have skipped is a choice this page cannot make
+    for you.
+  </p>
+  {% endif %}
+
+  <p class="muted small">
+    Peak concurrency is a sweep over each trade's entry and close: the most positions
+    this book ever had open simultaneously, which at a fixed notional is exactly what
+    the account had to carry
+    {% if concurrency.peak_at %}— reached {{ concurrency.peak_at.strftime('%Y-%m-%d %H:%M') }} UTC{% endif %}.
+    Measured on {{ concurrency.measured }} of {{ summary.n }} trades.
+    {% if concurrency.undated or concurrency.bad_window %}
+    A row with no window is excluded rather than assumed simultaneous (which would
+    overstate the requirement) or sequential (which would understate it):
+    {% if concurrency.undated %}<strong>{{ concurrency.undated }}</strong> carry no usable
+    entry or close timestamp, which older records simply predate.{% endif %}
+    {% if concurrency.bad_window %}<strong>{{ concurrency.bad_window }}</strong> carry both
+    stamps with the close recorded <em>before</em> the open — that is a producer fault, and
+    it is counted apart because the data is present and wrong rather than missing.{% endif %}
+    {% endif %}
+    Margin is not modelled — this is notional, so a leveraged account needs less cash
+    and carries a liquidation risk this page says nothing about.
+  </p>
+</section>
+{% endif %}
 
 <section class="card">
   <h2>By {{ granularity }}</h2>
@@ -146,22 +203,24 @@
       <tr>
         <th>{{ granularity | capitalize }}</th>
         <th>Trades</th><th>Moves</th><th>W / L</th><th>Win %</th>
-        <th>Total R</th><th>Avg R</th><th>Best</th><th>Worst</th><th>Avg move</th>
+        <th>Net USDT</th><th>Cumulative</th>
+        <th>Total %</th><th>Avg %</th><th>Best</th><th>Worst</th>
       </tr>
     </thead>
     <tbody>
       {% for b in buckets %}
       <tr>
         <td><code>{{ b.bucket }}</code></td>
-        <td>{{ b.n }}{% if b.unscored %} <span class="muted small">({{ b.unscored }} unscored)</span>{% endif %}</td>
+        <td>{{ b.n }}{% if b.no_pnl %} <span class="muted small">({{ b.no_pnl }} no move)</span>{% endif %}</td>
         <td>{{ b.moves }}</td>
-        <td>{% if b.scored %}{{ b.wins }} / {{ b.losses }}{% else %}—{% endif %}</td>
+        <td>{% if b.n_pnl %}{{ b.wins }} / {{ b.losses }}{% else %}—{% endif %}</td>
         <td>{% if b.win_rate is not none %}{{ "%.0f"|format(b.win_rate * 100) }}%{% else %}—{% endif %}</td>
-        <td class="{% if b.total_r and b.total_r > 0 %}pos{% elif b.total_r and b.total_r < 0 %}neg{% endif %}">{% if b.total_r is not none %}{{ "%+.2f"|format(b.total_r) }}{% else %}—{% endif %}</td>
-        <td class="{% if b.avg_r and b.avg_r > 0 %}pos{% elif b.avg_r and b.avg_r < 0 %}neg{% endif %}">{% if b.avg_r is not none %}{{ "%+.3f"|format(b.avg_r) }}{% else %}—{% endif %}</td>
-        <td>{% if b.best_r is not none %}{{ "%+.2f"|format(b.best_r) }}{% else %}—{% endif %}</td>
-        <td>{% if b.worst_r is not none %}{{ "%+.2f"|format(b.worst_r) }}{% else %}—{% endif %}</td>
-        <td>{% if b.avg_pnl_pct is not none %}{{ "%+.2f"|format(b.avg_pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if b.net_usd and b.net_usd > 0 %}pos{% elif b.net_usd and b.net_usd < 0 %}neg{% endif %}">{% if b.net_usd is not none %}{{ "%+.2f"|format(b.net_usd) }}{% else %}—{% endif %}</td>
+        <td class="{% if b.cum_net_usd and b.cum_net_usd > 0 %}pos{% elif b.cum_net_usd and b.cum_net_usd < 0 %}neg{% endif %}">{% if b.cum_net_usd is not none %}{{ "%+.2f"|format(b.cum_net_usd) }}{% else %}—{% endif %}</td>
+        <td class="{% if b.total_net_pct and b.total_net_pct > 0 %}pos{% elif b.total_net_pct and b.total_net_pct < 0 %}neg{% endif %}">{% if b.total_net_pct is not none %}{{ "%+.2f"|format(b.total_net_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if b.avg_net_pct is not none %}{{ "%+.3f"|format(b.avg_net_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if b.best_pnl_pct is not none %}{{ "%+.2f"|format(b.best_pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if b.worst_pnl_pct is not none %}{{ "%+.2f"|format(b.worst_pnl_pct) }}%{% else %}—{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -169,8 +228,61 @@
   </div>
   <p class="muted small">
     Buckets are keyed on the day each trade <strong>closed</strong>, not the day it
-    was entered — a day's PnL is the PnL realised that day. An em-dash means the
-    bucket has trades but none with a usable stop, never that it was flat.
+    was entered — a day's PnL is the PnL realised that day. <strong>Net USDT</strong>,
+    <strong>Total %</strong> and <strong>Avg %</strong> are net of the
+    {{ "%g"|format(fee_pct) }}% round trip; <strong>Best</strong> and
+    <strong>Worst</strong> are the gross moves, so the fee is never subtracted twice in
+    the reader's head. <strong>Cumulative</strong> runs oldest-first, so the top row
+    carries the whole selection. An em-dash means the bucket has trades but none with a
+    readable move, never that it was flat.
+  </p>
+</section>
+
+<section class="card">
+  <h2>Every trade
+    <span class="muted small">— {{ trades_shown }} shown{% if trades_capped %}, newest {{ per_trade_limit }} of {{ summary.n }}{% endif %}</span>
+  </h2>
+  {% if trades_capped %}
+  <p class="warn small">
+    This selection holds {{ summary.n }} trades and the table renders at most
+    {{ per_trade_limit }}. The cap is applied <em>after</em> every filter and after
+    sorting, so it never changes what the summary above measured — but the rows below
+    are a slice. The per-trade CSV is uncapped.
+  </p>
+  {% endif %}
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        {% for key, label in [('closed_at', 'Closed'), ('symbol', 'Symbol'), ('setup', 'Setup'), ('pnl_pct', 'Move %'), ('net_usd', 'Net USDT')] %}
+        <th><a href="/track-record?{{ qs }}&granularity={{ granularity | urlencode }}&sort={{ key }}&order={% if sort == key and order == 'desc' %}asc{% else %}desc{% endif %}">{{ label }}{% if sort == key %} {% if order == 'asc' %}&uarr;{% else %}&darr;{% endif %}{% endif %}</a></th>
+        {% endfor %}
+        <th>Side</th><th>Regime</th><th>Outcome</th><th>Net %</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in trades %}
+      <tr>
+        <td class="small">{% if t.closed_at %}{{ t.closed_at.strftime('%Y-%m-%d %H:%M') }}{% else %}<span class="muted">undated</span>{% endif %}</td>
+        <td><code>{{ t.symbol }}</code></td>
+        <td class="small">{{ t.setup }}</td>
+        <td class="{% if t.pnl_pct and t.pnl_pct > 0 %}pos{% elif t.pnl_pct and t.pnl_pct < 0 %}neg{% endif %}">{% if t.pnl_pct is not none %}{{ "%+.2f"|format(t.pnl_pct) }}%{% else %}—{% endif %}</td>
+        <td class="{% if t.net_usd and t.net_usd > 0 %}pos{% elif t.net_usd and t.net_usd < 0 %}neg{% endif %}">{% if t.net_usd is not none %}{{ "%+.2f"|format(t.net_usd) }}{% else %}—{% endif %}</td>
+        <td>{{ t.direction }}</td>
+        <td class="small">{{ t.regime }}</td>
+        <td class="small">{{ t.outcome }}</td>
+        <td>{% if t.net_pct is not none %}{{ "%+.2f"|format(t.net_pct) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">
+    One row per delivered signal, exactly as the engine recorded it — nothing here is
+    replayed. <strong>Move %</strong> is the recorded gross move; <strong>Net %</strong>
+    and <strong>Net USDT</strong> apply the {{ "%g"|format(fee_pct) }}% round trip at
+    {{ "%g"|format(amount) }} USDT notional. Overlapping entries into one move appear as
+    separate rows, because they are separate fills.
   </p>
 </section>
 {% else %}
@@ -189,6 +301,38 @@ view above rather than being assigned a guessed date.</p>
   closed-signal record on 2026-07-28. Records that closed before that deploy carry no
   regime and appear as <code>UNPLACED</code> — the regime at entry is knowable only at
   entry, so they are shown as their own bucket rather than folded into a real one.
+</p>
+
+<p class="muted small">
+  <strong>Engine-data health — affects no number on this page.</strong> Nothing here
+  divides by a stop, so a missing entry→SL distance costs this page nothing; it is
+  reported because it is the only place the fault is visible.
+  {% if summary.geometry_no_geometry %}
+  <strong>{{ summary.geometry_no_geometry }}</strong> of {{ summary.n }} selected trades
+  were stamped by the current engine and still carry no usable
+  <code>sl_distance_pct_at_entry</code> — an evaluator recording no entry→SL geometry.
+  That does <em>not</em> age out; if it is not falling, the fault is upstream.
+  {% else %}
+  No selected trade shows the <code>no_geometry</code> producer fault.
+  {% endif %}
+  {% if summary.geometry_awaiting_stamp %}
+  A further <strong>{{ summary.geometry_awaiting_stamp }}</strong> closed before the field
+  existed (2026-08-01); that population only shrinks. The two are counted apart because
+  pooling them would report a live fault that is not happening.
+  {% endif %}
+</p>
+
+<p class="muted small">
+  <strong>Why there is no R here.</strong> This page led with R until 2026-08-03, and R
+  described 6% of it: 421 of 448 trades in the owner's 30d window carried no entry-risk
+  stamp, so the R total, the R average and the win rate above them were all computed on
+  27 rows while the average move beside them covered all 448, and the page never said the
+  two described different populations. R also equalises nothing here — the engine sizes
+  every position at a fixed notional, so the stop distance appears nowhere in the sizing
+  and a 0.80% loss and a 6.14% loss both read as exactly one R of loss while costing
+  $4.00 and $30.70 of the same $500. A percentage
+  needs no denominator, so it cannot shrink its own population that way. The
+  <a href="/strategy-lab">Strategy Lab</a> and the edge matrix remain the R-keyed surfaces.
 </p>
 
 {% endblock %}

@@ -431,34 +431,55 @@ it is the number a subscription decision would rest on. There is a route test
 asserting the page still says "recorded, not reconstructed"; copy is part of the
 measurement.
 
-Three rules the page carries, all ports rather than inventions:
+Rules the page carries, all ports rather than inventions:
 
-- **R, not portfolio %.** A portfolio return needs an assumed position size, and the
-  engine's `MAX_SAME_DIRECTION_GLOBAL=3` means two users on identical settings get
-  different fills — so a percentage would not be a fact about anyone.
-  `R = pnl_pct / sl_distance_pct_at_entry` is the same denominator the SAR arm and
-  the edge matrix divide by, so a number here is comparable with one there.
-- **Divide by the risk taken, not the stop on the record (2026-08-01).** This page
-  divided by `stop_loss` for its first three days, and the engine *moves* a signal's
-  stop in place as the trade runs — BE shift, TP1 park, trail — so that field is the
-  stop as of the **exit**. A trade BE-shifted and then stopped out for −0.1% scored
-  exactly −1.00R, indistinguishable from one that gave back its whole designed risk:
-  9 of 28 SL_HITs in the owner's window, and the closed book read −0.088R against a
-  true +0.160R. **The sign of the headline was an artifact of the denominator.** Ask
-  of every ratio here whether its denominator is still the thing it was when the
-  numerator started. Engine `sl_distance_pct_at_entry` (#817's class, fixed the same
-  way) is the one to use.
-- **Refuse, don't clamp — and name the reason.** A record without a usable entry
-  risk has no R: counted in the trade count, excluded from every R figure, and the
-  shortfall stated on screen. Scoring it 0R would drag the averages toward zero and
-  make missing data read as mediocre performance. The shortfall is split on screen
-  into `awaiting_engine_stamp` (closed before the field existed — unrecoverable,
-  because the stop has already moved, and it shrinks on its own) and `no_geometry`
-  (stamped by today's engine and still unusable — a producer fault that does *not*
-  age out). Pooling them would report a live fault that is not happening, which is
-  this repo's own "blank needs a cause before it gets a caption" rule.
+- **Money leads and nothing here divides by a stop (2026-08-03).** This page led with
+  R for its first six days, and **R described 6% of it**: 421 of 448 trades in the
+  owner's 30d window carried no `sl_distance_pct_at_entry`, so `−5.17R total /
+  −0.192R avg / 26% win (7W/20L)` were computed on 27 rows while the `avg_pnl_pct`
+  beside them covered all 448 — and the page never said the two described different
+  populations. The general rule was already written above (*"PnL % leads; R is the
+  bridge"*, 2026-08-02) and this page was simply the last one not converted; the
+  owner caught it. Here R is not muted but **gone**, because the two surfaces that
+  need the bridge — the Strategy Lab and the edge matrix — are elsewhere, and a
+  denominator 94% of the rows cannot supply is not a bridge, it is a hole. The page
+  says on screen why it has no R; a route test asserts no R *figure* renders.
+- **A portfolio percentage is fine once the size is an INPUT.** The old rule forbade
+  one because "it needs an assumed position size, and `MAX_SAME_DIRECTION_GLOBAL=3`
+  means two users get different fills". That objection is about an **assumed** size.
+  The owner now types the amount (default 100 USDT **notional** — the same thing the
+  engine's `raw_qty = notional / entry_price` means by it, so no leverage is
+  invented), and the page states the assumption beside the number instead of hiding
+  one: every delivered signal taken, fixed size, no compounding. The fill-count
+  caveat survives as copy, because it is still true.
+- **Charge the fee, and say what it is.** The owner's 30d window is **−$3.21 gross**
+  at $100/signal and **−$34.57** once a 0.07% round trip is charged — the cost of
+  trading is ~10× the edge, so a gross-only figure answers the wrong question, and no
+  surface in this repo had ever shown it. The rate is an input (default 0.07 = Binance
+  USD-M maker 0.02% in + taker 0.05% out); gross and fees render beside net so the
+  split is readable; `Best`/`Worst` stay gross so the fee is not subtracted twice in
+  the reader's head, and the table says which columns are which. This is the repo's
+  own *"say whether an R is gross or net"* rule, finally applied to money.
+- **"Can I hold it" is a concurrency question, not a PnL question.** The balance
+  input reports the **required** balance — peak concurrent positions × amount, from a
+  sweep over each trade's entry and close — rather than simulating which signals a
+  smaller balance would have skipped. Skip order is a modelling choice that can
+  flatter or hurt the number, and so is compounding; both were declined explicitly.
+  A row with no entry stamp is **named**, never assumed simultaneous (which overstates
+  the requirement) or sequential (which understates it).
+- **Refuse, don't clamp — and name the reason.** A row with no readable `pnl_pct` is
+  counted in the trade count, excluded from every money figure, and the shortfall
+  stated. The geometry-stamp split survives *only as an engine-health line*, labelled
+  "affects no number on this page": `no_geometry` (stamped by today's engine and still
+  unusable — a producer fault that does **not** age out) is this repo's only detector
+  for that fault, and dropping it with R would have lost it silently. It stays counted
+  apart from `awaiting_engine_stamp` (closed before the field existed, shrinks on its
+  own) because pooling them reports a live fault that is not happening.
 - **Bucket by CLOSE time.** A day's PnL is the PnL realised that day; bucketing by
   entry credits Monday with a trade that closed Thursday.
+- **The row cap is a render bound.** The per-trade table caps at 500 *after* every
+  filter and after sorting, and says when it bit; the per-trade CSV is uncapped,
+  because a truncated export is #97 wearing a download button.
 
 `entry_regime` arrives from engine #817 and **cannot be backfilled** — the regime at
 entry is knowable only at entry — so records closed before that deploy render as their
