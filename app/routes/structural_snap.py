@@ -119,6 +119,11 @@ async def structural_snap_page(request: Request, setup: str = Query("")):
         "structural_snap.html",
         {
             "request": request,
+            # Picks both the nav group and the sub-tab in base.html. Without it
+            # `active` is undefined, the Signals sub-nav renders empty, and the
+            # page is reachable only by typing the URL — which is the "measured
+            # but nowhere to look" failure one step removed.
+            "active": "structural_snap",
             "error": error or (report.error if report else ""),
             "report": report,
             "filter_setup": setup,
