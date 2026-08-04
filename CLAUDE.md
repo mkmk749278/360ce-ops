@@ -514,6 +514,28 @@ Other rules the page carries:
 - **The mode is read off the rows** (`apply_mode`), never mirrored from a copy of
   the engine's flag registry.
 
+**The same page carries a second, wider defect from the same audit.**
+`Scanner._get_primary_timeframe` was `return "5m"` for **every** channel since it
+was written — a constant wearing a lookup's docstring — and **six** money-path
+consumers read it: continuation-sweep evidence (the 25-pt SMC dimension), the
+VWAP extension gate, the OI + funding gate, cross-timeframe volume divergence,
+the chart-pattern confidence bonus (the 10-pt Patterns dimension), and the volume
+inputs to the composite score. Every one was therefore computed on 5m bars for
+setups that do not trade 5m — MVRTP (~59% of the book) is 15m, as are MVAVW /
+MEAN_REVERT / RANGE_FADE; MA_CROSS is 1h and WHALE is 1m.
+
+The census panel carries two rules the page must not lose:
+
+- **The denominator is signals, not resolutions.** Six consumers call the
+  engine's resolver per candidate, so its own counters run ~6× the signal count.
+  A book fraction taken from them would be inflated sixfold and look entirely
+  plausible. The panel reads `score_tf_mismatch`, stamped once per row.
+- **It says how much of the book is affected, never how much better it would
+  be.** Five of the six consumers run *before* the stamp, so they decide whether
+  a candidate is in the ledger at all — anything measured from these rows is
+  survivorship-biased by construction, and pricing the correction properly needs
+  a shadow gate chain. That limitation is on screen, not in a footnote.
+
 **A `str`-typed runtime tunable needed plumbing in two places, and both failures
 were silent.** The per-path allow-list renders through `control.html`, which had
 one numeric branch for everything non-bool — untypeable. And `/control/tunables`

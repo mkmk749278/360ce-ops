@@ -119,6 +119,101 @@
   </table>
 </div>
 
+<div class="card">
+  <h2>Scoring timeframe — what each path is actually being read on</h2>
+  <p class="small">
+    A second defect found in the same audit, and a wider one.
+    <code>Scanner._get_primary_timeframe</code> was <code>return "5m"</code> for
+    <strong>every</strong> channel since it was written — a constant wearing a
+    lookup's docstring — and <strong>six money-path consumers</strong> read it:
+    continuation-sweep evidence (which feeds the 25-point SMC dimension), the VWAP
+    extension gate, the OI + funding gate, cross-timeframe volume divergence, the
+    chart-pattern confidence bonus (the 10-point Patterns dimension), and the volume
+    inputs to the composite score.
+  </p>
+  <p class="small">
+    So for every setup that does not trade 5m, all six readings were taken on a
+    different chart than the trade. Nothing crashed and nothing was empty.
+  </p>
+  <p class="small">
+    {% if report.tf_correction_live %}
+    <span class="badge badge-warn">CORRECTION LIVE</span>
+    The corrected timeframe is being handed to those six consumers.
+    {% else %}
+    <span class="badge">DARK — counting only</span>
+    Every consumer still reads 5m, byte-identically to before. The column below is
+    what a flip would move.
+    {% endif %}
+  </p>
+
+  <table class="kv">
+    <tr><th>Signals censused</th><td>{{ report.tf_rows }}</td></tr>
+    <tr>
+      <th>Would move off 5m</th>
+      <td>
+        <strong>{{ report.tf_mismatched }}</strong>
+        {% if report.tf_rows %}
+        ({{ '%.0f'|format(report.tf_mismatched / report.tf_rows * 100) }}% of the book)
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>No declared timeframe</th>
+      <td>
+        {{ report.tf_unmapped }}
+        <span class="muted small">
+          counted apart from agreement — an unmapped evaluator inherits 5m and
+          would otherwise read as a healthy 5m path forever
+        </span>
+      </td>
+    </tr>
+  </table>
+
+  <p class="muted small">
+    One row per signal. Deliberately <strong>not</strong> read from the engine's
+    resolver counters: six consumers call it per candidate, so that denominator is
+    ~6× the signal count and a book fraction taken from it would be inflated
+    sixfold while looking entirely plausible.
+  </p>
+
+  {% if report.tf_by_setup %}
+  <table>
+    <thead>
+      <tr><th>Path</th><th class="num">n</th><th>Trades on</th><th>Read on</th><th class="num">Would move</th></tr>
+    </thead>
+    <tbody>
+      {% for name, s in report.tf_by_setup|dictsort(by='value', attribute='n')|reverse %}
+      <tr>
+        <td class="small">{{ name }}</td>
+        <td class="num">{{ s.n }}</td>
+        <td><code>{{ s.declared if s.declared else '—' }}</code></td>
+        <td><code>{{ s.used }}</code></td>
+        <td class="num">
+          {% if s.unmapped %}
+          <span class="muted">unmapped</span>
+          {% elif s.mismatched %}
+          <strong>{{ s.mismatched }}</strong>
+          {% else %}
+          <span class="muted">0</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <p class="muted small">
+    <strong>What this panel cannot tell you:</strong> how much the correction would
+    change the book. Five of the six consumers run <em>before</em> a candidate
+    reaches this stamp, so they decide whether a signal is here at all — anything
+    measured from these rows is survivorship-biased by construction. Pricing that
+    properly needs a shadow gate chain, which is a separate change. Read this as
+    <em>how much of the book is affected</em>, never as <em>how much better it
+    would be</em>.
+  </p>
+</div>
+
 {% macro arm_panel(arm, title, blurb) %}
 <div class="card">
   <h2>{{ title }}</h2>

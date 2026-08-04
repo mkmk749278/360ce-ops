@@ -531,3 +531,61 @@ class TestTunablePlumbing:
         assert sent["structural_snap_apply_paths"] == ""
         # ...and the unchecked bool still becomes an explicit False.
         assert sent["structural_snap_apply"] is False
+
+
+class TestScoringTimeframeCensus:
+    """`Scanner._get_primary_timeframe` was `return "5m"` for every channel, and
+    six money-path consumers read it. The census says how much of the book a
+    correction would move — and must not overstate what it knows.
+    """
+
+    def test_mismatch_is_counted_per_signal(self):
+        rows = [
+            _row(signal_id="A", setup_class="MOVER_TREND_PULLBACK",
+                 score_tf_declared="15m", score_tf_used="5m",
+                 score_tf_mismatch=True, score_tf_correction_live=False),
+            _row(signal_id="B", setup_class="SR_FLIP_RETEST",
+                 score_tf_declared="5m", score_tf_used="5m",
+                 score_tf_mismatch=False, score_tf_correction_live=False),
+        ]
+        rep = build_report(_ledger(rows), [])
+        assert rep.tf_rows == 2
+        assert rep.tf_mismatched == 1
+        assert rep.tf_unmapped == 0
+        assert rep.tf_correction_live is False
+
+    def test_unmapped_is_its_own_bucket_not_agreement(self):
+        """None means "cannot be checked"; False means "checked, agrees".
+        Folding them makes a new unmapped evaluator read as a healthy 5m path
+        forever — the exact shape of the bug being fixed."""
+        rows = [_row(signal_id="A", setup_class="BRAND_NEW",
+                     score_tf_declared=None, score_tf_used="5m",
+                     score_tf_mismatch=None, score_tf_correction_live=False)]
+        rep = build_report(_ledger(rows), [])
+        assert rep.tf_unmapped == 1
+        assert rep.tf_mismatched == 0
+        assert rep.tf_by_setup["BRAND_NEW"]["unmapped"] == 1
+
+    def test_correction_live_is_read_off_the_rows(self):
+        rows = [_row(signal_id="A", score_tf_declared="15m", score_tf_used="15m",
+                     score_tf_mismatch=True, score_tf_correction_live=True)]
+        rep = build_report(_ledger(rows), [])
+        assert rep.tf_correction_live is True
+
+    def test_rows_without_the_stamp_are_not_censused(self):
+        """Rows written before the census shipped carry no score_tf_* keys.
+        Counting them as agreement would understate the affected fraction."""
+        rows = [_row(signal_id="A")]   # no score_tf_* keys at all
+        rep = build_report(_ledger(rows), [])
+        assert rep.tf_rows == 0
+        assert rep.tf_mismatched == 0
+
+    def test_the_census_denominator_is_signals_not_resolutions(self):
+        """Six consumers call the engine's resolver per candidate. If this panel
+        ever divided by that counter the affected fraction would read ~6x."""
+        rows = [_row(signal_id=f"S{i}", setup_class="MOVER_TREND_PULLBACK",
+                     score_tf_declared="15m", score_tf_used="5m",
+                     score_tf_mismatch=True, score_tf_correction_live=False)
+                for i in range(10)]
+        rep = build_report(_ledger(rows), [])
+        assert rep.tf_rows == 10 and rep.tf_mismatched == 10

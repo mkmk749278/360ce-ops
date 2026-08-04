@@ -197,6 +197,18 @@ class SnapReport:
     #: mode is read off the rows the lane decided, never mirrored from a copy
     #: of the engine's flag registry.
     any_applied: bool = False
+    #: Per-setup scoring-timeframe census, ONE row per signal.
+    #:
+    #: Deliberately NOT read from the engine's `tf_census` counters: six
+    #: consumers call the resolver per candidate, so that denominator is ~6x
+    #: the signal count and a book fraction taken from it would be inflated
+    #: sixfold while looking entirely plausible. These come off `score_tf_*` on
+    #: the rows, which are stamped once each.
+    tf_rows: int = 0
+    tf_mismatched: int = 0
+    tf_unmapped: int = 0
+    tf_correction_live: bool = False
+    tf_by_setup: dict[str, dict[str, Any]] = field(default_factory=dict)
     error: str = ""
 
 
@@ -392,6 +404,30 @@ def build_report(
             report.refusals[refused] = report.refusals.get(refused, 0) + 1
             continue
         report.n_measured += 1
+
+        # Scoring-timeframe census, per signal.
+        mismatch = row.get("score_tf_mismatch")
+        if "score_tf_used" in row:
+            report.tf_rows += 1
+            if row.get("score_tf_correction_live"):
+                report.tf_correction_live = True
+            sc = str(row.get("setup_class") or "UNKNOWN")
+            slot = report.tf_by_setup.setdefault(
+                sc,
+                {"n": 0, "mismatched": 0, "unmapped": 0,
+                 "declared": row.get("score_tf_declared"),
+                 "used": row.get("score_tf_used")},
+            )
+            slot["n"] += 1
+            # None is "cannot be checked" (no declared timeframe), never
+            # folded into False, which is "checked, agrees" — an unmapped
+            # evaluator would otherwise read as a healthy 5m path forever.
+            if mismatch is None:
+                report.tf_unmapped += 1
+                slot["unmapped"] += 1
+            elif mismatch:
+                report.tf_mismatched += 1
+                slot["mismatched"] += 1
 
         for key, bucket in (("sl_source", report.sl_sources),
                             ("tp1_source", report.tp1_sources)):
