@@ -65,6 +65,14 @@ DARK_SAR_FILE = f"dark_sar_arms_v{DARK_SAR_VERSION}.json"
 ENTRY_FEATURES_VERSION = 1
 ENTRY_FEATURES_FILE = f"entry_features_v{ENTRY_FEATURES_VERSION}.json"
 
+#: Structural SL/TP1 snap stamps (engine ``src/structural_snap.py``). Where the
+#: nearest swing high/low or round number sat relative to the stop and TP1 each
+#: signal actually shipped with. Stamps only — outcomes join from
+#: ``signal_performance.json`` on ``signal_id``, so this lane grows no resolver
+#: of its own and inherits the closed-signal record's correctness.
+STRUCTURAL_SNAP_VERSION = 1
+STRUCTURAL_SNAP_FILE = f"structural_snap_v{STRUCTURAL_SNAP_VERSION}.json"
+
 _SAR_LIVE_RE = re.compile(r"^sar_live_arms_v(\d+)\.json$")
 
 
@@ -100,6 +108,29 @@ class DataVolumeReader:
         denominator) instead of growing a resolver of its own.
         """
         return self._load(ENTRY_FEATURES_FILE)
+
+    def structural_snap(self) -> Any:
+        """Structural SL/TP1 snap stamps (engine ``src/structural_snap.py``).
+
+        Shape::
+
+            {"schema": 1, "written_at": <epoch>, "max_rows": N,
+             "evicted": N, "counters": {...}, "spec": {...},
+             "rows": [<stamp>, ...]}
+
+        One row per enqueued signal, carrying the arithmetic stop/TP1 the
+        evaluator produced beside the levels a structural snap would have used,
+        plus which generator supplied each level.
+
+        ``evicted`` and ``max_rows`` ride with the data deliberately: the ring
+        is capped, so every rate computed on it is a sample, and a reader in
+        this process cannot otherwise see the cap. A verdict printed without
+        its denominator reads as if it covered everything.
+
+        **No outcome fields.** Those join from :meth:`signal_performance` on
+        ``signal_id``.
+        """
+        return self._load(STRUCTURAL_SNAP_FILE)
 
     def invalidation_records(self) -> Any:
         return self._load("invalidation_records.json")

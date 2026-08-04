@@ -61,6 +61,7 @@ from app.routes import (
     truth,
     users,
     entry_features,
+    structural_snap,
 )
 
 settings = load_settings()
@@ -124,6 +125,7 @@ app.include_router(dark_signals_live.router)
 # Before signal_detail: its /signals/{signal_id} route matches any
 # /signals/<literal> and would swallow this page into a 404.
 app.include_router(entry_features.router)
+app.include_router(structural_snap.router)
 app.include_router(signal_detail.router)
 app.include_router(pairs.router)
 app.include_router(diag.router)

@@ -290,12 +290,21 @@ async def control_tunables(request: Request):
 
     form = await request.form()
     bool_keys = {k for k in str(form.get("_bool_keys", "")).split(",") if k}
+    # Text knobs must submit even when blank. The skip-empty rule below exists
+    # so an untouched numeric field does not post garbage, but for a string
+    # tunable "" is a real value — the structural-snap per-path allow-list is
+    # cleared by emptying it, and without this companion the list could be
+    # added to from ops and never cleared.
+    str_keys = {k for k in str(form.get("_str_keys", "")).split(",") if k}
     values: dict[str, object] = {}
     for key, raw in form.multi_items():
-        if key in ("_bool_keys",):
+        if key in ("_bool_keys", "_str_keys"):
             continue
         if key in bool_keys:
             continue  # handled below so unchecked boxes become False
+        if key in str_keys:
+            values[key] = str(raw).strip()
+            continue
         if str(raw).strip() != "":
             values[key] = str(raw).strip()
     for key in bool_keys:
