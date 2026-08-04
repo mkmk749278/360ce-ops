@@ -1,0 +1,307 @@
+{% extends "base.html" %}
+{% block title %}Structural snap{% endblock %}
+{% block content %}
+
+<h1>Structural snap{% if filter_setup %} — {{ filter_setup }}{% endif %}</h1>
+<p class="muted small">
+  Every live evaluator computes its stop and its targets <strong>arithmetically</strong> —
+  a buffer off a moving average or a prior bar, then fixed R-multiples off that
+  distance. Nothing in that chain asks where price has actually traded, so TP1 can
+  land a hair beyond a swing high that has rejected four times.
+  This lane stamps, on every enqueued signal, where the nearest swing level or round
+  number sat relative to the geometry that <em>actually shipped</em>.
+</p>
+<p class="muted small">
+  The repair has existed in the engine's <code>structural_levels.py</code> since it
+  was written, and <code>build_channel_signal</code> called it — behind a guard on
+  <code>candle_highs is not None</code> that <strong>no caller ever satisfied</strong>,
+  under a comment claiming every evaluator passed the arrays. It never ran. It now
+  runs at the one point the geometry is final, and applies nothing until a path is
+  named in the ops allow-list.
+</p>
+
+{% if error %}
+<div class="card error"><strong>Cannot read the lane:</strong> {{ error }}</div>
+{% endif %}
+
+{% if report %}
+
+<div class="card">
+  <h2>Mode</h2>
+  <p class="small">
+    {% if report.any_applied %}
+    <span class="badge badge-warn">APPLYING</span>
+    At least one row in this window was stamped while its path was allowed to move
+    geometry. Rows measured dark and rows measured live are different populations —
+    the <code>apply_mode</code> column separates them, and they must not be averaged
+    together.
+    {% else %}
+    <span class="badge">DARK — measuring only</span>
+    No row in this window had its geometry moved. Every delta below is a
+    counterfactual: the engine shipped the arithmetic level either way.
+    {% endif %}
+  </p>
+  <p class="muted small">
+    Read off the rows the lane decided, not mirrored from a copy of the engine's flag
+    registry — a second copy of a switch is the drift that inflated the Strategy Lab
+    rollup for a week.
+  </p>
+</div>
+
+<div class="actions">
+  <a class="btn {% if not filter_setup %}btn-active{% endif %}"
+     href="/signals/structural-snap">All paths</a>
+  {% for name, n in setup_options %}
+  <a class="btn {% if filter_setup == name %}btn-active{% endif %}"
+     href="/signals/structural-snap?setup={{ name }}">{{ name }} ({{ n }})</a>
+  {% endfor %}
+  <a class="btn" href="/signals/structural-snap/export.csv{% if filter_setup %}?setup={{ filter_setup }}{% endif %}">CSV</a>
+</div>
+
+<div class="card">
+  <h2>Coverage</h2>
+  <table class="kv">
+    <tr><th>Rows stamped</th><td>{{ report.n_rows }}</td></tr>
+    <tr><th>Carrying a measurement</th><td>{{ report.n_measured }}</td></tr>
+    <tr>
+      <th>Ring cap</th>
+      <td>
+        {% if report.max_rows %}{{ report.max_rows }}{% else %}—{% endif %}
+        {% if report.evicted %}
+        <span class="badge badge-warn">{{ report.evicted }} evicted</span>
+        <span class="muted small">every rate below is a sample of a larger book</span>
+        {% else %}
+        <span class="muted small">nothing evicted — these are all the rows there are</span>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+
+  {% if report.refusals %}
+  <h3>Rows carrying no measurement</h3>
+  <p class="muted small">
+    Named, never pooled into "no data" — each has a different fix.
+    <code>tf_unknown</code> means a new evaluator has no declared trigger timeframe
+    and is being refused rather than silently snapped against 5m structure;
+    <code>short_series</code> is the buffer, not the market; <code>no_candles</code>
+    is the store.
+  </p>
+  <table>
+    <thead><tr><th>Reason</th><th class="num">n</th></tr></thead>
+    <tbody>
+      {% for reason, n in report.refusals|dictsort(by='value')|reverse %}
+      <tr><td><code>{{ reason }}</code></td><td class="num">{{ n }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h3>Where the levels came from</h3>
+  <p class="muted small">
+    Two generators with different standing. A <strong>swing</strong> is a price the
+    market actually traded and rejected. A <strong>round</strong> number is a
+    psychological level we inject ourselves, on an <em>absolute</em> grid — 0.2% wide
+    at $50,000 and 20% wide at $0.05, where it can never fall inside a stop band and
+    contributes nothing. An all-<code>swing</code> column at sub-cent prices is the
+    grid being inert, not round numbers being unhelpful.
+  </p>
+  <table>
+    <thead><tr><th>Source</th><th class="num">SL</th><th class="num">TP1</th></tr></thead>
+    <tbody>
+      {% for src in ['swing', 'round', 'both', 'none'] %}
+      <tr>
+        <td><code>{{ src }}</code></td>
+        <td class="num">{{ report.sl_sources.get(src, 0) }}</td>
+        <td class="num">{{ report.tp1_sources.get(src, 0) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% macro arm_panel(arm, title, blurb) %}
+<div class="card">
+  <h2>{{ title }}</h2>
+  <p class="muted small">{{ blurb }}</p>
+
+  <table class="kv">
+    <tr>
+      <th>Decidable</th>
+      <td>
+        {{ arm.n_scored }} / {{ arm.n_total }}
+        {% if arm.decidable_frac is not none %}
+        ({{ '%.0f'|format(arm.decidable_frac * 100) }}%)
+        {% endif %}
+        {% if arm.decidable_frac is not none and arm.decidable_frac < 0.5 %}
+        <span class="badge badge-warn">under half</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Of those, actually moved</th>
+      <td>
+        {{ arm.n_changed }}
+        <span class="muted small">
+          the rest found no level in the band — a rule that changes nothing has
+          not been tested however good its delta looks
+        </span>
+      </td>
+    </tr>
+    <tr>
+      <th>Now (same rows)</th>
+      <td>
+        {% if arm.now_avg_pnl_pct is not none %}
+        {{ '%+.3f'|format(arm.now_avg_pnl_pct) }}%
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>With the snap</th>
+      <td>
+        {% if arm.arm_avg_pnl_pct is not none %}
+        {{ '%+.3f'|format(arm.arm_avg_pnl_pct) }}%
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Δ per signal</th>
+      <td>
+        {% if arm.avg_delta_pct is not none %}
+        <strong class="{{ 'good' if arm.avg_delta_pct > 0 else 'bad' }}">
+          {{ '%+.3f'|format(arm.avg_delta_pct) }}%
+        </strong>
+        <span class="muted small">
+          over {{ arm.n_scored }} rows, total
+          {{ '%+.2f'|format(arm.total_delta_pct) }}%
+        </span>
+        {% else %}
+        <span class="muted">no scored rows yet</span>
+        {% endif %}
+      </td>
+    </tr>
+  </table>
+
+  <h3>Verdicts</h3>
+  <table>
+    <thead><tr><th>Verdict</th><th class="num">n</th><th>What it means</th></tr></thead>
+    <tbody>
+      {% for verdict, n in arm.counts|dictsort(by='value')|reverse %}
+      <tr>
+        <td><code>{{ verdict }}</code></td>
+        <td class="num">{{ n }}</td>
+        <td class="small muted">{{ verdict_copy.get(verdict, '') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{{ arm_panel(
+     report.tp1,
+     'TP1 arm — fully decidable',
+     'The snap moves TP1 NEARER only, never further. That direction is deliberate:
+      flooring TREND_PULLBACK_EMA’s TP1 further out was simulated on the 2026-08-01
+      dark window and took the book from −0.081R to as low as −0.836R, because the
+      winners barely clear their current targets. A nearer target was reached iff
+      max_favorable_excursion ≥ its distance, and every recorded excursion precedes
+      the close — so there is no ordering ambiguity here and no refused bucket
+      beyond rows that never joined an outcome.') }}
+
+{{ arm_panel(
+     report.sl,
+     'SL arm — partly decidable, and the gap is biased',
+     'The stop can move either way inside ±30% of the designed risk, and two cases
+      are simply not in the record: a WIDER stop on a trade that stopped out (would
+      price have come back? the walk ended there) and a TIGHTER stop on a winner
+      (did the drawdown come before or after the target? MFE and MAE carry no
+      ordering). They are refused under separate names because they remove opposite
+      ends of the distribution — read the decidable fraction before the Δ.') }}
+
+<div class="card">
+  <h2>Why there is no combined number</h2>
+  <p class="small">
+    The two arms are not measured on the same population and are not equally
+    knowable. Averaging a fully-decidable TP1 delta with a partly-decidable SL delta
+    would produce one figure whose value moves with the SL arm's refusal rate rather
+    than with the mechanism — and the refusals are loss-selected on one side and
+    win-selected on the other, so the blend would be biased in a direction that
+    changes with the market. A route test asserts this page never grows a blended
+    key.
+  </p>
+  <p class="muted small">
+    Also load-bearing: <code>max_favorable_excursion_pct</code> and
+    <code>max_adverse_excursion_pct</code> are updated on the monitor's
+    <strong>mark-price ticks</strong>, not from intrabar candle extremes. A touch
+    between ticks is not recorded, so every "the snapped level was reached" verdict
+    is conservative — this lane can under-count rescues and can never invent one.
+    That bias points against the snap, which is the safe direction for an adoption
+    decision, but it is a bias.
+  </p>
+</div>
+
+{% if report.spec %}
+<div class="card">
+  <h2>Contract</h2>
+  <p class="muted small">
+    Shipped by the engine inside the ledger, not mirrored here — the fix for a
+    drifting mirror is one writer and one reader.
+  </p>
+  <table class="kv">
+    <tr><th>SL search band</th><td>{{ report.spec.get('sl_band') }} × designed risk</td></tr>
+    <tr><th>TP1 search band</th><td>{{ report.spec.get('tp1_band') }} × designed target</td></tr>
+    <tr><th>TP1 direction</th><td><code>{{ report.spec.get('tp1_direction') }}</code></td></tr>
+    <tr><th>Swing lookback</th><td>{{ report.spec.get('swing_lookback') }} bars, ±{{ report.spec.get('swing_window') }} confirmation</td></tr>
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Rows</h2>
+  {% set shown = report.tp1.rows[:row_cap] %}
+  {% if report.tp1.rows|length > row_cap %}
+  <p class="muted small">
+    Showing the newest {{ row_cap }} of {{ report.tp1.rows|length }} — a render bound,
+    applied after every filter. The CSV is uncapped.
+  </p>
+  {% endif %}
+  <table>
+    <thead>
+      <tr>
+        <th>Signal</th><th>Symbol</th><th>Path</th><th>Side</th><th>TF</th>
+        <th class="num">TP1 shift</th><th>TP1 src</th><th>TP1 verdict</th>
+        <th class="num">TP1 Δ</th>
+        <th class="num">SL shift</th><th>SL src</th><th>SL verdict</th>
+        <th class="num">SL Δ</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in shown %}
+      {% set s = report.sl.rows[loop.index0] %}
+      <tr>
+        <td class="small"><code>{{ t.signal_id }}</code></td>
+        <td>{{ t.symbol }}</td>
+        <td class="small">{{ t.setup_class }}</td>
+        <td>{{ t.direction }}</td>
+        <td>{{ t.tf }}</td>
+        <td class="num">{% if t.shift_pct is not none %}{{ '%+.3f'|format(t.shift_pct) }}%{% else %}—{% endif %}</td>
+        <td class="small"><code>{{ t.level_source }}</code></td>
+        <td class="small"><code>{{ t.verdict }}</code></td>
+        <td class="num">{% if t.delta_pct is not none %}{{ '%+.3f'|format(t.delta_pct) }}%{% else %}—{% endif %}</td>
+        <td class="num">{% if s.shift_pct is not none %}{{ '%+.3f'|format(s.shift_pct) }}%{% else %}—{% endif %}</td>
+        <td class="small"><code>{{ s.level_source }}</code></td>
+        <td class="small"><code>{{ s.verdict }}</code></td>
+        <td class="num">{% if s.delta_pct is not none %}{{ '%+.3f'|format(s.delta_pct) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    An em-dash is not a zero. A row with no Δ could not be judged; the verdict column
+    beside it says which of "not yet", "cannot be" and "unchanged" it is in.
+  </p>
+</div>
+
+{% endif %}
+
+{% endblock %}

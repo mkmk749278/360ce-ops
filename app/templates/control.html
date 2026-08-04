@@ -173,6 +173,13 @@
       <h3>{{ category }}</h3>
       <input type="hidden" name="_bool_keys"
              value="{{ entries | selectattr('type', 'equalto', 'bool') | map(attribute='key') | join(',') }}">
+      {# Companion for text tunables, for the same reason _bool_keys exists.
+         The handler skips empty form values so an untouched number field does
+         not post garbage — but for a string knob, empty is a REAL value
+         ("no paths selected"). Without this an allow-list could be added to
+         and never cleared. #}
+      <input type="hidden" name="_str_keys"
+             value="{{ entries | selectattr('type', 'equalto', 'str') | map(attribute='key') | join(',') }}">
       <table class="tunables">
         <tbody>
           {% for t in entries %}
@@ -187,6 +194,17 @@
                 <input type="checkbox" id="tun-{{ t.key }}" name="{{ t.key }}"
                        {% if t.value %}checked{% endif %}>
                 <span class="muted">{{ 'ON' if t.value else 'OFF' }} now</span>
+              {% elif t.type == 'str' %}
+                {# Free text — e.g. the structural-snap per-path allow-list.
+                   Rendering this through the number input below would make the
+                   value untypeable, which is an allow-list that can only be
+                   changed by a redeploy: exactly what runtime tunables exist to
+                   avoid. An empty value is legitimate ("no paths selected"). #}
+                <input type="text" id="tun-{{ t.key }}" name="{{ t.key }}"
+                       value="{{ t.value if t.value is not none else '' }}"
+                       size="40" autocomplete="off">
+                <span class="muted">default
+                  {% if t.default %}<code>{{ t.default }}</code>{% else %}empty{% endif %}</span>
               {% else %}
                 <input type="number" id="tun-{{ t.key }}" name="{{ t.key }}"
                        value="{{ t.value }}" step="{{ '1' if t.type == 'int' else '0.05' }}"

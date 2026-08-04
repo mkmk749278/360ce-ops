@@ -450,6 +450,78 @@ route list over the request. Every literal page under `/signals/` must be
 included **before** `signal_detail.router`; `tests/test_entry_features.py`
 asserts the ordering in `app/main.py` as well as the live request.
 
+## `/signals/structural-snap` — two arms, and only one of them is knowable
+
+Added 2026-08-04 (engine `src/structural_snap.py`) for the owner's question
+*"what actually price action is, are we using it?"*. The audit answer: the
+engine reads structure into its **score** (SMC sweeps/MSS carry 25 of 100
+points) and almost never into its **triggers** — ~82% of the enqueued book is
+MA/indicator-triggered, `MOVER_TREND_PULLBACK` alone being 59% — and **not at
+all** into its targets, which are fixed R-multiples off the stop distance.
+
+A repair for exactly that had existed in `structural_levels.py` since it was
+written, and `build_channel_signal` called it. It never ran: the call sat behind
+`candle_highs is not None` and no caller in the engine has ever passed that
+argument, while the branch's comment read *"shared by EVERY evaluator that
+passes candle arrays"*. Dead twice over — every evaluator overwrites
+`sig.stop_loss` / `sig.tp1` on the line after that helper returns.
+
+**The design constraint this page exists to respect: the two arms are not
+equally knowable.**
+
+- **TP1 arm — fully decidable.** The snap moves TP1 *nearer only*, and
+  `max_favorable_excursion_pct` records how far the trade ran before its close.
+  So a nearer target was reached iff `MFE >= its distance`, with no ordering
+  ambiguity and no refused bucket beyond rows that never joined an outcome.
+- **SL arm — partly decidable, and the residue is biased.** A *wider* stop on a
+  loser asks whether price would have come back, and the walk ended at the stop
+  (`undecidable_truncated`). A *tighter* stop on a winner asks whether the
+  drawdown preceded the target, and MFE/MAE carry no ordering between them
+  (`undecidable_ordering`). The two are **never pooled**, because they remove
+  opposite ends of the distribution — dropping them silently leaves a
+  loss-selected sample on one side and a win-selected one on the other, and a
+  loss-selected sample is worse than no sample because it looks like an answer.
+
+**There is deliberately no combined figure**, and a test asserts the key does
+not exist. One number over both arms would move with the SL arm's refusal rate
+rather than with the mechanism. Same rule as `/signals/sar-live`'s two fills and
+two denominators, arriving from a third direction.
+
+Other rules the page carries:
+
+- **The decidable fraction sits beside every delta**, not in a footnote.
+- **The baseline is measured on the rows the arm scored**, never over the whole
+  ledger (#90, again).
+- **`unchanged` is counted apart from every refusal.** A row where no level fell
+  inside the search band is a rule that changed nothing, and a rule that changes
+  nothing has not been tested however good its delta looks.
+- **MFE/MAE are tick-sampled, not intrabar** — `trade_monitor` updates them on
+  mark-price ticks, so a touch between ticks is not recorded. Every "the level
+  was reached" verdict is therefore conservative: this lane can under-count
+  rescues and can never invent one. The bias points *against* the snap, which is
+  the safe direction for an adoption decision, and the page says so rather than
+  presenting the count as exact.
+- **Level provenance is on screen, because the two generators differ in
+  standing.** A swing is a price the market traded and rejected; a round number
+  is injected by us on an **absolute** grid — 0.2% wide at $50,000 and 20% wide
+  at $0.05, where it cannot fall inside any stop band. An all-`swing` column at
+  sub-cent prices is the grid being inert, not round numbers being unhelpful,
+  and `round_step_pct` is what distinguishes the two.
+- **Refusals are named, never pooled into "no data".** `tf_unknown` means a new
+  evaluator has no declared trigger timeframe and is being refused rather than
+  snapped against the wrong timeframe's structure; `short_series` is the buffer;
+  `no_candles` is the store. Different fixes.
+- **The mode is read off the rows** (`apply_mode`), never mirrored from a copy of
+  the engine's flag registry.
+
+**A `str`-typed runtime tunable needed plumbing in two places, and both failures
+were silent.** The per-path allow-list renders through `control.html`, which had
+one numeric branch for everything non-bool — untypeable. And `/control/tunables`
+skips empty form values (right for an untouched number field), so `""` could
+never be sent: an allow-list that could be added to from ops and never cleared,
+which is the one state a money-path switch must not be in. `_str_keys` is the
+companion to `_bool_keys` and fixes the second half.
+
 ## Recorded vs reconstructed — the line `/track-record` must not cross
 
 Added 2026-07-28 (#98) for the owner's paper-trading problem: per-user paper books
@@ -574,6 +646,7 @@ own `UNPLACED` bucket rather than being folded into a real regime.
 | "Held to stop" free-run replay (Profit tab) | `app/data_sources/free_run.py` |
 | Scaled-exit what-if simulator (Profit tab) | `app/data_sources/exit_sim.py` |
 | Exit-method what-ifs on the dark feed — reads the engine's held-to-stop arm, prices `exit_sim`'s catalog | `app/data_sources/dark_exit_sim.py` |
+| Structural SL/TP1 snap stamps — `structural_snap_v1.json` (`/signals/structural-snap`) | `app/data_sources/structural_snap.py` |
 
 ## Conventions
 
