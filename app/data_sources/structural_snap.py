@@ -211,6 +211,23 @@ class SnapReport:
     tf_by_setup: dict[str, dict[str, Any]] = field(default_factory=dict)
     error: str = ""
 
+    @property
+    def tf_by_setup_rows(self) -> list[tuple[str, dict[str, Any]]]:
+        """``(setup, slot)`` commonest first, sorted HERE rather than in Jinja.
+
+        The template tried ``dictsort(by='value', attribute='n')``. Jinja's
+        ``dictsort`` takes no ``attribute`` argument, so that raised
+        ``TypeError`` and 500'd the page — and it did so only once real rows
+        existed, because the block is behind ``{% if tf_by_setup %}`` and the
+        test fixture omitted the ``score_tf_*`` keys the engine actually
+        stamps. Sorting a dict-of-dicts is Python's job; a template that has to
+        reach into values to order them has outgrown the filter.
+        """
+        return sorted(
+            self.tf_by_setup.items(),
+            key=lambda kv: (-int(kv[1].get("n") or 0), kv[0]),
+        )
+
 
 def _percent_from(entry: float, level: float) -> Optional[float]:
     if entry <= 0:
