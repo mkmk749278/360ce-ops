@@ -589,3 +589,35 @@ class TestScoringTimeframeCensus:
                 for i in range(10)]
         rep = build_report(_ledger(rows), [])
         assert rep.tf_rows == 10 and rep.tf_mismatched == 10
+
+
+class TestDiscoverability:
+    """A page nobody can reach is the "measured but nowhere to look" failure
+    one step removed — the owner asked "where do I see this?" and the answer
+    was "type the URL", which is not an answer.
+    """
+
+    def test_the_page_is_in_the_nav(self):
+        from pathlib import Path
+
+        nav = (Path(__file__).resolve().parents[1]
+               / "app" / "templates" / "base.html").read_text()
+        assert "'/signals/structural-snap'" in nav, (
+            "the page is not linked from base.html's NAV — it exists but is "
+            "only reachable by typing the URL"
+        )
+
+    def test_the_route_sets_the_nav_active_token(self):
+        """Without it `active` is undefined, so base.html picks no group and
+        the Signals sub-nav renders empty on this page."""
+        from pathlib import Path
+
+        src = (Path(__file__).resolve().parents[1]
+               / "app" / "routes" / "structural_snap.py").read_text()
+        assert '"active": "structural_snap"' in src
+
+        nav = (Path(__file__).resolve().parents[1]
+               / "app" / "templates" / "base.html").read_text()
+        # The token in the route must match the one in the NAV tuple, or the
+        # link renders but never highlights and the sub-nav still collapses.
+        assert "'structural_snap'" in nav
