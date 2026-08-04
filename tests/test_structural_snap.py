@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
@@ -67,6 +68,18 @@ def _row(**kw):
         "n_swing_lows": 2,
         "round_step_pct": 1.0,
         "bars": 60,
+        # The scoring-timeframe census keys. These were MISSING from this
+        # fixture on the first cut, and their absence 500'd production: the
+        # census block is behind `{% if report.tf_by_setup %}`, so an empty
+        # census meant the template's Jinja was never executed by any test,
+        # and it contained an invalid `dictsort(attribute=...)` call. The
+        # engine stamps these on every row — a fixture that omits them is not
+        # the collaborator's shape, it is a shape we invented, and it went
+        # green over a page that could not render.
+        "score_tf_declared": "15m",
+        "score_tf_used": "5m",
+        "score_tf_mismatch": True,
+        "score_tf_correction_live": False,
     }
     base.update(kw)
     return base
@@ -457,6 +470,12 @@ class TestRender:
         assert "17" in body and "evicted" in body
         # The dark badge, read off the rows.
         assert "DARK" in body
+        # The census block must actually RENDER, not just exist in the
+        # template. It sits behind `{% if report.tf_by_setup %}`, so a fixture
+        # without the engine's score_tf_* keys skips it entirely — which is
+        # how an invalid dictsort call reached production.
+        assert "Scoring timeframe" in body
+        assert "MOVER_TREND_PULLBACK" in body
 
     def test_the_csv_export_is_uncapped_and_carries_both_arms(self):
         rows = [_row(signal_id=f"S{i}", tp1_snapped=101.0) for i in range(400)]
@@ -575,8 +594,11 @@ class TestScoringTimeframeCensus:
     def test_rows_without_the_stamp_are_not_censused(self):
         """Rows written before the census shipped carry no score_tf_* keys.
         Counting them as agreement would understate the affected fraction."""
-        rows = [_row(signal_id="A")]   # no score_tf_* keys at all
-        rep = build_report(_ledger(rows), [])
+        bare = _row(signal_id="A")
+        for k in list(bare):
+            if k.startswith("score_tf_"):
+                bare.pop(k)
+        rep = build_report(_ledger([bare]), [])
         assert rep.tf_rows == 0
         assert rep.tf_mismatched == 0
 
@@ -621,3 +643,24 @@ class TestDiscoverability:
         # The token in the route must match the one in the NAV tuple, or the
         # link renders but never highlights and the sub-nav still collapses.
         assert "'structural_snap'" in nav
+
+
+def test_the_per_setup_census_is_sorted_in_python_not_jinja():
+    """`dictsort` takes no `attribute` argument, so ordering a dict-of-dicts in
+    the template raised TypeError and 500'd the live page. Sorting belongs in
+    the reducer; a template reaching into values to order them has outgrown the
+    filter."""
+    rows = [
+        _row(signal_id="A", setup_class="SMALL"),
+        _row(signal_id="B", setup_class="BIG"),
+        _row(signal_id="C", setup_class="BIG"),
+    ]
+    rep = build_report(_ledger(rows), [])
+    assert [name for name, _ in rep.tf_by_setup_rows] == ["BIG", "SMALL"]
+
+    tpl = (Path(__file__).resolve().parents[1]
+           / "app" / "templates" / "structural_snap.html").read_text()
+    assert "attribute=" not in tpl, (
+        "Jinja's dictsort has no `attribute` parameter — this raises at render "
+        "time, and only once real rows make the block reachable"
+    )

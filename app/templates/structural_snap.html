@@ -182,7 +182,7 @@
       <tr><th>Path</th><th class="num">n</th><th>Trades on</th><th>Read on</th><th class="num">Would move</th></tr>
     </thead>
     <tbody>
-      {% for name, s in report.tf_by_setup|dictsort(by='value', attribute='n')|reverse %}
+      {% for name, s in report.tf_by_setup_rows %}
       <tr>
         <td class="small">{{ name }}</td>
         <td class="num">{{ s.n }}</td>
