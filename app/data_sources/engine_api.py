@@ -128,6 +128,17 @@ class EngineApiClient:
         """
         return await self._get("/internal/diag/positions")
 
+    async def data_intake(self) -> Any:
+        """What the engine is actually reading from Binance.
+
+        Owner-tier endpoint (360-v2 price-action program Phase 1). Assembled
+        from state the engine already holds — no new vendor calls — and in
+        isolated mode served from the snapshot the engine container publishes,
+        because the API container's facade cannot see WS connections, the
+        candle store or the rate limiter.
+        """
+        return await self._get("/internal/diag/data-intake")
+
     async def activity(self, setup_class: str | None = None) -> Any:
         params: dict[str, str] = {}
         if setup_class:

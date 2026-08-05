@@ -1,0 +1,312 @@
+{% extends "base.html" %}
+{% block title %}Data intake{% endblock %}
+{% block content %}
+
+<h1>Data intake — what we are actually reading from Binance</h1>
+<p class="muted small">
+  Built so this question never needs an SSH session again. Every figure is computed
+  <strong>engine-side</strong> from state the engine already holds — no new vendor
+  calls, no polling, and no clock of ours: a surface may not grade its own liveness
+  on a clock it supplies.
+</p>
+<p class="muted small">
+  <strong>Provenance leads freshness.</strong> Age answers "is this current". Source
+  answers "is this the thing I think it is" — and every finding that produced this
+  page was the second kind: a value of the right shape, arriving from somewhere other
+  than where its consumers assume.
+</p>
+
+{% if error %}
+<div class="card error">
+  <strong>Cannot read the intake report:</strong> {{ error }}
+  <p class="muted small">
+    A named cause, not a blank page. "Nothing is subscribed" and "we could not ask"
+    are different states and only one of them is a fault.
+  </p>
+</div>
+{% endif %}
+
+{% if report %}
+
+{# ── Stream kinds: the absence panel ─────────────────────────────────────── #}
+<div class="card">
+  <h2>Stream kinds — what we subscribe to, and what we do not</h2>
+  <p class="muted small">
+    Enumerated rather than listed. An absence cannot be seen in a list of what is
+    present, which is precisely how a missing trade stream sat behind a complete,
+    unreachable trade handler in <code>main.py</code>.
+  </p>
+  {% set kinds = (report.stream_kinds or {}).get('kinds', {}) %}
+  <table>
+    <thead><tr><th>Kind</th><th>State</th><th>What it means</th></tr></thead>
+    <tbody>
+      {% for key, label, meaning in stream_kind_copy %}
+      <tr>
+        <td>{{ label }}</td>
+        <td>
+          {% if kinds.get(key) %}<span class="badge badge-ok">SUBSCRIBED</span>
+          {% else %}<span class="badge badge-warn">NOT SUBSCRIBED</span>{% endif %}
+        </td>
+        <td class="small muted">{{ meaning }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% set suffixes = (report.stream_kinds or {}).get('distinct_stream_suffixes', []) %}
+  {% if suffixes %}
+  <p class="muted small">
+    Distinct stream names in flight:
+    {% for s in suffixes %}<code>{{ s }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+  </p>
+  {% endif %}
+</div>
+
+{# ── WebSocket pools ─────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>WebSocket pools</h2>
+  <p class="muted small">
+    Reported per connection, never aggregated: Binance drops <em>subsets</em> of
+    subscriptions silently, so one degraded connection inside a healthy pool is
+    exactly the state an aggregate hides. Every connection is force-closed at 24h —
+    the countdown makes that a scheduled event rather than a 3am alarm.
+  </p>
+  {% for pool in report.pools %}
+  {% set cls, label = pool_badge(pool.get('state', '')) %}
+  <h3 class="small">
+    {{ pool.label }} <span class="badge {{ cls }}">{{ label }}</span>
+    <span class="muted small">{{ pool.streams_total }} streams</span>
+  </h3>
+  {% if pool.connections %}
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th class="num">Streams</th><th class="num">Silent</th>
+        <th class="num">Ping ms</th><th class="num">Reconnects</th>
+        <th class="num">Age</th><th class="num">To 24h cycle</th><th>State</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in pool.connections %}
+      <tr>
+        <td>{{ c.index }}</td>
+        <td class="num">{{ c.streams }}</td>
+        <td class="num">
+          {% if c.silent_streams %}<span class="badge badge-warn">{{ c.silent_streams }}</span>
+          {% else %}0{% endif %}
+        </td>
+        <td class="num">{{ '%.0f'|format(c.ping_latency_ms) }}</td>
+        <td class="num">{{ c.reconnect_attempts }}</td>
+        <td class="num">{% if c.connected_age_s is not none %}{{ '%.0f'|format(c.connected_age_s) }}s{% else %}—{% endif %}</td>
+        <td class="num">{% if c.seconds_to_forced_cycle is not none %}{{ '%.1f'|format(c.seconds_to_forced_cycle / 3600) }}h{% else %}—{% endif %}</td>
+        <td>{% if c.degraded %}<span class="badge badge-err">degraded</span>{% else %}ok{% endif %}</td>
+      </tr>
+      {% if c.silent_sample %}
+      <tr><td></td><td colspan="7" class="small muted">
+        silent: {% for s in c.silent_sample %}<code>{{ s }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+      </td></tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">
+    No connections. <strong>{{ pool.get('state') }}</strong> — a pool that was never
+    started and one whose connections all died both show zero streams, so the state
+    is named rather than inferred from the count.
+  </p>
+  {% endif %}
+  {% endfor %}
+</div>
+
+{# ── Derived inputs: provenance ──────────────────────────────────────────── #}
+<div class="card">
+  <h2>Derived inputs — where each number actually comes from</h2>
+  {% set d = report.derived or {} %}
+  <table>
+    <thead><tr><th>Input</th><th>Source</th><th>Coverage</th><th>What that means</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>CVD</td>
+        <td><code>{{ d.cvd.source }}</code></td>
+        <td class="small">{{ d.cvd.symbols_tracked }} sym (1m) · {{ d.cvd.symbols_tracked_15m }} (15m)</td>
+        <td class="small muted">{{ d.cvd.detail }}</td>
+      </tr>
+      <tr>
+        <td>Ticks</td>
+        <td>
+          <code>{{ d.ticks.source }}</code>
+          {% if d.ticks.source == 'rest_seed_snapshot' %}
+          <span class="badge badge-warn">not live</span>{% endif %}
+        </td>
+        <td class="small">
+          {{ d.ticks.symbols }} sym · {{ d.ticks.rows }} rows ·
+          newest
+          {% if d.ticks.newest_trade_age_s is not none %}
+            {% if d.ticks.newest_trade_age_s > 900 %}
+            <span class="badge badge-err">{{ '%.0f'|format(d.ticks.newest_trade_age_s / 60) }}m old</span>
+            {% else %}{{ '%.0f'|format(d.ticks.newest_trade_age_s) }}s{% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td class="small muted">{{ d.ticks.detail }}</td>
+      </tr>
+      <tr>
+        <td>Order book</td>
+        <td><code>{{ d.order_book.source }}</code>
+          <span class="badge badge-warn">{{ d.order_book.quality }}</span></td>
+        <td class="small">{{ d.order_book.symbols_cached }} sym</td>
+        <td class="small muted">{{ d.order_book.detail }}</td>
+      </tr>
+      <tr><td>Open interest</td><td><code>{{ d.open_interest.source }}</code></td>
+          <td class="small">{{ d.open_interest.symbols }} sym</td><td></td></tr>
+      <tr><td>Funding</td><td><code>{{ d.funding.source }}</code></td>
+          <td class="small">{{ d.funding.symbols }} sym</td><td></td></tr>
+      <tr><td>Liquidations</td><td><code>{{ d.liquidations.source }}</code></td>
+          <td class="small">{{ d.liquidations.symbols }} sym</td><td></td></tr>
+    </tbody>
+  </table>
+  {% if d.ticks and d.ticks.consumers %}
+  <p class="muted small">
+    Reading the tick store as if it were live:
+    {% for c in d.ticks.consumers %}<code>{{ c }}</code>{% if not loop.last %} · {% endif %}{% endfor %}.
+    Named because the risk is theirs — an absent input rejects loudly, a stale one
+    returns plausible numbers of the right shape.
+  </p>
+  {% endif %}
+</div>
+
+{# ── Primitive census ────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>Structural primitives</h2>
+  <p class="muted small">
+    Read from the producing modules themselves, and rendered whether or not anything
+    is wrong — a detector that is dead behind a passing gate looks exactly like a
+    working one, which is how a primitive with no writer at all survived.
+  </p>
+  <table>
+    <thead><tr><th>Primitive</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for r in (report.primitives or {}).get('rows', []) %}
+      <tr>
+        <td>{{ r.primitive }}</td>
+        <td>
+          <code>{{ r.status }}</code>
+          {% if not r.healthy %}<span class="badge badge-err">no writer</span>{% endif %}
+        </td>
+        <td class="small muted">{{ r.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% set lv = report.levels or {} %}
+  <table class="kv">
+    <tr><th>LevelBook</th><td>
+      {{ lv.level_book.symbols }} symbols · {{ lv.level_book.levels_total }} levels ·
+      oldest refresh
+      {% if lv.level_book.oldest_refresh_age_s is not none %}{{ '%.0f'|format(lv.level_book.oldest_refresh_age_s) }}s{% else %}—{% endif %}
+    </td></tr>
+    <tr><th>Volume profile</th><td>
+      micro {{ lv.volume_profile.micro_symbols }} · macro {{ lv.volume_profile.macro_symbols }} symbols
+    </td></tr>
+  </table>
+</div>
+
+{# ── Series ──────────────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>Candle series</h2>
+  <p class="muted small">
+    Each timeframe aged against <strong>its own</strong> budget — a 4h bar an hour old
+    is healthy and the same age on 1m is not, so one global threshold would report a
+    fault that is not happening. <strong>Undated</strong> is its own column: a series
+    whose bars carry no timestamps cannot be aged at all, and calling that "fresh" is
+    how a dropped <code>open_time</code> field once stayed invisible across restarts.
+  </p>
+  {% set ser = report.series or {} %}
+  <table>
+    <thead>
+      <tr>
+        <th>TF</th><th class="num">Series</th><th class="num">Stale</th>
+        <th class="num">Undated</th><th class="num">Bars</th>
+        <th class="num">Oldest newest-bar</th><th>Stalest</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tf, s in (ser.by_timeframe or {}).items() %}
+      <tr>
+        <td><code>{{ tf }}</code></td>
+        <td class="num">{{ s.series }}</td>
+        <td class="num">{% if s.stale %}<span class="badge badge-warn">{{ s.stale }}</span>{% else %}0{% endif %}</td>
+        <td class="num">{% if s.undated %}<span class="badge badge-err">{{ s.undated }}</span>{% else %}0{% endif %}</td>
+        <td class="num small">{{ s.bars_min }}–{{ s.bars_max }}</td>
+        <td class="num small">{% if s.oldest_newest_bar_age_s is not none %}{{ '%.0f'|format(s.oldest_newest_bar_age_s) }}s{% else %}—{% endif %}
+          <span class="muted">/ {{ '%.0f'|format(s.stale_budget_s) }}s</span></td>
+        <td class="small muted">
+          {% for x in s.stalest_symbols[:3] %}{{ x.symbol }} ({{ '%.0f'|format(x.age_s) }}s){% if not loop.last %}, {% endif %}{% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Sampled {{ ser.symbols_sampled }} of {{ ser.symbols_total }} symbols.
+  </p>
+</div>
+
+{# ── Weight ──────────────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>Binance request weight</h2>
+  <p class="muted small">
+    The live figure is the exchange's own <code>x-mbx-used-weight-1m</code> header,
+    synced into the limiter on every call. It had been parsed and never rendered.
+    The declared table sits beside it deliberately: a disagreement between what we
+    believe a call costs and what the exchange says we have spent is the early
+    symptom of an under-declaration, and the alternative to seeing it here is
+    discovering it as a ban.
+  </p>
+  {% set w = report.weight or {} %}
+  <table class="kv">
+    {% for market in ['futures', 'spot'] %}
+    {% if w.get(market) %}
+    <tr><th>{{ market|capitalize }}</th><td>
+      {{ w[market].used }} / {{ w[market].budget }}
+      {% if w[market].pct is not none %}
+        {% if w[market].pct >= 90 %}<span class="badge badge-err">{{ w[market].pct }}%</span>
+        {% elif w[market].pct >= 70 %}<span class="badge badge-warn">{{ w[market].pct }}%</span>
+        {% else %}<span class="badge badge-ok">{{ w[market].pct }}%</span>{% endif %}
+      {% endif %}
+    </td></tr>
+    {% endif %}
+    {% endfor %}
+  </table>
+  {% if w.declared %}
+  <table>
+    <thead><tr><th>Endpoint</th><th class="num">Declared weight</th><th>Provenance</th><th>Note</th></tr></thead>
+    <tbody>
+      {% for path, row in w.declared.items()|sort %}
+      <tr>
+        <td class="small"><code>{{ path }}</code></td>
+        <td class="num">{% if row.weight == -1 %}<span class="muted">by limit</span>{% else %}{{ row.weight }}{% endif %}</td>
+        <td class="small">
+          {% if row.source.startswith('verified') %}<span class="badge badge-ok">{{ row.source }}</span>
+          {% else %}<span class="badge">{{ row.source }}</span>{% endif %}
+        </td>
+        <td class="small muted">{{ row.note }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    <code>carried</code> means the number was preserved from the call site it was
+    moved out of and is <strong>not thereby confirmed</strong> — those are the first
+    entries to re-check if the live gauge starts disagreeing with the exchange.
+  </p>
+  {% endif %}
+</div>
+
+<p class="muted small">
+  Report schema {{ report.schema }}. Assembled from state the engine already holds:
+  no new vendor calls, no polling, no I/O added by this page.
+</p>
+
+{% endif %}
+
+{% endblock %}
