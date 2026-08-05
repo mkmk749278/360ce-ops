@@ -246,6 +246,63 @@ class TestSlArm:
         rep = build_report(_ledger(rows), [rec])
         assert rep.sl.rows[0].verdict == V_DECIDED
 
+    def test_a_trailed_winner_carries_hit_sl_and_is_still_decidable(self):
+        """``hit_sl`` does not mean "the designed stop was reached".
+
+        ``trade_monitor`` moves ``sig.stop_loss`` in place (BE shift, TP1 park,
+        trail), so a trade that runs and exits on the MOVED stop is recorded
+        ``hit_sl=True`` with a POSITIVE pnl. Real shape, from the 2026-08-05
+        export: MVRTP-8F0B22DA closed **+6.230%** with a wider snapped stop and
+        was refused as ``undecidable_truncated`` — under copy calling it a
+        loser. Its drawdown never reached the arithmetic stop, so a wider stop
+        cannot have been touched and the counterfactual is simply the outcome.
+        """
+        rows = [_row(sl_snapped=96.0, sl_source="swing", sl_shift_pct=1.0)]
+        rec = _rec(pnl_pct=6.23, hit_sl=True, hit_tp=1,
+                   max_favorable_excursion_pct=6.5,
+                   max_adverse_excursion_pct=-0.4)
+        rep = build_report(_ledger(rows), [rec])
+        r = rep.sl.rows[0]
+        assert r.verdict == V_DECIDED
+        assert r.arm_pnl_pct == pytest.approx(6.23)
+        assert r.delta_pct == pytest.approx(0.0)
+
+    def test_a_be_shifted_flat_exit_carries_hit_sl_and_is_still_decidable(self):
+        """The same shape at zero. MVRTP-AA9DA92D and MVRTP-DD6ED9BF both
+        closed **0.000%** with ``hit_sl`` set — a BE-shifted stop, not the
+        designed one — and both were refused."""
+        rows = [_row(sl_snapped=96.0, sl_shift_pct=1.0)]
+        rec = _rec(pnl_pct=0.0, hit_sl=True,
+                   max_favorable_excursion_pct=1.2,
+                   max_adverse_excursion_pct=-0.9)
+        rep = build_report(_ledger(rows), [rec])
+        assert rep.sl.rows[0].verdict == V_DECIDED
+
+    def test_a_trailed_winner_never_books_a_fabricated_loss(self):
+        """The tighter branch had the same flag in it, pointing the other way.
+
+        ``hit_sl`` on a trailed winner would have taken the "it was going to
+        lose anyway" branch and booked ``-snap_pct`` — inventing a loss on a
+        profitable trade rather than refusing. Ordering is genuinely unknown
+        here, so the row is refused, not scored.
+        """
+        rows = [_row(sl_snapped=98.0, sl_shift_pct=-1.0)]
+        rec = _rec(pnl_pct=4.0, hit_sl=True, hit_tp=1,
+                   max_favorable_excursion_pct=4.5,
+                   max_adverse_excursion_pct=-2.5)
+        rep = build_report(_ledger(rows), [rec])
+        r = rep.sl.rows[0]
+        assert r.verdict == V_UNDECIDABLE_ORDER
+        assert r.arm_pnl_pct is None
+
+    def test_a_real_stop_out_is_still_truncated_without_the_flag(self):
+        """The refusal must survive on MAE alone — the bucket exists for a
+        reason and this fix must not empty it."""
+        rows = [_row(sl_snapped=96.0, sl_shift_pct=1.0)]
+        rec = _rec(pnl_pct=-3.0, hit_sl=False, max_adverse_excursion_pct=-3.1)
+        rep = build_report(_ledger(rows), [rec])
+        assert rep.sl.rows[0].verdict == V_UNDECIDABLE_TRUNC
+
 
 # ---------------------------------------------------------------------------
 # The properties that stop a bounded measurement looking complete

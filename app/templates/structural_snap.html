@@ -307,11 +307,14 @@
      report.sl,
      'SL arm — partly decidable, and the gap is biased',
      'The stop can move either way inside ±30% of the designed risk, and two cases
-      are simply not in the record: a WIDER stop on a trade that stopped out (would
-      price have come back? the walk ended there) and a TIGHTER stop on a winner
-      (did the drawdown come before or after the target? MFE and MAE carry no
-      ordering). They are refused under separate names because they remove opposite
-      ends of the distribution — read the decidable fraction before the Δ.') }}
+      are simply not in the record: a WIDER stop on a trade whose drawdown reached
+      its designed stop (would price have come back? the walk ended there) and a
+      TIGHTER stop on a winner (did the drawdown come before or after the target?
+      MFE and MAE carry no ordering). They are refused under separate names because
+      they remove opposite ends of the distribution — read the decidable fraction
+      before the Δ. Both questions are asked of MAE, never of the record’s hit_sl
+      flag: the monitor moves the stop in place, so a trailed or BE-shifted winner
+      carries hit_sl beside a profit.') }}
 
 <div class="card">
   <h2>Why there is no combined number</h2>
