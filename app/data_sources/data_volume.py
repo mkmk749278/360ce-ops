@@ -72,6 +72,8 @@ ENTRY_FEATURES_FILE = f"entry_features_v{ENTRY_FEATURES_VERSION}.json"
 #: of its own and inherits the closed-signal record's correctness.
 STRUCTURAL_SNAP_VERSION = 1
 STRUCTURAL_SNAP_FILE = f"structural_snap_v{STRUCTURAL_SNAP_VERSION}.json"
+STRUCTURAL_VETO_VERSION = 1
+STRUCTURAL_VETO_FILE = f"structural_veto_v{STRUCTURAL_VETO_VERSION}.json"
 
 _SAR_LIVE_RE = re.compile(r"^sar_live_arms_v(\d+)\.json$")
 
@@ -131,6 +133,30 @@ class DataVolumeReader:
         ``signal_id``.
         """
         return self._load(STRUCTURAL_SNAP_FILE)
+
+    def structural_veto(self) -> Any:
+        """Structural-veto stamps (engine ``src/structural_veto.py``, Phase 4).
+
+        Shape::
+
+            {"schema": 1, "written_at": <epoch>, "counters": {...},
+             "retention": {...}, "rows": [<stamp>, ...]}
+
+        One row per enqueued signal: how far the nearest **opposing** level sits
+        from entry (ATR and percent), whether it falls between entry and TP1,
+        that level's own score and age, and where price sits against the value
+        area.
+
+        **No outcome fields.** They join from :meth:`signal_performance` on
+        ``signal_id``, so this lane inherits the closed-signal record's
+        correctness instead of growing a resolver of its own.
+
+        ``retention`` rides with the data because the ring is capped: it names
+        `evicted_pending` (designed rotation) apart from `evicted_delivered`
+        (the retention policy losing a confirmed row), and those are different
+        events with different fixes.
+        """
+        return self._load(STRUCTURAL_VETO_FILE)
 
     def invalidation_records(self) -> Any:
         return self._load("invalidation_records.json")
