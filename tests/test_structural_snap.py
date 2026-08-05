@@ -933,3 +933,46 @@ class TestLiveRender:
         assert "unrealized_pct" in head and "snap_would_have_exited" in head
         # And the realized export has not grown an unrealized column.
         assert "unrealized" not in closed.text.splitlines()[0]
+
+
+class TestConcentrationDisclosure:
+    """A setup persists across scans, so a row count is not an evidence count.
+
+    Owner export 2026-08-05: 51 rows, 6 distinct setups, EPICUSDT SHORT 30 of
+    them — every one with the identical shift_pct, i.e. one level counted thirty
+    times. A verdict computed over that ledger is a fact about one symbol.
+    """
+
+    def _rows(self, spec):
+        out = []
+        for (sym, d), n in spec.items():
+            for i in range(n):
+                out.append({
+                    "signal_id": f"{sym}-{i}", "symbol": sym, "direction": d,
+                    "setup_class": "MOVER_TREND_PULLBACK", "stamped_at": 1.0,
+                })
+        return out
+
+    def test_distinct_setups_are_counted_apart_from_rows(self):
+        from app.data_sources.structural_snap import _concentration
+
+        c = _concentration(self._rows({("EPICUSDT", "SHORT"): 30,
+                                       ("TUTUSDT", "LONG"): 12,
+                                       ("HEIUSDT", "LONG"): 5}))
+        assert c["n_setups"] == 3
+        assert c["top_setup_share"] == pytest.approx(30 / 47)
+        assert "EPICUSDT" in c["top_setup"]
+
+    def test_an_empty_ledger_reports_zero_rather_than_dividing(self):
+        from app.data_sources.structural_snap import _concentration
+
+        c = _concentration([])
+        assert c == {"n_setups": 0, "top_setup_share": 0.0, "top_setup": ""}
+
+    def test_one_row_per_setup_is_not_flagged(self):
+        from app.data_sources.structural_snap import _concentration
+
+        c = _concentration(self._rows({("A", "LONG"): 1, ("B", "LONG"): 1,
+                                       ("C", "LONG"): 1, ("D", "LONG"): 1}))
+        assert c["n_setups"] == 4
+        assert c["top_setup_share"] == pytest.approx(0.25)

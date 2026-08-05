@@ -186,6 +186,19 @@ class SnapReport:
     sl: ArmSummary
     #: Rows in the ledger, before any join.
     n_rows: int = 0
+    #: Distinct (symbol, direction, setup) setups behind those rows.
+    #:
+    #: One setup persists across many scans, so a row count is NOT an evidence
+    #: count. Owner export 2026-08-05: 51 rows, **6 distinct setups**, EPICUSDT
+    #: SHORT alone 30 of them (59%) — every one carrying the identical
+    #: `shift_pct`, i.e. the same level and the same geometry counted thirty
+    #: times. Disclose the concentration; do not silently average it.
+    n_setups: int = 0
+    #: The most concentrated setup's share of the rows, 0-1. On screen whenever
+    #: it is material, because a verdict computed over a ledger this skewed is a
+    #: fact about one symbol rather than about the mechanism.
+    top_setup_share: float = 0.0
+    top_setup: str = ""
     #: Rows carrying a measurement (``refused`` empty).
     n_measured: int = 0
     #: Why the rest carry none, by named cause.
@@ -389,6 +402,33 @@ def _sl_arm(row: dict, rec: Optional[dict]) -> ArmRow:
     return base
 
 
+def _concentration(rows: list[dict]) -> dict:
+    """Distinct setups behind a row list, and the largest one's share.
+
+    A setup persists across scans, so without a per-move throttle one move
+    contributes a row per scan and every rate computed on the ledger is
+    weighted by how long a setup lingered rather than by how often it occurred.
+    The engine now throttles (`structural_snap.REDETECT_COOLDOWN_S`); this stays
+    because a throttle can regress and a row count alone cannot show it.
+    """
+    if not rows:
+        return {"n_setups": 0, "top_setup_share": 0.0, "top_setup": ""}
+    counts: dict[str, int] = {}
+    for r in rows:
+        key = (
+            f"{r.get('symbol') or '?'} "
+            f"{r.get('direction') or '?'} "
+            f"{r.get('setup_class') or '?'}"
+        )
+        counts[key] = counts.get(key, 0) + 1
+    top, n = max(counts.items(), key=lambda kv: kv[1])
+    return {
+        "n_setups": len(counts),
+        "top_setup_share": n / len(rows),
+        "top_setup": top,
+    }
+
+
 def build_report(
     ledger: Any,
     performance: Any,
@@ -434,6 +474,7 @@ def build_report(
         tp1=ArmSummary("tp1"),
         sl=ArmSummary("sl"),
         n_rows=len(rows),
+        **_concentration(rows),
         evicted=int(ledger.get("evicted") or 0),
         max_rows=ledger.get("max_rows"),
         spec=ledger.get("spec") if isinstance(ledger.get("spec"), dict) else {},
