@@ -62,12 +62,19 @@ from app.data_sources.structural_snap import (
     V_UNCHANGED,
     V_UNDECIDABLE_ORDER,
     V_UNDECIDABLE_TRUNC,
+    build_live,
     build_report,
     setups_present,
 )
 from app.reports import csv_response
 
 router = APIRouter()
+
+#: How much of the engine's signal feed to ask for when identifying open rows.
+#: The feed is bounded, so absence from it is **absence of evidence**, never
+#: proof the router dropped a row — the page says that rather than inventing a
+#: cause for a blank.
+LIVE_FEED_LIMIT = 500
 
 #: Plain-language captions for each verdict. A status with no cause gets a
 #: caption invented for it, and this page has to say which of "not yet",
@@ -104,20 +111,63 @@ VERDICT_COPY: dict[str, str] = {
 }
 
 
-def _load(request: Request, setup: str) -> tuple[Any, Optional[str], list]:
+def _load(request: Request, setup: str) -> tuple[Any, Optional[str], list, Any]:
     dv = request.app.state.data_volume
     try:
         ledger = dv.structural_snap()
         perf = dv.signal_performance()
     except Exception as exc:  # noqa: BLE001
-        return None, f"engine data volume unavailable: {exc}", []
+        return None, f"engine data volume unavailable: {exc}", [], None
     options = setups_present(ledger)
-    return build_report(ledger, perf, setup_class=setup), None, options
+    return build_report(ledger, perf, setup_class=setup), None, options, ledger
+
+
+async def _open_signals(request: Request) -> Optional[list]:
+    """The engine's own open book.
+
+    Returns ``None`` — not ``[]`` — when the feed cannot be read, because "the
+    engine says nothing is open" and "we could not ask" are different states and
+    only one of them is a fault. ``build_live`` renders the second as a named
+    cause rather than as an empty book.
+    """
+    try:
+        payload = await request.app.state.engine_api.signals(limit=LIVE_FEED_LIMIT)
+    except Exception:  # noqa: BLE001
+        return None
+    entries = payload
+    if isinstance(payload, dict):
+        for key in ("signals", "items", "data", "results"):
+            if isinstance(payload.get(key), list):
+                entries = payload[key]
+                break
+    if not isinstance(entries, list):
+        return None
+    # Open/closed truth is decided in ONE place — `structural_snap._is_open`,
+    # which reads the engine's own `is_open` stamp. Filtering here as well would
+    # be two readers of one fact, and this route would be the copy that drifts.
+    return entries
+
+
+async def _live_prices(request: Request) -> dict:
+    """One request for the whole futures book, TTL-cached.
+
+    Marking N open rows must cost one call, never N — a page whose cost scales
+    with the number of running trades is the hot-path shape the cost rules
+    forbid. A failure blanks the mark columns and is counted; it never breaks
+    the page, and it never turns an unmarked row into a marked one.
+    """
+    try:
+        return await request.app.state.binance_klines.fetch_all_prices()
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 @router.get("/signals/structural-snap")
 async def structural_snap_page(request: Request, setup: str = Query("")):
-    report, error, setup_options = _load(request, setup)
+    report, error, setup_options, ledger = _load(request, setup)
+    open_signals = await _open_signals(request)
+    prices = await _live_prices(request)
+    live = build_live(ledger, open_signals, prices, setup_class=setup)
     return request.app.state.templates.TemplateResponse(
         "structural_snap.html",
         {
@@ -134,6 +184,10 @@ async def structural_snap_page(request: Request, setup: str = Query("")):
             # describes the whole ledger rather than only the chosen option.
             "setup_options": setup_options,
             "verdict_copy": VERDICT_COPY,
+            # The open book. Separate object, never merged into the arms: an
+            # unrealized number inside a realized average is how a running
+            # trade gets read as a finished one.
+            "live": live,
             # Row cap is a RENDER bound and is applied after filtering, never
             # inside the reducer — truncating first starves the rarest rows
             # hardest, which is #97.
@@ -142,9 +196,47 @@ async def structural_snap_page(request: Request, setup: str = Query("")):
     )
 
 
+@router.get("/signals/structural-snap/live.csv")
+async def structural_snap_live_export(request: Request, setup: str = Query("")):
+    """The open book, uncapped.
+
+    Its own export rather than extra columns on the closed one: these rows have
+    no outcome and their numbers are unrealized, so putting them in the same
+    file as the realized deltas is how a spreadsheet averages the two together.
+    """
+    _report, _error, _options, ledger = _load(request, setup)
+    open_signals = await _open_signals(request)
+    prices = await _live_prices(request)
+    live = build_live(ledger, open_signals, prices, setup_class=setup)
+    cols = [
+        "signal_id", "symbol", "setup_class", "direction", "tf",
+        "engine_status", "entry", "current_price", "unrealized_pct",
+        "engine_sl", "engine_tp1", "room_to_sl_pct", "room_to_tp1_pct",
+        "sl_snapped", "tp1_snapped",
+        "room_to_snapped_sl_pct", "room_to_snapped_tp1_pct",
+        "sl_source", "tp1_source",
+        "shipped_crossed", "snapped_crossed",
+        "geometry_moved", "snap_would_have_exited",
+    ]
+    rows = [
+        [
+            r.signal_id, r.symbol, r.setup_class, r.direction, r.tf,
+            r.status, r.entry, r.current_price, r.unrealized_pct,
+            r.engine_sl, r.engine_tp1, r.room_to_sl_pct, r.room_to_tp1_pct,
+            r.sl_snapped, r.tp1_snapped,
+            r.room_to_snapped_sl_pct, r.room_to_snapped_tp1_pct,
+            r.sl_source, r.tp1_source,
+            r.shipped_crossed, r.snapped_crossed,
+            r.geometry_moved, r.snap_would_have_exited,
+        ]
+        for r in live.rows
+    ]
+    return csv_response("structural_snap_live", cols, rows)
+
+
 @router.get("/signals/structural-snap/export.csv")
 async def structural_snap_export(request: Request, setup: str = Query("")):
-    report, _error, _options = _load(request, setup)
+    report, _error, _options, _ledger = _load(request, setup)
     cols = [
         "signal_id", "symbol", "setup_class", "direction", "tf",
         "arm", "verdict", "level_source", "shift_pct",

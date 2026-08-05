@@ -31,6 +31,7 @@ from app.data_sources.structural_snap import (  # noqa: E402
     V_UNCHANGED,
     V_UNDECIDABLE_ORDER,
     V_UNDECIDABLE_TRUNC,
+    build_live,
     build_report,
     setups_present,
 )
@@ -462,7 +463,7 @@ class TestRender:
     """
 
     @contextmanager
-    def _client(self, rows, recs):
+    def _client(self, rows, recs, open_signals=None, prices=None):
         """Driven through the real app with lifespan running.
 
         ``TestClient`` must be entered as a context manager or the startup
@@ -494,6 +495,29 @@ class TestRender:
                 follow_redirects=False,
             )
             app.state.data_volume = _DV()
+
+            # The live panel calls the engine feed and the whole-book price
+            # request. Stubbed for the same reason the data volume is: an
+            # unstubbed test would reach the network, and a network failure
+            # would render the "no live view" branch while looking like a pass.
+            class _API:
+                async def signals(self, **_kw):
+                    return list(open_signals or [])
+
+                async def aclose(self):
+                    """The lifespan closes every client on shutdown. A stub that
+                    omits it fails teardown, not the assertion — drive the real
+                    collaborator's lifecycle, not just its happy path."""
+
+            class _Klines:
+                async def fetch_all_prices(self, **_kw):
+                    return dict(prices or {})
+
+                async def aclose(self):
+                    pass
+
+            app.state.engine_api = _API()
+            app.state.binance_klines = _Klines()
             yield client
 
     def test_the_arms_are_positionally_aligned(self):
@@ -721,3 +745,191 @@ def test_the_per_setup_census_is_sorted_in_python_not_jinja():
         "Jinja's dictsort has no `attribute` parameter — this raises at render "
         "time, and only once real rows make the block reachable"
     )
+
+
+# ---------------------------------------------------------------------------
+# The live view — the half a replay cannot show
+# ---------------------------------------------------------------------------
+
+def _live(**kw):
+    """The engine's own open-signal shape, as `/api/signals` returns it."""
+    base = {
+        "id": "S1",
+        "symbol": "TESTUSDT",
+        "is_open": True,
+        "status": "ACTIVE",
+        "sl": 97.0,
+        "tp1": 103.0,
+    }
+    base.update(kw)
+    return base
+
+
+class TestLiveView:
+    def test_only_rows_the_engine_reports_open_are_marked(self):
+        """Stamping happens at enqueue and most rows never deliver, so
+        "not closed" is not "running". The open set is the ENGINE's, never
+        inferred from the price feed or from the absence of an outcome."""
+        rows = [_row(signal_id="A"), _row(signal_id="B"), _row(signal_id="C")]
+        rep = build_live(_ledger(rows), [_live(id="B")], {"TESTUSDT": 101.0})
+        assert rep.n_stamped == 3
+        assert rep.n_live == 1
+        assert [r.signal_id for r in rep.rows] == ["B"]
+
+    def test_an_unreadable_engine_feed_is_a_named_cause_not_an_empty_book(self):
+        """"Nothing is open" and "we could not ask" are different states and
+        only one is a fault. Rendering the second as the first is this repo's
+        own blank-needs-a-cause rule, one page over."""
+        rep = build_live(_ledger([_row()]), None, {})
+        assert rep.error
+        assert rep.n_live == 0
+        assert rep.rows == []
+
+    def test_both_denominators_are_published(self):
+        """Open-per-the-engine and marked agree while the lane is healthy and
+        diverge exactly when it is not, so neither is reported alone."""
+        rows = [_row(signal_id="A"), _row(signal_id="B", symbol="NOPRICEUSDT")]
+        rep = build_live(
+            _ledger(rows),
+            [_live(id="A"), _live(id="B", symbol="NOPRICEUSDT")],
+            {"TESTUSDT": 101.0},
+        )
+        assert rep.n_live == 2
+        assert rep.n_marked == 1
+        assert rep.unmarked == 1
+        unmarked = [r for r in rep.rows if not r.marked]
+        assert len(unmarked) == 1 and unmarked[0].unrealized_pct is None
+
+    def test_rooms_read_the_engines_current_levels_not_the_stamped_ones(self):
+        """`trade_monitor` rewrites `sig.stop_loss` in place, so a room measured
+        against the stamped stop is a room to a stop nobody is working. Same
+        defect class as the SL arm's `hit_sl` read."""
+        rows = [_row(sl_arith=97.0)]
+        rep = build_live(
+            _ledger(rows),
+            [_live(sl=100.5)],          # trailed above entry
+            {"TESTUSDT": 102.0},
+        )
+        r = rep.rows[0]
+        assert r.geometry_moved is True
+        assert rep.n_geometry_moved == 1
+        # 102 -> 100.5 is 1.47% of the mark, not the 5% the stamp implies.
+        assert r.room_to_sl_pct == pytest.approx((102.0 - 100.5) / 102.0 * 100.0)
+
+    def test_a_moved_stop_suppresses_the_would_have_exited_claim(self):
+        """The claim compares snapped against shipped. Once the monitor has
+        moved the stop, "shipped" is a level nobody stamped and the comparison
+        is not the one this lane set up — so it is withheld and counted, never
+        made against a stop nobody chose."""
+        rows = [_row(sl_arith=97.0, sl_snapped=101.5)]
+        rep = build_live(
+            _ledger(rows), [_live(sl=100.5)], {"TESTUSDT": 101.0},
+        )
+        r = rep.rows[0]
+        assert r.snapped_crossed == "SL"     # the fact is still recorded
+        assert r.snap_would_have_exited == ""  # the claim is not made
+        assert rep.n_would_exit == 0
+
+    def test_the_snap_exiting_first_is_reported_when_geometry_is_intact(self):
+        """The live form of this page's whole question: a snapped level crossed
+        while the shipped one holds. No replay can show it, because a replay
+        only speaks once the row is closed."""
+        rows = [_row(sl_arith=97.0, sl_snapped=99.5)]
+        rep = build_live(
+            _ledger(rows), [_live(sl=97.0)], {"TESTUSDT": 99.0},
+        )
+        r = rep.rows[0]
+        assert r.snapped_crossed == "SL" and r.shipped_crossed == ""
+        assert r.snap_would_have_exited == "SL"
+        assert rep.n_would_exit == 1
+
+    def test_a_short_is_marked_in_its_own_direction(self):
+        """A raw price move scores every SHORT backwards — the error that made
+        two entry features look like noise for a schema version."""
+        rows = [_row(direction="SHORT", entry=100.0)]
+        rep = build_live(_ledger(rows), [_live()], {"TESTUSDT": 98.0})
+        assert rep.rows[0].unrealized_pct == pytest.approx(2.0)
+
+    def test_unrealized_numbers_never_reach_a_realized_figure(self):
+        """An unrealized number inside a realized average is how a running
+        trade gets read as a finished one. The arms are built from the closed
+        record alone, so a live row can only ever be `no_outcome` there."""
+        rows = [_row(signal_id="A", tp1_snapped=101.0, tp1_shift_pct=-2.0)]
+        ledger = _ledger(rows)
+        rep = build_report(ledger, [])           # nothing closed
+        live = build_live(ledger, [_live(id="A")], {"TESTUSDT": 105.0})
+        assert live.rows[0].unrealized_pct is not None
+        assert rep.tp1.n_scored == 0
+        assert rep.tp1.avg_delta_pct is None
+        assert rep.tp1.rows[0].verdict == V_NO_OUTCOME
+
+    def test_a_closed_signal_is_not_in_the_open_book(self):
+        """The engine's `is_open` stamp is the truth, not the status name."""
+        rows = [_row(signal_id="A")]
+        rep = build_live(
+            _ledger(rows), [_live(id="A", is_open=False, status="SL_HIT")],
+            {"TESTUSDT": 101.0},
+        )
+        assert rep.n_live == 0
+
+    def test_the_setup_filter_applies_before_every_count(self):
+        """A panel measured over the whole ledger above a filtered table is not
+        a summary of anything the reader is looking at (#90)."""
+        rows = [
+            _row(signal_id="A", setup_class="MOVER_TREND_PULLBACK"),
+            _row(signal_id="B", setup_class="TREND_PULLBACK_EMA"),
+        ]
+        rep = build_live(
+            _ledger(rows), [_live(id="A"), _live(id="B")],
+            {"TESTUSDT": 101.0}, setup_class="TREND_PULLBACK_EMA",
+        )
+        assert rep.n_stamped == 1 and rep.n_live == 1
+        assert rep.rows[0].signal_id == "B"
+
+
+class TestLiveRender:
+    def test_the_open_panel_renders_with_live_rows(self):
+        rows = [_row(signal_id="A", sl_arith=97.0, sl_snapped=99.5)]
+        with TestRender()._client(
+            rows, [], open_signals=[_live(id="A")], prices={"TESTUSDT": 99.0},
+        ) as client:
+            resp = client.get("/signals/structural-snap")
+        assert resp.status_code == 200
+        body = resp.text
+        assert "Open right now" in body
+        assert "LIVE" in body
+        # The claim the panel exists to make.
+        assert "snap exits SL" in body
+        # Both clocks named, so neither is read as the other.
+        assert "Two clocks" in body
+
+    def test_an_unreachable_engine_renders_a_cause_not_a_quiet_book(self):
+        class _API:
+            async def signals(self, **_kw):
+                raise RuntimeError("engine down")
+
+            async def aclose(self):
+                pass
+
+        rows = [_row(signal_id="A")]
+        with TestRender()._client(rows, []) as client:
+            client.app.state.engine_api = _API()
+            resp = client.get("/signals/structural-snap")
+        assert resp.status_code == 200
+        assert "NO LIVE VIEW" in resp.text
+
+    def test_the_live_csv_is_its_own_export(self):
+        """Its own file, not extra columns on the closed one: these rows have no
+        outcome and their numbers are unrealized, and a spreadsheet is exactly
+        where the two get averaged together."""
+        rows = [_row(signal_id="A")]
+        with TestRender()._client(
+            rows, [], open_signals=[_live(id="A")], prices={"TESTUSDT": 101.0},
+        ) as client:
+            resp = client.get("/signals/structural-snap/live.csv")
+            closed = client.get("/signals/structural-snap/export.csv")
+        assert resp.status_code == 200
+        head = resp.text.splitlines()[0]
+        assert "unrealized_pct" in head and "snap_would_have_exited" in head
+        # And the realized export has not grown an unrealized column.
+        assert "unrealized" not in closed.text.splitlines()[0]
