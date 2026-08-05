@@ -159,6 +159,12 @@ def _f(value: Any) -> Optional[float]:
         return None
 
 
+#: The engine's `price_action_lane.DARK_GATE`. Mirrored deliberately and pinned
+#: by a test that reads the engine constant, because an unpinned mirror is what
+#: drifted MEASUREMENT_SUFFIXES for a week.
+LANE_DARK_GATE = "price_action_lane"
+
+
 def reduce_rows(payload: Any) -> list[dict]:
     """Rows newest first. A bad or missing payload yields [] rather than raising —
     the page then says the file is unavailable, which is a different statement
@@ -169,6 +175,33 @@ def reduce_rows(payload: Any) -> list[dict]:
     if not isinstance(rows, list):
         return []
     out = [r for r in rows if isinstance(r, dict)]
+    # Phase 5 rows share this ledger for its resolver and are NOT the same kind
+    # of thing. Every row on this page is a candidate the scanner was willing to
+    # send with one gate loosened — it cleared the full scoring engine, the MTF
+    # policy, the confidence floor and every other gate. A price-action lane row
+    # has been through NONE of that; it never entered the scanner's chain.
+    # Pooling them would make this page's own first sentence false, and it is
+    # how 15 rows disappear into 2,418. They are read on /signals/price-action.
+    out = [r for r in out if str(r.get("dark_gate") or "") != LANE_DARK_GATE]
+    out.sort(key=lambda r: _f(r.get("emitted_at")) or 0.0, reverse=True)
+    return out
+
+
+def reduce_lane_rows(payload: Any) -> list[dict]:
+    """The complement: only the price-action lane's rows.
+
+    One reader, one writer — the two populations are split here rather than in
+    two places that could drift apart.
+    """
+    if not isinstance(payload, dict):
+        return []
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return []
+    out = [
+        r for r in rows
+        if isinstance(r, dict) and str(r.get("dark_gate") or "") == LANE_DARK_GATE
+    ]
     out.sort(key=lambda r: _f(r.get("emitted_at")) or 0.0, reverse=True)
     return out
 

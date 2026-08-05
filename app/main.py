@@ -63,6 +63,7 @@ from app.routes import (
     users,
     entry_features,
     structural_snap,
+    price_action,
     structural_veto,
 )
 
@@ -130,6 +131,8 @@ app.include_router(entry_features.router)
 app.include_router(structural_snap.router)
 # Before signal_detail, same reason: /signals/{signal_id} swallows any literal.
 app.include_router(structural_veto.router)
+# Before signal_detail, same reason: /signals/{signal_id} swallows any literal.
+app.include_router(price_action.router)
 app.include_router(signal_detail.router)
 app.include_router(pairs.router)
 app.include_router(diag.router)
