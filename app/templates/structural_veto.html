@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Structural veto — is there a level in the way?</h1>
+
+{% if report.error %}
+<div class="card">
+  <p class="small"><span class="badge badge-warn">UNREADABLE</span> {{ report.error }}</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <p class="small">
+    {% if report.mode == 'enforce' %}
+    <span class="badge badge-warn">ENFORCING</span>
+    The <code>target_behind_level</code> rule is live on at least one path and
+    can cost a candidate its emission.
+    {% else %}
+    <span class="badge">MEASURING ONLY</span>
+    Nothing on this page is applied. Every row below was enqueued regardless.
+    {% endif %}
+  </p>
+  <p class="muted small">
+    Phase 4 of the price-action program, and the application with leverage:
+    structurally-<em>triggered</em> paths are <strong>0.62%</strong> of the
+    enqueued book and none of them delivered, so a standalone structural signal
+    takes weeks to reach a readable sample. A <strong>veto</strong> needs no new
+    signal at all — it is measurable against ~97% of the book from the day it
+    ships, and its answer is the precondition for the standalone lane being worth
+    building.
+  </p>
+  <p class="muted small">
+    "Opposing" is signed toward the trade throughout: resistance <strong>above</strong>
+    entry for a long, support <strong>below</strong> for a short. A directional
+    feature that is not signed toward the trade scores half the book backwards,
+    and the book is ~50/50 by side — so the error would not show as an empty
+    column, it would just make the feature look like noise.
+  </p>
+</div>
+
+{# ── population ───────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>Population</h2>
+  <table class="kv">
+    <tr><th>Stamped rows</th><td>
+      {{ report.n_rows }}{% if setup %} <span class="muted small">({{ setup }})</span>{% endif %}
+    </td></tr>
+    <tr><th>Joined to an outcome</th><td>
+      {{ report.n_joined }}
+      <span class="muted small">
+        a stamped row joins only once it has DELIVERED and closed — every figure
+        below is measured on these, never on the stamps
+      </span>
+    </td></tr>
+    <tr><th>Delivered book average</th><td>
+      {% if report.baseline.avg_pnl is not none %}
+      {{ '%+.3f'|format(report.baseline.avg_pnl) }}%
+      · {{ '%.0f'|format(report.baseline.win_rate) }}% win
+      ({{ report.baseline.wins }}W/{{ report.baseline.n - report.baseline.wins }}L)
+      {% else %}—{% endif %}
+      <span class="muted small">
+        PnL % leads and nothing on this page divides by a stop: dispatch sizes at
+        a fixed notional, so R equalises nothing
+      </span>
+    </td></tr>
+    {% if report.retention %}
+    <tr><th>Retention</th><td class="small">
+      {{ report.retention.get('n_delivered', 0) }} delivered held ·
+      {{ report.retention.get('n_pending', 0) }} pending ·
+      {{ report.retention.get('evicted_pending', 0) }} rotated out
+      {% if report.retention.get('evicted_delivered', 0) %}
+      · <span class="badge badge-err">{{ report.retention['evicted_delivered'] }} DELIVERED ROWS LOST</span>
+      {% endif %}
+      <span class="muted small">
+        a delivered row can never be evicted by a pending one (Phase 6). The two
+        eviction counts are never pooled — one is designed rotation, the other is
+        the retention policy losing exactly the population it exists to keep
+      </span>
+    </td></tr>
+    {% endif %}
+  </table>
+
+  {% if report.refusal_counts %}
+  <h3 class="small">Refusals — named, never pooled into "no data"</h3>
+  <table>
+    <thead><tr><th>Reason</th><th>Rows</th><th>What it means</th></tr></thead>
+    <tbody>
+      {% for k, v in report.refusal_counts.items()|sort(attribute='1', reverse=true) %}
+      <tr>
+        <td><code>{{ k }}</code></td><td>{{ v }}</td>
+        <td class="small muted">
+          {% if k == 'no_levels' %}
+          the LevelBook had nothing readable for this symbol — a data fault
+          {% elif k == 'no_opposing' %}
+          the book was populated and <strong>nothing sits ahead of the trade</strong>.
+          Not a fault: this is the finding, and pooling it with an empty book
+          would report a fault that is not happening
+          {% elif k == 'no_value_area' %}
+          no volume profile for this symbol yet
+          {% elif k == 'no_geometry' %}
+          entry unusable
+          {% elif k == 'no_atr' %}
+          ATR absent — the percent column is still computed
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+{# ── the splits ───────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>What each rule would have done</h2>
+  <p class="muted small">
+    <strong>{{ report.cells_drawn }} cells drawn.</strong> That number is on
+    screen because "best of N" is not a fact about the winner until N is: the top
+    row of a long table beats a coin flip by construction.
+    <code>FAILED_AUCTION_RECLAIM</code> read +0.846R on <em>three</em> rows —
+    bootstrap CI [−1.00, +2.00] — and a promotion was requested within the day.
+  </p>
+  <p class="muted small">
+    <strong>Read <code>n</code> and <code>kept</code> before Δ.</strong> A rule
+    keeping 95% of the book has not been tested whatever its Δ says.
+    <strong>"Would remove" colours are inverted</strong> — it is the performance
+    of the rows the rule would have <em>dropped</em>, so negative there is the
+    rule looking right.
+  </p>
+  <table>
+    <thead><tr>
+      <th>Rule</th><th>n scored</th><th>kept</th><th>unknown</th>
+      <th>Kept avg</th><th>Would remove</th><th>Δ vs its own baseline</th>
+    </tr></thead>
+    <tbody>
+      {% for s in report.splits %}
+      <tr>
+        <td><code>{{ s.name }}</code>
+          {% if s.name == 'target_behind_level' %}
+          <span class="badge">enforceable</span>
+          {% endif %}
+        </td>
+        <td>{{ s.n_scored }}</td>
+        <td>
+          {% if s.kept_frac is not none %}{{ '%.0f'|format(s.kept_frac * 100) }}%
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {{ s.unknown }}
+          {% if s.unknown_frac is not none and s.unknown_frac > 0.5 %}
+          <span class="badge badge-warn">blind on {{ '%.0f'|format(s.unknown_frac * 100) }}%</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if s.keep.avg_pnl is not none %}
+          {{ '%+.3f'|format(s.keep.avg_pnl) }}%
+          <span class="muted small">n={{ s.keep.n }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if s.drop.avg_pnl is not none %}
+          <span class="{{ 'good' if s.drop.avg_pnl < 0 else 'bad' }}">
+            {{ '%+.3f'|format(s.drop.avg_pnl) }}%</span>
+          <span class="muted small">n={{ s.drop.n }}</span>
+          {% else %}—{% endif %}
+        </td>
+        <td>
+          {% if s.delta is not none %}{{ '%+.3f'|format(s.delta) }}%
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      <tr><td colspan="7" class="small muted">{{ s.detail }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Three buckets, never two: <code>keep</code> / <code>drop</code> /
+    <strong><code>unknown</code></strong>. Folding rows whose feature never
+    computed into <code>keep</code> is how a candidate rule takes credit for rows
+    it never filtered. Δ is measured against the baseline
+    <strong>on the rows that split scored</strong>, never over the whole ledger —
+    a summary computed on a different population than the row beside it is not a
+    summary of anything you are looking at.
+  </p>
+</div>
+
+{% if report.setups %}
+<div class="card">
+  <h2>Paths</h2>
+  <p class="small">
+    <a href="/signals/structural-veto">all</a>
+    {% for name, n in report.setups %}
+    · <a href="/signals/structural-veto?setup={{ name }}">{{ name }}</a>
+      <span class="muted small">{{ n }}</span>
+    {% endfor %}
+  </p>
+  <p class="muted small">
+    Every count above is recomputed with the filter applied, so a panel never
+    describes a population the table beside it is not showing.
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}
