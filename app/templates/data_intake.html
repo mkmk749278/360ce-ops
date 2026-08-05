@@ -302,6 +302,172 @@
 </div>
 {% endif %}
 
+{# ── Depth book (Phase 2c) ───────────────────────────────────────────────── #}
+{% set db = (report.derived or {}).depth or {} %}
+{% if db.present %}
+<div class="card">
+  <h2>Order-book depth (@depth{{ db.levels }}@{{ db.speed_ms }}ms)</h2>
+
+  {# The handover state leads, before any health number. A healthy depth feed
+     rendered without it reads as though the book were in use — and while the
+     effect flag is off, four consumers are still reading one quote. #}
+  <p class="small">
+    {% if db.live_for_consumers %}
+    <span class="badge badge-warn">LIVE FOR CONSUMERS</span>
+    The OBI execution gate, <code>book_imbalance</code>, the WHALE OBI check and
+    the AI predictor are reading <strong>this book</strong>.
+    {% else %}
+    <span class="badge">MEASURING ONLY</span>
+    Those four consumers are still reading the <strong>one-level bookTicker
+    snapshot</strong> in the table above. Nothing on this card affects a signal.
+    {% endif %}
+    {% if not db.measurement_enabled %}
+    <span class="badge badge-err">STREAM DISABLED</span>
+    {% endif %}
+  </p>
+
+  <p class="muted small">
+    Phase 2c — the other half of layer 4. aggTrade above is executed
+    <em>aggression</em>; this is resting <em>size</em>, and neither substitutes
+    for the other. The partial-depth stream is used rather than the diff stream
+    on purpose: a diff consumer that misses a resync does not fail, it
+    <strong>drifts</strong> and keeps answering with confident wrong numbers.
+    Every message here is a complete top-{{ db.levels }} snapshot, so a dropped
+    one costs an interval of staleness and cannot corrupt anything.
+  </p>
+
+  <table class="kv">
+    <tr><th>Coverage</th><td>
+      {% set sub = db.symbols_subscribed or 0 %}
+      {{ db.delivering }} / {{ sub }} books fresh
+      {% if db.stale %}
+      · <span class="badge badge-err">{{ db.stale }} stale</span>
+      {% endif %}
+      {% if db.never_delivered %}
+      · <span class="badge badge-warn">{{ db.never_delivered }} never delivered</span>
+      {% endif %}
+      <span class="muted small">
+        the denominator is what we <em>subscribed</em>, never what the store
+        holds — a feed that dies leaves its snapshots behind, so a count of what
+        is held reads healthy while nothing arrives
+      </span>
+    </td></tr>
+    <tr><th>Staleness bound</th><td>
+      {{ '%.0f'|format(db.stale_after_s) }}s
+      <span class="muted small">
+        twenty stream intervals, derived from the configured speed rather than
+        guessed. Silence is a <strong>fault</strong> on this stream and is not one
+        on aggTrade: depth publishes on a fixed clock whether or not anything
+        trades, so a symbol with no message is a stopped feed, never a quiet market
+      </span>
+    </td></tr>
+    <tr><th>Messages</th><td>
+      {{ '{:,}'.format(db.messages_total or 0) }} accepted
+      {% if db.messages_rejected %}
+      · <span class="badge badge-warn">{{ db.messages_rejected }} rejected</span>
+      <span class="muted small">counted, never swallowed — a vendor shape change
+        would otherwise present as a quiet feed and send the next reader to the
+        wrong subsystem</span>
+      {% else %}· 0 rejected{% endif %}
+    </td></tr>
+    <tr><th>Thin books</th><td>
+      {{ db.thin_books or 0 }}
+      <span class="muted small">
+        holding fewer than {{ db.levels }} levels. Not a fault — a thin market is
+        a market fact — but it bounds what every consumer can see, so it is
+        counted rather than left to be inferred from a healthy row
+      </span>
+    </td></tr>
+    {% if db.stale_symbols %}
+    <tr><th>Stale</th><td class="small">
+      {% for s in db.stale_symbols %}<code>{{ s }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+    </td></tr>
+    {% endif %}
+    {% if db.never_symbols %}
+    <tr><th>Never delivered</th><td class="small">
+      {% for s in db.never_symbols %}<code>{{ s }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+      <span class="muted small">subscribed and silent — a different state from
+        "not subscribed", with a different fix</span>
+    </td></tr>
+    {% endif %}
+  </table>
+
+  {# The measurement the phase turns on. #}
+  {% set cm = db.comparison or {} %}
+  <h3 class="small">Does depth change the picture?</h3>
+  <p class="muted small">
+    Top-of-book imbalance against full-depth imbalance, computed from the
+    <strong>same snapshot</strong> — a comparison across two sources would
+    measure their timing as much as their depth. This is the number the handover
+    decision is read from, and it is a distribution to be read, never a threshold
+    to be invented now.
+  </p>
+  {% if cm.n %}
+  <table class="kv">
+    <tr><th>Population</th><td>
+      {{ cm.n }} fresh books
+      <span class="muted small">stale books excluded — their disagreement is a
+        fact about the feed, not about depth</span>
+    </td></tr>
+    <tr><th>Sign flips</th><td>
+      {% if cm.sign_flips %}
+      <span class="badge badge-warn">{{ cm.sign_flips }} of {{ cm.n }}</span>
+      {% else %}0 of {{ cm.n }}{% endif %}
+      <span class="muted small">
+        the touch says one side and the book says the other. Counted apart from
+        magnitude because a consumer testing against zero and one testing against
+        a threshold are harmed by different things — <code>book_imbalance</code>
+        is signed toward the trade and its sign <em>is</em> the reading, while the
+        OBI gate compares a fraction to 0.65
+      </span>
+    </td></tr>
+    <tr><th>Mean |Δ|</th><td>
+      {{ '%.3f'|format(cm.mean_abs_delta) }}
+      <span class="muted small">on a [-1, 1] scale</span>
+    </td></tr>
+  </table>
+  <table>
+    <thead><tr>
+      <th>Symbol</th><th>Top-1</th><th>Top-{{ db.levels }}</th><th>Δ</th><th>Levels</th>
+    </tr></thead>
+    <tbody>
+      {% for r in cm.rows %}
+      <tr>
+        <td><code>{{ r.symbol }}</code>
+          {% if r.sign_flip %}<span class="badge badge-warn">flip</span>{% endif %}</td>
+        <td>{{ '%+.3f'|format(r.imb_top1) }}</td>
+        <td>{{ '%+.3f'|format(r.imb_topn) }}</td>
+        <td>{{ '%+.3f'|format(r.delta) }}</td>
+        <td class="small muted">{{ r.levels_used }}
+          {% if r.levels_used < db.levels %}
+          <span class="muted">of {{ db.levels }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Sorted by |Δ| — the largest disagreements first, since those are the rows
+    where the handover would change an answer. <code>Levels</code> is what the
+    book actually held: a 3-level answer is reported as 3, never as
+    {{ db.levels }}.
+  </p>
+  {% else %}
+  <p class="muted small">
+    No fresh book has produced a comparison yet. Expected in the first seconds
+    after a restart, and distinguishable from a stalled feed by the coverage
+    counts above — which is why they render whether or not this table has rows.
+  </p>
+  {% endif %}
+</div>
+{% elif db.error %}
+<div class="card">
+  <h2>Order-book depth</h2>
+  <p class="small"><span class="badge badge-warn">UNREADABLE</span> {{ db.error }}</p>
+</div>
+{% endif %}
+
 {# ── WebSocket pools ─────────────────────────────────────────────────────── #}
 <div class="card">
   <h2>WebSocket pools</h2>
@@ -395,7 +561,7 @@
         <td class="small muted">{{ d.ticks.detail }}</td>
       </tr>
       <tr>
-        <td>Order book</td>
+        <td>Order book <span class="muted small">(what consumers read)</span></td>
         <td><code>{{ d.order_book.source }}</code>
           <span class="badge badge-warn">{{ d.order_book.quality }}</span></td>
         <td class="small">{{ d.order_book.symbols_cached }} sym</td>
