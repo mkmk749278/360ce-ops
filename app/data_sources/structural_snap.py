@@ -30,6 +30,12 @@ record can answer, and it does not answer both equally:
   drawdown came before or after TP1, and MFE/MAE carry no ordering between them.
   Both are refused, named separately, and counted.
 
+  "Stopped out" is decided from **MAE against the arithmetic stop**, never from
+  the record's ``hit_sl`` flag: ``trade_monitor`` moves the stop in place, so a
+  trailed or BE-shifted winner carries ``hit_sl=True`` alongside a positive
+  pnl.  Trusting the flag refused rows that were plainly decidable and labelled
+  profitable trades as losers on screen (2026-08-05).
+
 Dropping either silently would leave a loss-selected or win-selected sample
 that looks exactly like an answer.  So the page publishes each arm with its own
 decidable fraction and there is deliberately **no combined figure**; a test
@@ -290,7 +296,8 @@ def _tp1_arm(row: dict, rec: Optional[dict]) -> ArmRow:
 def _sl_arm(row: dict, rec: Optional[dict]) -> ArmRow:
     """The SL arm, with its two refusals kept apart.
 
-    ``undecidable_truncated`` (a wider stop on a loser) and
+    ``undecidable_truncated`` (a wider stop on a trade whose drawdown reached
+    its designed stop) and
     ``undecidable_ordering`` (a tighter stop on a winner) remove opposite ends
     of the distribution.  Pooling them into one "unknown" count would hide that
     the residue is biased, which is the only thing a reader needs to know
@@ -333,7 +340,28 @@ def _sl_arm(row: dict, rec: Optional[dict]) -> ArmRow:
     arith_pct = _percent_from(entry, arith) or 0.0
     snap_pct = _percent_from(entry, snapped) or 0.0
     drawdown = abs(mae)
-    lost = bool(rec.get("hit_sl")) or (actual < 0)
+
+    # "The walk ended at the stop" is a question about the DESIGNED stop, and
+    # ``hit_sl`` cannot answer it.  ``trade_monitor`` moves ``sig.stop_loss``
+    # in place — BE shift, TP1 park, trail — so a trade that runs and then
+    # exits on the *moved* stop is recorded ``hit_sl=True`` with a POSITIVE
+    # pnl.  On the 2026-08-05 export three of the five rows in the truncated
+    # bucket were exactly that (+6.230%, 0.000%, 0.000%), sitting under copy
+    # calling them losers — and each was decidable, because a drawdown that
+    # never reached the arithmetic stop cannot have reached a WIDER one.
+    # #848's mechanism arriving one surface later.
+    #
+    # MAE answers it directly and comes off the same stream: the monitor
+    # detects the stop hit on the mark-price ticks that write
+    # ``max_adverse_excursion_pct = min(..., pnl_pct)``, so a close at the
+    # designed stop necessarily left an excursion at least that deep.  The
+    # tighter branch below already asked its question this way; only the wider
+    # branch trusted the flag, and the asymmetry was the tell.
+    reached_designed_stop = drawdown >= arith_pct
+    # Whether the trade ENDED down — not how it got there.  Same reason:
+    # ``hit_sl`` on a trailed winner would book ``-snap_pct``, fabricating a
+    # loss on a profitable trade rather than refusing.
+    lost = actual < 0
 
     if snap_pct < arith_pct:
         # Tighter stop.
@@ -351,8 +379,8 @@ def _sl_arm(row: dict, rec: Optional[dict]) -> ArmRow:
             base.verdict = V_UNDECIDABLE_ORDER
     else:
         # Wider stop.
-        if not lost:
-            # The nearer stop was never hit, so the further one cannot be.
+        if not reached_designed_stop:
+            # The nearer stop was never reached, so the further one cannot be.
             base.verdict = V_DECIDED
             base.arm_pnl_pct = actual
         else:

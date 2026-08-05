@@ -94,9 +94,12 @@ VERDICT_COPY: dict[str, str] = {
         "than guessed; guessing here removes winners and flatters tightening."
     ),
     V_UNDECIDABLE_TRUNC: (
-        "SL only: a loser under a wider snapped stop. Whether price would "
-        "have come back is unknowable — the walk ended at the stop it hit. "
-        "Refused; guessing here removes losers and flatters widening."
+        "SL only: a wider snapped stop on a trade whose drawdown reached its "
+        "designed stop. Whether price would have come back is unknowable — "
+        "the walk ended there. Refused; guessing here removes losers and "
+        "flatters widening. Read off MAE, not off hit_sl: the monitor moves "
+        "the stop (BE shift, TP1 park, trail), so a trailed winner carries "
+        "hit_sl with a profit and is decidable, not refused."
     ),
 }
 
