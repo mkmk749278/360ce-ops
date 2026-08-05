@@ -94,6 +94,29 @@ def _report(**over):
                 "macro": {"symbols": 0, "state": "unreadable: no _results attribute"},
             },
         },
+        "footprint": {
+            "present": True, "symbols": 40, "open_bars": 40,
+            "sealed_bars": 2_400, "bins_held": 41_000,
+            "incomplete_bars_held": 3, "capped_bars_total": 1,
+            "incomplete_bars_total": 5, "bar_ms": 60_000, "bin_bps": 5.0,
+            "bars_per_symbol": 120, "max_bins_per_bar": 400, "uptime_s": 3_600.0,
+            "sample": {
+                "symbol": "BTCUSDT", "bar_open": 1_700_000_000_000,
+                "bin_bps": 5.0, "anchor": 50_000.0,
+                "buy_quote": 1_250_000.0, "sell_quote": 900_000.0,
+                "delta_quote": 350_000.0, "total_quote": 2_150_000.0,
+                "trades": 4_120, "bins": 38, "bins_capped": False,
+                "incomplete": False, "incomplete_reason": "",
+                "range_pct": 0.184, "poc_price": 50_025.0, "poc_quote": 310_000.0,
+                "size_buckets": {"<100": 900, "100-1k": 2_100, "1k-10k": 950,
+                                 "10k-100k": 160, ">100k": 10},
+                "max_imbalance": {"bin": 5, "price": 50_012.5, "ratio": 4.2,
+                                  "one_sided": False, "side": "BUY",
+                                  "quote": 180_000.0, "min_quote_floor": 0.0},
+                "cvd_quote_60": 1_400_000.0,
+                "volume_baseline_30": 1_900_000.0,
+            },
+        },
         "live_ticks": {
             "present": True, "stream_enabled": True, "max_symbols": 40,
             "subscribed": 40, "fed": 38, "quiet": 1, "subscribed_silent": 1,
@@ -375,3 +398,75 @@ class TestReportedFaultsThatAreNotHappening:
         with _client(_report()) as c:
             body = c.get("/diagnostics/data-intake").text
         assert "unreadable: no _results attribute" in body
+
+
+class TestFootprintPanel:
+    """Phase 2b's ops surface. A data layer with nowhere to look is an
+    unfinished change, and this one carries the distinction the whole phase
+    exists for: magnitudes, never verdicts."""
+
+    def test_the_panel_renders_with_a_real_bar(self):
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "Footprint — volume at price" in body
+        assert "Newest sealed bar" in body and "BTCUSDT" in body
+
+    def test_it_says_what_the_single_per_bar_delta_cannot(self):
+        """The reason the layer exists, on screen — otherwise a reader sees a
+        second CVD and assumes duplication."""
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "one signed number per" in body
+        assert "structurally silent" in body
+
+    def test_no_verdict_language_appears(self):
+        """A boolean bakes in a threshold nobody has earned. The page states
+        ratios and components."""
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "Magnitudes, never verdicts" in body
+        assert "4.2:1 BUY" in body
+
+    def test_a_one_sided_level_is_badged_not_printed_as_a_big_ratio(self):
+        """'Nobody sold here at all' is a different observation from 'a big
+        ratio', so it is not rendered as one."""
+        r = _report()
+        r["footprint"]["sample"]["max_imbalance"] = {
+            "bin": 5, "price": 50_012.5, "ratio": None, "one_sided": True,
+            "side": "BUY", "quote": 180_000.0, "min_quote_floor": 0.0,
+        }
+        with _client(r) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "BUY only" in body
+        assert "no opposing volume at all" in body
+
+    def test_capped_and_incomplete_bars_are_badged_with_their_meaning(self):
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "shape-capped" in body
+        assert "EXACT totals" in body
+        assert "carries its cause" in body
+
+    def test_the_relative_grid_is_explained(self):
+        """An absolute grid is 20% wide on a sub-cent mover — every cheap
+        symbol would collapse into one bin and read perfectly balanced."""
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "5.0 bps bins" in body
+        assert "never an absolute" in body
+
+    def test_the_tick_cvd_is_labelled_a_detector_not_a_duplicate(self):
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "detector" in body and "duplicate" in body
+
+    def test_an_empty_store_renders_its_counts_and_says_why(self):
+        """Distinguishable from a stalled store by the coverage counts, which
+        is exactly why they render whether or not a sample exists."""
+        r = _report()
+        r["footprint"]["sample"] = None
+        r["footprint"]["sealed_bars"] = 0
+        with _client(r) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "No sealed bar yet" in body
+        assert "expected state for the first minute" in body

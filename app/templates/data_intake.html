@@ -163,6 +163,145 @@
 </div>
 {% endif %}
 
+{# ── Footprint ───────────────────────────────────────────────────────────── #}
+{% set fp = report.footprint or {} %}
+{% if fp.present %}
+<div class="card">
+  <h2>Footprint — volume at price, per bar</h2>
+  <p class="muted small">
+    Phase 2b. <code>OrderFlowStore</code> gives
+    <strong>one signed number per bar</strong>.
+    It says whether takers were net buying, and is
+    <strong>structurally silent</strong> on where in the bar they were buying,
+    whether a level absorbed them, and how the aggression was sized. A bar that grinds up on steady small buying and one
+    that spikes into a wall and fails produce the same delta. This keeps buy and
+    sell volume at each price, which is what turns that number into a shape.
+  </p>
+  <p class="muted small">
+    <strong>Magnitudes, never verdicts.</strong> Nothing here emits
+    "absorption = true". Every value is a ratio or a component, because a boolean
+    bakes in a threshold and a threshold chosen now would be chosen from no data
+    at all — Phases 4–5 pick thresholds from the distribution this phase exists
+    to create.
+  </p>
+  <table class="kv">
+    <tr><th>Coverage</th><td>
+      {{ fp.symbols }} symbols · {{ fp.sealed_bars }} sealed bars ·
+      {{ fp.open_bars }} open
+      <span class="muted small">up {{ '%.0f'|format(fp.uptime_s or 0) }}s</span>
+    </td></tr>
+    <tr><th>Grid</th><td>
+      {{ '%.1f'|format(fp.bin_bps) }} bps bins ·
+      {{ (fp.bar_ms / 1000)|int }}s bars · {{ fp.bars_per_symbol }} per symbol
+      <span class="muted small">
+        bins are a fraction of the bar's own opening price, never an absolute
+        grid — an absolute one is 20% wide on a sub-cent mover and would collapse
+        every cheap symbol into one bin reading perfectly balanced
+      </span>
+    </td></tr>
+    <tr><th>Memory</th><td>
+      {{ fp.bins_held }} bins held · cap {{ fp.max_bins_per_bar }}/bar
+      {% if fp.capped_bars_total %}
+      · <span class="badge badge-warn">{{ fp.capped_bars_total }} shape-capped</span>
+      {% endif %}
+      <span class="muted small">
+        a capped bar keeps EXACT totals and refuses only its per-price shape —
+        silently widening would make a violent bar read as a narrow one
+      </span>
+    </td></tr>
+    <tr><th>Incomplete</th><td>
+      {% if fp.incomplete_bars_held %}
+      <span class="badge badge-warn">{{ fp.incomplete_bars_held }} held</span>
+      {% else %}0 held{% endif %}
+      · {{ fp.incomplete_bars_total }} since start
+      <span class="muted small">
+        a bar open across a feed gap holds a fraction of its true volume while
+        looking exactly like a quiet bar, so it carries its cause and is excluded
+        from every cumulative figure rather than averaged in
+      </span>
+    </td></tr>
+  </table>
+
+  {% set sm = fp.sample %}
+  {% if sm %}
+  <h3 class="small">Newest sealed bar — {{ sm.symbol }}</h3>
+  <p class="muted small">
+    A row count proves the store is filling and says nothing about whether the
+    shape is usable. This is a real bar.
+  </p>
+  <table class="kv">
+    <tr><th>Volume</th><td>
+      buy ${{ '{:,.0f}'.format(sm.buy_quote) }} ·
+      sell ${{ '{:,.0f}'.format(sm.sell_quote) }} ·
+      delta <strong>{{ '{:+,.0f}'.format(sm.delta_quote) }}</strong>
+      <span class="muted small">{{ sm.trades }} aggressive trades in {{ sm.bins }} bins</span>
+    </td></tr>
+    <tr><th>Point of control</th><td>
+      {% if sm.poc_price is not none %}
+      {{ sm.poc_price }} · ${{ '{:,.0f}'.format(sm.poc_quote) }}
+      {% else %}—{% endif %}
+      <span class="muted small">the price the bar's business was actually done at</span>
+    </td></tr>
+    <tr><th>Range</th><td>
+      {% if sm.range_pct is not none %}{{ '%.3f'|format(sm.range_pct) }}%{% else %}—{% endif %}
+      <span class="muted small">
+        published beside volume, never folded into a score — volume that moved
+        price a long way and volume that moved it nowhere are different events
+        with the same total, and that difference is the whole of "absorption"
+      </span>
+    </td></tr>
+    <tr><th>Most one-sided level</th><td>
+      {% set imb = sm.max_imbalance %}
+      {% if imb %}
+        {% if imb.one_sided %}
+        <span class="badge badge-warn">{{ imb.side }} only</span>
+        <span class="muted small">no opposing volume at all — a different
+          observation from a large ratio, so it is not printed as one</span>
+        {% else %}
+        {{ '%.1f'|format(imb.ratio) }}:1 {{ imb.side }} at {{ imb.price }}
+        {% endif %}
+        <span class="muted small">${{ '{:,.0f}'.format(imb.quote) }} at that price</span>
+      {% else %}—{% endif %}
+    </td></tr>
+    <tr><th>Aggression sizes</th><td class="small">
+      {% for label, n in sm.size_buckets.items() %}
+      {{ label }}: {{ n }}{% if not loop.last %} · {% endif %}
+      {% endfor %}
+      <span class="muted small">fixed USD edges — a percentile basis would move
+        under its own data and make two days incomparable</span>
+    </td></tr>
+    <tr><th>Tick CVD (60 bars)</th><td>
+      {% if sm.cvd_quote_60 is not none %}{{ '{:+,.0f}'.format(sm.cvd_quote_60) }}{% else %}—{% endif %}
+      <span class="muted small">
+        computed from trades, under its own key — a second computation of a
+        quantity the kline CVD already produces is a <em>detector</em>, not a
+        duplicate, provided it never overwrites the first
+      </span>
+    </td></tr>
+    <tr><th>Volume baseline</th><td>
+      {% if sm.volume_baseline_30 is not none %}
+      ${{ '{:,.0f}'.format(sm.volume_baseline_30) }}
+      {% else %}—{% endif %}
+      <span class="muted small">median of 30 bars — one liquidation cascade sets
+        a mean nothing else can approach</span>
+    </td></tr>
+  </table>
+  {% else %}
+  <p class="muted small">
+    No sealed bar yet. A bar seals on the minute boundary, so this is the
+    expected state for the first minute after a restart — and it is
+    distinguishable from a stalled store by the coverage counts above, which is
+    why they render whether or not a sample exists.
+  </p>
+  {% endif %}
+</div>
+{% elif fp.error %}
+<div class="card">
+  <h2>Footprint — volume at price, per bar</h2>
+  <p class="small"><span class="badge badge-warn">UNREADABLE</span> {{ fp.error }}</p>
+</div>
+{% endif %}
+
 {# ── WebSocket pools ─────────────────────────────────────────────────────── #}
 <div class="card">
   <h2>WebSocket pools</h2>
