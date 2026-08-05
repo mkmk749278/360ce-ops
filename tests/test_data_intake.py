@@ -50,9 +50,12 @@ def _report(**over):
         },
         "series": {
             "present": True, "symbols_sampled": 1, "symbols_total": 1,
+            "symbols_in_scan_universe": 1,
+            "symbols_retained_outside_universe": 0,
             "by_timeframe": {
                 "1m": {
                     "series": 2, "stale": 1, "undated": 1,
+                    "series_scanned": 1, "stale_scanned": 1, "undated_scanned": 0,
                     "bars_min": 10, "bars_max": 500,
                     "oldest_newest_bar_age_s": 3600.0, "stale_budget_s": 180.0,
                     "stalest_symbols": [{"symbol": "BTCUSDT", "age_s": 3600.0}],
@@ -86,7 +89,23 @@ def _report(**over):
         "levels": {
             "level_book": {"present": True, "symbols": 75, "levels_total": 900,
                            "oldest_refresh_age_s": 42.0},
-            "volume_profile": {"micro_symbols": 75, "macro_symbols": 75},
+            "volume_profile": {
+                "micro": {"symbols": 75, "state": "ok"},
+                "macro": {"symbols": 0, "state": "unreadable: no _results attribute"},
+            },
+        },
+        "live_ticks": {
+            "present": True, "stream_enabled": True, "max_symbols": 40,
+            "subscribed": 40, "fed": 38, "quiet": 1, "subscribed_silent": 1,
+            "subscribed_silent_sample": ["NOPEUSDT"], "quiet_sample": [],
+            "rows": 38_000, "total_accepted": 120_000, "total_rejected": 0,
+            "uptime_s": 900.0, "maxlen": 1000, "quiet_after_s": 90.0,
+            "serving_consumers": False,
+            "drift_vs_seeded": {
+                "compared": 30, "median_gap_s": 3_600.0,
+                "worst": [{"symbol": "BTCUSDT", "seeded_age_s": 14400.0,
+                           "live_age_s": 0.4, "gap_s": 14399.6}],
+            },
         },
         "weight": {
             "futures": {"used": 300, "budget": 2200, "pct": 13.6},
@@ -286,3 +305,73 @@ class TestWiring:
         assert any(
             getattr(r, "path", "") == "/diagnostics/data-intake" for r in app.routes
         )
+
+
+class TestLiveTickPanel:
+    """Phase 2a shipped its engine payload and NO ops surface — the panel below
+    did not exist, so the drift measurement its handover flag waits on had
+    nowhere to be read. "A dark change ships together with the ops surface that
+    shows what it is doing" is the rule, and this is it."""
+
+    def test_the_panel_renders(self):
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "Live aggressive trades" in body
+
+    def test_the_handover_flag_is_shown_as_a_flag_not_as_health(self):
+        """A working feed is not a reason to change what a live gate sees."""
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "SEED SNAPSHOT" in body
+        assert "TICKS_LIVE_FOR_CONSUMERS" in body
+
+    def test_the_handover_reads_differently_once_flipped(self):
+        r = _report()
+        r["live_ticks"]["serving_consumers"] = True
+        with _client(r) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "LIVE SERIES" in body
+
+    def test_the_drift_measurement_is_on_screen(self):
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "Drift against the seeded store" in body
+        assert "60 min" in body   # median gap, badged
+
+    def test_a_subscription_that_never_delivered_is_named(self):
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "never delivered" in body and "NOPEUSDT" in body
+
+    def test_the_uptime_caveat_is_stated(self):
+        """The seed snapshot is freshest right after a restart, so a page read
+        minutes after a deploy understates the very error it is sizing."""
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "function of" in body and "uptime" in body
+
+
+class TestReportedFaultsThatAreNotHappening:
+    def test_a_pool_whose_silence_is_expected_says_so(self):
+        r = _report()
+        r["pools"][0]["silence_is_expected"] = True
+        r["pools"][0]["silence_budget_s"] = 12_000.0
+        with _client(r) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "silence expected on this pool" in body
+
+    def test_stale_leads_with_the_scanned_count(self):
+        """A rotated-out mover's bucket freezes by design. Pooling it with a
+        core pair reports a real fault at several times its true size."""
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "scanned / all" in body
+        assert "in the live scan universe" in body
+
+    def test_an_unreadable_volume_profile_is_not_rendered_as_zero(self):
+        """An all-zero column is a claim about the reader before it is a claim
+        about the system — a guessed attribute name returns an empty dict just
+        as convincingly for "empty" as for "wrong name"."""
+        with _client(_report()) as c:
+            body = c.get("/diagnostics/data-intake").text
+        assert "unreadable: no _results attribute" in body

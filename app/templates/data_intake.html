@@ -61,6 +61,108 @@
   {% endif %}
 </div>
 
+{# ── Live aggressive-trade feed ──────────────────────────────────────────── #}
+{% set lt = report.live_ticks or {} %}
+{% if lt.present %}
+<div class="card">
+  <h2>Live aggressive trades (@aggTrade)</h2>
+  <p class="muted small">
+    Phase 2a. Two facts that must not collapse into one: <strong>is the feed
+    working</strong>, and <strong>is the money path reading it</strong>. The second
+    is a flag, not a consequence of the first — a working feed is not a reason to
+    change what a live gate sees.
+  </p>
+  <table class="kv">
+    <tr><th>Stream</th><td>
+      {% if lt.stream_enabled %}<span class="badge badge-ok">ENABLED</span>
+      {% else %}<span class="badge badge-warn">DISABLED</span>{% endif %}
+      <span class="muted small">bounded to {{ lt.max_symbols }} symbols</span>
+    </td></tr>
+    <tr><th>Feed</th><td>
+      {{ lt.fed }} fed · {{ lt.quiet }} quiet ·
+      {% if lt.subscribed_silent %}
+      <span class="badge badge-err">{{ lt.subscribed_silent }} never delivered</span>
+      {% else %}0 never delivered{% endif %}
+      <span class="muted small">of {{ lt.subscribed }} subscribed</span>
+    </td></tr>
+    <tr><th>Throughput</th><td>
+      {{ lt.total_accepted }} accepted · {{ lt.rows }} rows held
+      {% if lt.total_rejected %}
+      · <span class="badge badge-warn">{{ lt.total_rejected }} rejected</span>
+      {% endif %}
+      <span class="muted small">up {{ '%.0f'|format(lt.uptime_s or 0) }}s</span>
+    </td></tr>
+    <tr><th>Serving consumers</th><td>
+      {% if lt.serving_consumers %}
+      <span class="badge badge-warn">LIVE SERIES</span>
+      <span class="muted small">the five consumers now read aggTrade</span>
+      {% else %}
+      <span class="badge">SEED SNAPSHOT</span>
+      <span class="muted small">
+        consumers still read the seed-time REST snapshot — this is the handover
+        flag (<code>TICKS_LIVE_FOR_CONSUMERS</code>), and it is deliberately not
+        flipped by the feed being healthy
+      </span>
+      {% endif %}
+    </td></tr>
+  </table>
+  {% if lt.subscribed_silent_sample %}
+  <p class="muted small">
+    Subscribed and never delivered:
+    {% for s in lt.subscribed_silent_sample %}<code>{{ s }}</code>{% if not loop.last %} {% endif %}{% endfor %}
+    — a subscription that did not take has no key in any arrival-keyed count.
+  </p>
+  {% endif %}
+
+  {% set drift = lt.drift_vs_seeded or {} %}
+  <h3 class="small">Drift against the seeded store</h3>
+  <p class="muted small">
+    The measurement the handover is waiting on. The gap is not noise — it is
+    exactly the error every current consumer carries, including the
+    <code>$500k cumulative tick volume</code> gate.
+  </p>
+  {% if drift.compared %}
+  <p class="small">
+    Compared {{ drift.compared }} symbols · median gap
+    {% if drift.median_gap_s is not none %}
+      {% if drift.median_gap_s > 900 %}
+      <span class="badge badge-err">{{ '%.0f'|format(drift.median_gap_s / 60) }} min</span>
+      {% else %}{{ '%.0f'|format(drift.median_gap_s) }}s{% endif %}
+    {% else %}—{% endif %}
+  </p>
+  <table>
+    <thead><tr><th>Symbol</th><th class="num">Seeded age</th><th class="num">Live age</th><th class="num">Gap</th></tr></thead>
+    <tbody>
+      {% for g in drift.worst %}
+      <tr>
+        <td>{{ g.symbol }}</td>
+        <td class="num">{{ '%.0f'|format(g.seeded_age_s) }}s</td>
+        <td class="num">{{ '%.0f'|format(g.live_age_s) }}s</td>
+        <td class="num">{{ '%.0f'|format(g.gap_s) }}s</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted small">
+    Nothing comparable yet — a symbol present in only one of the two stores is
+    <strong>skipped, not scored as agreement</strong>, which would flatter the
+    seeded store exactly where it has no data.
+  </p>
+  {% endif %}
+  <p class="muted small">
+    The seed snapshot's age is a function of <em>uptime</em>: it is freshest
+    immediately after a restart and drifts from there, so a page read minutes
+    after a deploy understates the error this panel exists to size.
+  </p>
+</div>
+{% elif lt.error %}
+<div class="card">
+  <h2>Live aggressive trades (@aggTrade)</h2>
+  <p class="small"><span class="badge badge-warn">UNREADABLE</span> {{ lt.error }}</p>
+</div>
+{% endif %}
+
 {# ── WebSocket pools ─────────────────────────────────────────────────────── #}
 <div class="card">
   <h2>WebSocket pools</h2>
@@ -75,6 +177,10 @@
   <h3 class="small">
     {{ pool.label }} <span class="badge {{ cls }}">{{ label }}</span>
     <span class="muted small">{{ pool.streams_total }} streams</span>
+    {% if pool.silence_is_expected %}
+    <span class="muted small">— silence expected on this pool; budget
+      {{ '%.0f'|format(pool.silence_budget_s / 60) }} min</span>
+    {% endif %}
   </h3>
   {% if pool.connections %}
   <table>
@@ -205,7 +311,16 @@
       {% if lv.level_book.oldest_refresh_age_s is not none %}{{ '%.0f'|format(lv.level_book.oldest_refresh_age_s) }}s{% else %}—{% endif %}
     </td></tr>
     <tr><th>Volume profile</th><td>
-      micro {{ lv.volume_profile.micro_symbols }} · macro {{ lv.volume_profile.macro_symbols }} symbols
+      {% for scope in ['micro', 'macro'] %}
+      {% set vp = lv.volume_profile[scope] %}
+      {{ scope }}
+      {% if vp.symbols is none %}<span class="badge badge-err">{{ vp.state }}</span>
+      {% else %}{{ vp.symbols }} symbols{% if vp.state != 'ok' %}
+        <span class="badge badge-warn">{{ vp.state }}</span>{% endif %}{% endif %}
+      {% if not loop.last %} · {% endif %}
+      {% endfor %}
+      <span class="muted small">read by attribute name — a guessed one returns
+        an empty dict just as convincingly for "empty" as for "wrong name"</span>
     </td></tr>
   </table>
 </div>
@@ -224,8 +339,8 @@
   <table>
     <thead>
       <tr>
-        <th>TF</th><th class="num">Series</th><th class="num">Stale</th>
-        <th class="num">Undated</th><th class="num">Bars</th>
+        <th>TF</th><th class="num">Series</th><th class="num">Stale<br><span class="muted">scanned / all</span></th>
+        <th class="num">Undated<br><span class="muted">scanned / all</span></th><th class="num">Bars</th>
         <th class="num">Oldest newest-bar</th><th>Stalest</th>
       </tr>
     </thead>
@@ -234,8 +349,16 @@
       <tr>
         <td><code>{{ tf }}</code></td>
         <td class="num">{{ s.series }}</td>
-        <td class="num">{% if s.stale %}<span class="badge badge-warn">{{ s.stale }}</span>{% else %}0{% endif %}</td>
-        <td class="num">{% if s.undated %}<span class="badge badge-err">{{ s.undated }}</span>{% else %}0{% endif %}</td>
+        <td class="num">
+          {% if s.stale_scanned %}<span class="badge badge-warn">{{ s.stale_scanned }}</span>
+          {% else %}0{% endif %}
+          <span class="muted small">/ {{ s.stale }}</span>
+        </td>
+        <td class="num">
+          {% if s.undated_scanned %}<span class="badge badge-err">{{ s.undated_scanned }}</span>
+          {% else %}0{% endif %}
+          <span class="muted small">/ {{ s.undated }}</span>
+        </td>
         <td class="num small">{{ s.bars_min }}–{{ s.bars_max }}</td>
         <td class="num small">{% if s.oldest_newest_bar_age_s is not none %}{{ '%.0f'|format(s.oldest_newest_bar_age_s) }}s{% else %}—{% endif %}
           <span class="muted">/ {{ '%.0f'|format(s.stale_budget_s) }}s</span></td>
@@ -247,7 +370,17 @@
     </tbody>
   </table>
   <p class="muted small">
-    Sampled {{ ser.symbols_sampled }} of {{ ser.symbols_total }} symbols.
+    Sampled {{ ser.symbols_sampled }} of {{ ser.symbols_total }} symbols;
+    {{ ser.symbols_in_scan_universe }} are in the live scan universe.
+    <strong>Stale and undated lead with the scanned count</strong> — a rotated-out
+    mover's bucket freezes by design (no WS subscription, nothing re-seeds it once
+    its promotion lapses), so pooling it with a core pair reports a real fault at
+    several times its true size. The all-symbols figure is kept beside it because
+    {% if ser.symbols_retained_outside_universe %}
+    <strong>{{ ser.symbols_retained_outside_universe }} buckets are held for symbols
+    nobody scans</strong> — which is its own finding, just not a staleness one.
+    {% else %}an unbounded pile of frozen buckets is its own finding, just not a
+    staleness one.{% endif %}
   </p>
 </div>
 
