@@ -56,6 +56,148 @@
      href="/signals/structural-snap?setup={{ name }}">{{ name }} ({{ n }})</a>
   {% endfor %}
   <a class="btn" href="/signals/structural-snap/export.csv{% if filter_setup %}?setup={{ filter_setup }}{% endif %}">CSV</a>
+  <a class="btn" href="/signals/structural-snap/live.csv{% if filter_setup %}?setup={{ filter_setup }}{% endif %}">Live CSV</a>
+</div>
+
+{# ── The open book ──────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>Open right now — the snap acting before any outcome is known</h2>
+  {% if live.error %}
+  <p class="small"><span class="badge badge-warn">NO LIVE VIEW</span> {{ live.error }}</p>
+  <p class="muted small">
+    A named cause, not an empty book. "The engine reports nothing open" and "we could
+    not ask the engine" are different states and only one of them is a fault.
+  </p>
+  {% else %}
+  <p class="muted small">
+    Everything below the arms is a <strong>replay</strong>: a row is stamped at enqueue
+    and scored once it closes — which on this lane is a fraction of the book, because
+    only the router's survivors ever deliver. This panel is the other half. Each row is
+    a signal the <strong>engine</strong> reports open, marked against the live futures
+    price, with the snapped levels compared to the shipped ones in real time.
+  </p>
+  <p class="muted small">
+    <strong>Two clocks, named separately.</strong> "Open" is the engine's verdict, read
+    from its own feed. The mark is a Binance price this page fetched. A surface may not
+    grade its own liveness on a clock it supplies, so the open state never comes from
+    the price and the price never implies the state.
+  </p>
+  <table class="kv">
+    <tr><th>Stamped rows checked</th><td>{{ live.n_stamped }}</td></tr>
+    <tr>
+      <th>Open per the engine</th>
+      <td>
+        {% if live.n_live %}<span class="badge badge-ok">{{ live.n_live }} LIVE</span>
+        {% else %}<span class="badge">0 — nothing open</span>{% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Of those, marked</th>
+      <td>
+        {{ live.n_marked }}
+        {% if live.unmarked %}
+        <span class="muted small">— {{ live.unmarked }} unmarked (no price for the symbol)</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Avg unrealized</th>
+      <td>
+        {% if live.total_unrealized_pct is not none %}
+        {{ '%+.3f'|format(live.total_unrealized_pct) }}%
+        <span class="muted small">over {{ live.n_marked }} marked rows — unrealized, and in no realized figure on this page</span>
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Snap would already have exited</th>
+      <td>
+        {% if live.n_would_exit %}<span class="badge badge-warn">{{ live.n_would_exit }}</span>
+        {% else %}0{% endif %}
+        <span class="muted small">
+          a snapped level crossed while the shipped one is not — the counterfactual
+          acting now, which no replay can show
+        </span>
+      </td>
+    </tr>
+    <tr>
+      <th>Geometry moved since the stamp</th>
+      <td>
+        {{ live.n_geometry_moved }}
+        <span class="muted small">
+          the monitor rewrote the stop (BE shift, TP1 park, trail), so "shipped" is no
+          longer the level that was stamped — excluded from the count above rather than
+          compared against a stop nobody chose
+        </span>
+      </td>
+    </tr>
+  </table>
+  <p class="muted small">
+    <strong>Both denominators, as everywhere else.</strong> Open-per-the-engine and
+    marked agree while the lane is healthy and diverge exactly when it is not.
+    A stamped row missing from both this panel and the arms below is <em>not</em>
+    evidence the router dropped it — the engine's feed is bounded, so absence from it
+    is absence of evidence.
+  </p>
+
+  {% if live.rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Signal</th><th>Symbol</th><th>Path</th><th>Side</th>
+        <th>Engine state</th>
+        <th class="num">Entry</th><th class="num">Mark</th>
+        <th class="num">Unrealized</th>
+        <th class="num">→ SL</th><th class="num">→ TP1</th>
+        <th class="num">→ snapped SL</th><th class="num">→ snapped TP1</th>
+        <th>Now</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in live.rows %}
+      <tr>
+        <td class="small"><code>{{ r.signal_id }}</code></td>
+        <td>{{ r.symbol }}</td>
+        <td class="small">{{ r.setup_class }}</td>
+        <td>{{ r.direction }}</td>
+        <td class="small">
+          <code>{{ r.status or '—' }}</code>
+          {% if r.geometry_moved %}<span class="badge badge-warn">moved</span>{% endif %}
+        </td>
+        <td class="num">{% if r.entry is not none %}{{ r.entry }}{% else %}—{% endif %}</td>
+        <td class="num">{% if r.current_price is not none %}{{ r.current_price }}{% else %}—{% endif %}</td>
+        <td class="num">{% if r.unrealized_pct is not none %}{{ '%+.3f'|format(r.unrealized_pct) }}%{% else %}—{% endif %}</td>
+        <td class="num">{% if r.room_to_sl_pct is not none %}{{ '%.3f'|format(r.room_to_sl_pct) }}%{% else %}—{% endif %}</td>
+        <td class="num">{% if r.room_to_tp1_pct is not none %}{{ '%.3f'|format(r.room_to_tp1_pct) }}%{% else %}—{% endif %}</td>
+        <td class="num">{% if r.room_to_snapped_sl_pct is not none %}{{ '%.3f'|format(r.room_to_snapped_sl_pct) }}%{% else %}—{% endif %}</td>
+        <td class="num">{% if r.room_to_snapped_tp1_pct is not none %}{{ '%.3f'|format(r.room_to_snapped_tp1_pct) }}%{% else %}—{% endif %}</td>
+        <td class="small">
+          {% if r.snap_would_have_exited %}
+          <span class="badge badge-warn">snap exits {{ r.snap_would_have_exited }}</span>
+          {% elif r.shipped_crossed %}
+          <span class="badge">shipped {{ r.shipped_crossed }} crossed</span>
+          {% elif not r.marked %}
+          <span class="muted">unmarked</span>
+          {% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    A negative room is a level price has already passed while the engine still reports
+    the row open — badged rather than printed as one more percentage, because it is a
+    contradiction, not a near miss. Rooms to <em>SL</em> and <em>TP1</em> read the
+    engine's <strong>current</strong> levels; rooms to the snapped ones read the stamp.
+    Nothing in this table enters any delta, average or win rate below it.
+  </p>
+  {% elif live.n_stamped %}
+  <p class="muted small">
+    Nothing in this ledger is open per the engine right now. That is the quiet case,
+    not a fault — and it is why the counts above render whether or not any row appears.
+  </p>
+  {% endif %}
+  {% endif %}
 </div>
 
 <div class="card">

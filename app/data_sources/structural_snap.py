@@ -504,3 +504,278 @@ def setups_present(ledger: Any) -> list[tuple[str, int]]:
             if sc:
                 counts[sc] = counts.get(sc, 0) + 1
     return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# The live view — what the stamped geometry is doing RIGHT NOW
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Every arm above is a *replay*: a row is stamped at enqueue and scored later
+# against the closed-signal record. That answers "would a level-aware stop have
+# been better" and is silent until a row closes — which on this lane is 0.5% of
+# rows, because the stamp happens at enqueue and only the router's survivors
+# ever deliver.  So the page said nothing about the trades running right now.
+#
+# Three states, and the distinction is the whole point:
+#
+#   * **live**  — the ENGINE reports this signal open. Marked, and the snapped
+#     levels are compared against the shipped ones in real time.
+#   * **closed** — joined to ``signal_performance.json``; the arms above.
+#   * **no_outcome** — neither. It is *not* proof the router dropped the row:
+#     ``/api/signals`` is a bounded recent feed, so absence from it is absence
+#     of evidence. The page says that rather than inventing a cause for a
+#     blank.
+#
+# Two clocks, and they are named separately on screen. "Open" is the engine's
+# verdict, read from its own feed. The mark is a Binance price ops fetched.  A
+# surface may not grade its own liveness on a clock it supplies (#108), so the
+# open state never comes from the price and the price never implies the state.
+
+#: A stamped signal whose geometry moved after enqueue is no longer comparable
+#: on the SL arm: ``trade_monitor`` rewrites ``sig.stop_loss`` (BE shift, TP1
+#: park, trail), so the "shipped" stop beside the snapped one would be a stop
+#: nobody stamped. Counted and badged rather than silently compared — the same
+#: defect the SL arm's ``hit_sl`` read cost us on 2026-08-05.
+GEOMETRY_MOVE_EPS = 1e-9
+
+#: Status names meaning "position still working", used ONLY for engine builds
+#: that predate the ``is_open`` stamp. Without it a pre-stamp payload reports an
+#: empty open book — a fault that reads exactly like a quiet market.
+OPEN_STATUS_FALLBACK = frozenset({
+    "ACTIVE", "TP1_HIT", "TP2_HIT", "TP3_HIT", "PRE_TP", "BE_ARMED", "RUNNER",
+})
+
+
+def _is_open(entry: dict) -> bool:
+    """Open/closed truth, decided in ONE place.
+
+    The engine's own ``is_open`` stamp when it exists; the status-name set only
+    for payloads that predate it. Deciding this in the route as well as here
+    would be two readers of one fact, which is how ``MEASUREMENT_SUFFIXES``
+    drifted — the route hands over the feed and this module says what is open.
+    """
+    if "is_open" in entry:
+        return bool(entry.get("is_open"))
+    return str(entry.get("status") or "").upper() in OPEN_STATUS_FALLBACK
+
+
+@dataclass
+class LiveRow:
+    """One stamped signal the engine still reports OPEN, marked."""
+
+    signal_id: str
+    symbol: str
+    setup_class: str
+    direction: str
+    tf: str
+    entry: Optional[float] = None
+    #: The engine's own words for the row's state — its clock, not ours.
+    status: str = ""
+    #: The levels the engine is working RIGHT NOW. Not the stamped ones.
+    engine_sl: Optional[float] = None
+    engine_tp1: Optional[float] = None
+    #: The levels the lane stamped at enqueue, and what the snap would have used.
+    sl_arith: Optional[float] = None
+    sl_snapped: Optional[float] = None
+    tp1_arith: Optional[float] = None
+    tp1_snapped: Optional[float] = None
+    sl_source: str = ""
+    tp1_source: str = ""
+    #: Marked from the whole-book price request. None when it could not be.
+    current_price: Optional[float] = None
+    unrealized_pct: Optional[float] = None
+    room_to_sl_pct: Optional[float] = None
+    room_to_tp1_pct: Optional[float] = None
+    room_to_snapped_sl_pct: Optional[float] = None
+    room_to_snapped_tp1_pct: Optional[float] = None
+    #: "" | "SL" | "TP1" — a level price has already passed while the row is open.
+    shipped_crossed: str = ""
+    snapped_crossed: str = ""
+    #: The engine's stop is no longer the stamped one (BE shift / TP1 park / trail).
+    geometry_moved: bool = False
+
+    @property
+    def marked(self) -> bool:
+        return self.current_price is not None
+
+    @property
+    def snap_would_have_exited(self) -> str:
+        """The live form of this page's question, and the reason it exists.
+
+        A snapped level crossed while the shipped one is not is the
+        counterfactual acting *now*, before any outcome is known — the one
+        thing no replay can show. Reported only while the geometry is still the
+        geometry that was stamped: once ``trade_monitor`` has moved the stop,
+        "shipped" is a level nobody stamped and the comparison is not the one
+        this lane set up.
+        """
+        if self.geometry_moved or not self.marked:
+            return ""
+        if self.snapped_crossed and not self.shipped_crossed:
+            return self.snapped_crossed
+        return ""
+
+
+@dataclass
+class LiveReport:
+    """The open book, and both denominators for it."""
+
+    rows: list[LiveRow] = field(default_factory=list)
+    #: Stamped rows checked against the engine's open set.
+    n_stamped: int = 0
+    #: Rows the engine reports open. The denominator that matters.
+    n_live: int = 0
+    #: Of those, rows a price actually reached. Published beside n_live because
+    #: they agree while the lane is healthy and diverge exactly when it is not.
+    n_marked: int = 0
+    #: Rows whose stop the monitor has since moved — excluded from the
+    #: would-have-exited claim, counted so the exclusion is visible.
+    n_geometry_moved: int = 0
+    #: Named cause when the live view could not be built at all. A blank needs a
+    #: cause before it gets a caption.
+    error: str = ""
+
+    @property
+    def unmarked(self) -> int:
+        return self.n_live - self.n_marked
+
+    @property
+    def n_would_exit(self) -> int:
+        return sum(1 for r in self.rows if r.snap_would_have_exited)
+
+    @property
+    def total_unrealized_pct(self) -> Optional[float]:
+        vals = [r.unrealized_pct for r in self.rows if r.unrealized_pct is not None]
+        return sum(vals) / len(vals) if vals else None
+
+
+def _room_pct(price: float, level: Optional[float], is_long: bool, *,
+              toward: str) -> Optional[float]:
+    """Distance from the mark to a level, as a percent of the mark.
+
+    ``toward="stop"`` measures the room left before the level is hit;
+    ``toward="target"`` the room left before it is reached. Both go negative
+    once price is past the level, which is what the crossed badges read.
+    """
+    if not level or level <= 0 or price <= 0:
+        return None
+    if toward == "stop":
+        room = (price - level) if is_long else (level - price)
+    else:
+        room = (level - price) if is_long else (price - level)
+    return room / price * 100.0
+
+
+def build_live(
+    ledger: Any,
+    open_signals: Any,
+    prices: Any,
+    *,
+    setup_class: str = "",
+) -> LiveReport:
+    """Mark every stamped row the engine still reports open.
+
+    *open_signals* is the engine's own feed — a list of signal dicts, or None
+    when it could not be read, which is a named error rather than an empty book.
+    *prices* is one whole-futures-book snapshot: marking N rows must cost one
+    request, never N, or the page's cost scales with how many trades are running.
+    """
+    report = LiveReport()
+    if not isinstance(ledger, dict):
+        report.error = "snap ledger unreadable"
+        return report
+    rows = ledger.get("rows")
+    if not isinstance(rows, list):
+        report.error = "snap ledger carries no rows"
+        return report
+    if open_signals is None:
+        report.error = "engine signal feed unavailable — open rows cannot be identified"
+        return report
+
+    live_by_id: dict[str, dict] = {}
+    for entry in open_signals:
+        if not isinstance(entry, dict) or not _is_open(entry):
+            continue
+        sid = str(entry.get("id") or entry.get("signal_id") or "")
+        if sid:
+            live_by_id[sid] = entry
+
+    price_map = prices if isinstance(prices, dict) else {}
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if setup_class and str(row.get("setup_class") or "") != setup_class:
+            continue
+        if str(row.get("refused") or ""):
+            continue
+        report.n_stamped += 1
+
+        sid = str(row.get("signal_id") or "")
+        live = live_by_id.get(sid)
+        if live is None:
+            continue
+        report.n_live += 1
+
+        entry_px = _f(row.get("entry"))
+        out = LiveRow(
+            signal_id=sid,
+            symbol=str(row.get("symbol") or ""),
+            setup_class=str(row.get("setup_class") or ""),
+            direction=str(row.get("direction") or ""),
+            tf=str(row.get("tf") or ""),
+            entry=entry_px,
+            status=str(live.get("status") or ""),
+            engine_sl=_f(live.get("sl")) or _f(live.get("stop_loss")),
+            engine_tp1=_f(live.get("tp1")),
+            sl_arith=_f(row.get("sl_arith")),
+            sl_snapped=_f(row.get("sl_snapped")),
+            tp1_arith=_f(row.get("tp1_arith")),
+            tp1_snapped=_f(row.get("tp1_snapped")),
+            sl_source=str(row.get("sl_source") or ""),
+            tp1_source=str(row.get("tp1_source") or ""),
+        )
+
+        # Has the monitor moved the stop out from under the stamp? Asked before
+        # anything is compared, because the answer decides whether comparing is
+        # meaningful at all.
+        if out.engine_sl is not None and out.sl_arith is not None:
+            out.geometry_moved = abs(out.engine_sl - out.sl_arith) > GEOMETRY_MOVE_EPS
+            if out.geometry_moved:
+                report.n_geometry_moved += 1
+
+        price = _f(price_map.get(out.symbol))
+        if price is None or price <= 0 or not entry_px or entry_px <= 0:
+            report.rows.append(out)
+            continue
+        report.n_marked += 1
+        is_long = "LONG" in out.direction.upper()
+        out.current_price = price
+        move = (price - entry_px) if is_long else (entry_px - price)
+        out.unrealized_pct = move / entry_px * 100.0
+
+        # Shipped rooms read the ENGINE's current levels, never the stamped
+        # ones: a trailed stop makes the stamped number a stop nobody is
+        # working. Snapped rooms read the stamp, because that is the arm.
+        out.room_to_sl_pct = _room_pct(price, out.engine_sl, is_long, toward="stop")
+        out.room_to_tp1_pct = _room_pct(price, out.engine_tp1, is_long, toward="target")
+        out.room_to_snapped_sl_pct = _room_pct(
+            price, out.sl_snapped, is_long, toward="stop")
+        out.room_to_snapped_tp1_pct = _room_pct(
+            price, out.tp1_snapped, is_long, toward="target")
+
+        for attr, sl_room, tp_room in (
+            ("shipped_crossed", out.room_to_sl_pct, out.room_to_tp1_pct),
+            ("snapped_crossed", out.room_to_snapped_sl_pct,
+             out.room_to_snapped_tp1_pct),
+        ):
+            if sl_room is not None and sl_room < 0:
+                setattr(out, attr, "SL")
+            elif tp_room is not None and tp_room < 0:
+                setattr(out, attr, "TP1")
+
+        report.rows.append(out)
+
+    # Biggest unrealized move first — the rows an operator acts on.
+    report.rows.sort(key=lambda r: -(abs(r.unrealized_pct or 0.0)))
+    return report
