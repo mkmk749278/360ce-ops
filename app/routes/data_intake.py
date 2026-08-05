@@ -67,7 +67,9 @@ STREAM_KIND_COPY: list[tuple[str, str, str]] = [
      "subscribes it, so the tick store serves a seed-time REST snapshot."),
     ("depth", "Order book depth",
      "@depth. Without it the book is one bid and one ask from bookTicker — "
-     "no walls, no refills, no absorption."),
+     "no walls, no refills, no absorption. Subscribed is not consumed: the "
+     "depth card below says which book the four consumers are actually "
+     "reading."),
 ]
 
 
