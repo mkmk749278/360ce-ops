@@ -203,7 +203,25 @@
 <div class="card">
   <h2>Coverage</h2>
   <table class="kv">
-    <tr><th>Rows stamped</th><td>{{ report.n_rows }}</td></tr>
+    <tr><th>Rows stamped</th><td>
+      {{ report.n_rows }}
+      {% if report.n_setups %}
+      from <strong>{{ report.n_setups }}</strong> distinct setup{{ '' if report.n_setups == 1 else 's' }}
+      {% if report.top_setup_share >= 0.25 %}
+      · <span class="badge badge-warn">{{ '%.0f'|format(report.top_setup_share * 100) }}% is
+        {{ report.top_setup }}</span>
+      {% endif %}
+      {% endif %}
+      <span class="muted small">
+        A setup persists across scans, so a <strong>row count is not an evidence
+        count</strong>. On the 2026-08-05 export 51 rows came from 6 setups —
+        EPICUSDT SHORT alone was 30 of them, every one carrying the identical
+        shift, i.e. one level counted thirty times. The engine now throttles
+        re-detection to one row per setup per 30 minutes; this column stays
+        because a throttle can regress and a row count alone could never show it.
+        Read the setup count before any rate below.
+      </span>
+    </td></tr>
     <tr><th>Carrying a measurement</th><td>{{ report.n_measured }}</td></tr>
     <tr>
       <th>Ring cap</th>
