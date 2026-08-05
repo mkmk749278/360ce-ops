@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Price action, driving</h1>
+
+{% if error %}
+<div class="card">
+  <p class="small"><span class="badge badge-warn">UNREADABLE</span> {{ error }}</p>
+</div>
+{% endif %}
+
+<div class="card">
+  <p class="small">
+    <span class="badge">OWNER ONLY — NOTHING DELIVERED</span>
+  </p>
+  <p class="muted small">
+    Every row here is a signal <strong>this engine generated from structure
+    alone</strong>: a LevelBook level swept and reclaimed, delta-confirmed from
+    the footprint, stop beyond the sweep wick, target at the next opposing level.
+    No moving average, no fixed R-multiple.
+    <strong>Each was diverted before the queue</strong> — it reached no channel,
+    no push, no app feed and no order. Nothing on this page has cost or made a
+    rupee.
+  </p>
+  <p class="muted small">
+    These rows are <strong>not</strong> on <a href="/signals/dark-live">the dark
+    feed</a> and must never be pooled with it. A dark-feed row cleared the full
+    scoring engine and every gate but the one loosened for it; a row here has been
+    through <em>none</em> of that. <code>confidence</code> is <code>0.0</code> on
+    every row and that is <strong>honest, not missing</strong> — the lane does not
+    score, and a number there would be fabricated performance data.
+  </p>
+</div>
+
+{# ── the headline ─────────────────────────────────────────────────────── #}
+{% set s = summary %}
+<div class="card">
+  <h2>Volume first, then performance</h2>
+  <p class="muted small">
+    Volume leads because the question was about volume before it was about
+    accuracy — a lane producing two signals a week cannot be judged on its win
+    rate whatever that rate says.
+  </p>
+
+  {% if s.n_total == 0 %}
+  <p class="small">
+    <span class="badge">NO ROWS YET</span>
+    The lane has produced nothing so far. That is the <strong>quiet</strong>
+    state, not a fault: the trigger is deliberately rare, and it refuses by name
+    when a level is not swept, when the footprint has no bar for the symbol, when
+    delta opposes the reclaim, or when there is no opposing level to target.
+    Those refusal counts are on
+    <a href="/diagnostics/data-intake">the data-intake page</a>.
+  </p>
+  {% else %}
+  <table class="kv">
+    <tr><th>Signals</th><td>
+      <strong>{{ s.n_total }}</strong>
+      {% if s.per_day is not none %}
+      · <strong>{{ '%.1f'|format(s.per_day) }}/day</strong>
+      <span class="muted small">over {{ '%.1f'|format(s.span_days) }} days of rows</span>
+      {% else %}
+      <span class="muted small">too few rows to state a rate</span>
+      {% endif %}
+      · {{ s.n_closed }} closed, {{ s.n_open }} still open
+    </td></tr>
+
+    {% if s.n_closed %}
+    <tr><th>Win rate</th><td>
+      {{ '%.0f'|format(s.win_rate) }}%
+      <span class="muted small">{{ s.wins }}W / {{ s.losses }}L — closed rows only.
+        Open rows carry a live mark below but are in no realized figure.</span>
+    </td></tr>
+    <tr><th>PnL — gross</th><td>
+      <span class="{{ 'good' if s.gross_pct > 0 else 'bad' }}">
+        {{ '%+.2f'|format(s.gross_pct) }}%</span> total
+      · {{ '%+.3f'|format(s.avg_gross_pct) }}% per signal
+    </td></tr>
+    <tr><th>Fees</th><td>
+      −{{ '%.2f'|format(s.fees_pct) }}%
+      <span class="muted small">{{ '%.2f'|format(s.fee_pct) }}% round trip ×
+        {{ s.n_closed }} trades. Charged to every row including the winners.</span>
+    </td></tr>
+    <tr><th>PnL — <strong>net</strong></th><td>
+      <span class="{{ 'good' if s.net_pct > 0 else 'bad' }}">
+        <strong>{{ '%+.2f'|format(s.net_pct) }}%</strong></span> total
+      · <strong>{{ '%+.3f'|format(s.avg_net_pct) }}%</strong> per signal
+      <span class="muted small">this is the number that decides anything —
+        the book loses ~10× its edge to fees, so a gross-only figure answers the
+        wrong question</span>
+    </td></tr>
+    <tr><th>Verdict</th><td>
+      {% if s.verdict == 'no_edge' %}
+      <span class="badge badge-warn">NO EDGE DETECTED</span>
+      <span class="muted small">
+        Net of costs this lane does not make money on the rows so far. That is a
+        <strong>supported outcome</strong> of the program, not a failure of it —
+        a controlled test of 54 mechanical SMC variants over 2.5M bars produced a
+        best win rate of 56.3% and <strong>zero profitable after costs</strong>.
+        Read <code>n</code> before reading this at all.
+      </span>
+      {% else %}
+      <span class="badge badge-ok">POSITIVE NET</span>
+      <span class="muted small">
+        On {{ s.n_closed }} closed rows. Not a promotion argument — two winners
+        are not a promotion, and this needs a confidence interval and a count of
+        how many cells were looked at before any of it justifies delivering to
+        users.
+      </span>
+      {% endif %}
+    </td></tr>
+  </table>
+  {% else %}
+  <p class="small">
+    <span class="badge">{{ s.n_open }} OPEN, NONE CLOSED</span>
+    Rows exist but none has resolved yet, so there is no win rate and no PnL to
+    state. Open rows and their live marks are below.
+  </p>
+  {% endif %}
+  {% endif %}
+</div>
+
+{# ── by level source ──────────────────────────────────────────────────── #}
+{% if sources %}
+<div class="card">
+  <h2>By the level that was swept</h2>
+  <p class="muted small">
+    A 1d level and a 1h level are different obstacles; pooling them averages a
+    real effect into noise. <strong>Read <code>n</code> first</strong> — a bucket
+    of three rows has a win rate and it means nothing.
+  </p>
+  <table>
+    <thead><tr><th>Level TF</th><th>Signals</th><th>Closed</th><th>Win</th><th>Avg PnL</th></tr></thead>
+    <tbody>
+      {% for b in sources %}
+      <tr>
+        <td><code>{{ b.source }}</code></td>
+        <td>{{ b.n }}</td>
+        <td>{{ b.n_closed }}</td>
+        <td>{% if b.win_rate is not none %}{{ '%.0f'|format(b.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if b.avg_pct is not none %}{{ '%+.3f'|format(b.avg_pct) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{# ── the rows ─────────────────────────────────────────────────────────── #}
+{% if rows %}
+<div class="card">
+  <h2>Signals</h2>
+  <p class="muted small">
+    Live marks come from one whole-book request, TTL-cached — the page's cost
+    does not scale with how many trades are open. Freshness is graded on the
+    <strong>engine's</strong> stamps, never on this page's clock: a surface may
+    not grade its own liveness on a clock it supplies.
+  </p>
+  <table>
+    <thead><tr>
+      <th>Symbol</th><th>Side</th><th>Level</th><th>Entry</th>
+      <th>SL / TP1</th><th>Status</th><th>PnL</th><th>MFE / MAE</th>
+    </tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><code>{{ r.symbol }}</code></td>
+        <td>{{ r.side }}</td>
+        <td class="small">
+          {% if r.level_source_tf %}<code>{{ r.level_source_tf }}</code>{% endif %}
+          {% if r.level_price %}{{ r.level_price }}{% endif %}
+        </td>
+        <td>{{ r.entry }}</td>
+        <td class="small muted">{{ r.stop_loss }} / {{ r.tp1 }}</td>
+        <td>
+          {{ r.status }}
+          {% if r.freshness and r.status == 'OPEN' %}
+          <span class="badge {{ 'badge-warn' if r.freshness != 'current' else '' }}">{{ r.freshness }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if r.pnl_pct is not none %}
+          <span class="{{ 'good' if r.pnl_pct > 0 else 'bad' }}">{{ '%+.2f'|format(r.pnl_pct) }}%</span>
+          {% elif r.unrealized_pct is not none %}
+          <span class="muted">{{ '%+.2f'|format(r.unrealized_pct) }}%</span>
+          <span class="muted small">unrealized</span>
+          {% else %}—{% endif %}
+        </td>
+        <td class="small muted">
+          {% if r.mfe_pct is not none %}{{ '%.2f'|format(r.mfe_pct) }}%{% else %}—{% endif %}
+          /
+          {% if r.mae_pct is not none %}{{ '%.2f'|format(r.mae_pct) }}%{% else %}—{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if capped %}
+  <p class="muted small">
+    Showing {{ rows|length }} of {{ total_rows }} — the cap is a render bound and
+    it bit here.
+  </p>
+  {% endif %}
+  <p class="muted small">
+    Unrealized figures are muted and stay out of every realized column and out of
+    the tables above. MFE/MAE are tick-sampled rather than intrabar, so a touch
+    between marks is not recorded — every "the level was reached" reading is
+    conservative in the safe direction.
+  </p>
+</div>
+{% endif %}
+
+{% endblock %}
