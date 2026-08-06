@@ -1,0 +1,31 @@
+{#- Standalone like login.html — a guest has no nav and no session yet, so this
+    page must not extend base.html (which renders the authenticated chrome). -#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Read-only access — 360 CE Ops</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <h1>360 CE Ops</h1>
+    <p class="muted">Read-only access</p>
+    {% if note %}<div class="flash">{{ note }}</div>{% endif %}
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <form method="post" action="/guest">
+      <label for="code">Access code</label>
+      <input type="text" id="code" name="code" autocomplete="off" autofocus
+             placeholder="XXXXX-XXXXX-XXXXX-XXXXX" spellcheck="false">
+      <button type="submit">Enter</button>
+    </form>
+    <p class="muted small">
+      This code grants read access to the measurement and diagnostic pages only.
+      The control panel, the diagnostic runner, subscriber data and every write
+      surface stay owner-only. The owner can revoke it at any time.
+    </p>
+    <p class="muted small"><a href="/login">Owner login</a></p>
+  </main>
+</body>
+</html>

@@ -1,0 +1,27 @@
+{#- A denial states its cause. "403" with no reason is the same defect as a
+    blank panel with no caption: the reader cannot tell "you may not" from
+    "this is broken". -#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Not available on read-only access — 360 CE Ops</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="login-body">
+  <main class="login-card">
+    <h1>Not available</h1>
+    <p><code>{{ path }}</code></p>
+    <div class="error">{{ reason }}</div>
+    <p class="muted small">
+      This session holds a temporary <strong>read-only</strong> grant. It can read
+      the measurement and diagnostic pages; it cannot reach the control plane,
+      run engine scripts, read subscriber data, or issue any write.
+    </p>
+    <p class="muted small">
+      <a href="/">Back to the dashboard</a> &middot; <a href="/guest/logout">End session</a>
+    </p>
+  </main>
+</body>
+</html>

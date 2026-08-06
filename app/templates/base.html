@@ -61,8 +61,22 @@
           ('/audit', 'Audit board', 'audit'),
           ('/data', 'Data & export', 'data')]),
   ] %}
-  {%- set ns = namespace(group=None, subs=[]) %}
+  {#- A read-only guest (app/guest_scope.py) gets the same nav minus what it
+      cannot reach. The filter reads GUEST_READ_ROUTES — the SAME set the gate
+      enforces, injected as a Jinja global — rather than a second list of
+      "pages a guest sees". A nav that mirrored the gate would drift from it,
+      and the drift shows up as a link that 403s (or worse, a page silently
+      unreachable but permitted). One writer, one reader. -#}
+  {%- set is_guest = request.scope.get('ops_role') == 'guest' %}
+  {%- set ns = namespace(group=None, subs=[], nav=[]) %}
   {%- for gkey, glabel, subs in NAV %}
+    {%- set g = namespace(vis=[]) %}
+    {%- for sub in subs %}
+      {%- if not is_guest or sub[0] in GUEST_READ_ROUTES %}{% set g.vis = g.vis + [sub] %}{% endif %}
+    {%- endfor %}
+    {%- if g.vis %}{% set ns.nav = ns.nav + [(gkey, glabel, g.vis)] %}{% endif %}
+  {%- endfor %}
+  {%- for gkey, glabel, subs in ns.nav %}
     {%- for surl, slabel, stok in subs %}
       {%- if stok == active %}{% set ns.group = gkey %}{% set ns.subs = subs %}{% endif %}
     {%- endfor %}
@@ -70,11 +84,19 @@
   <header>
     <div class="logo"><a href="/">360 CE Ops</a></div>
     <nav>
-      {%- for gkey, glabel, subs in NAV %}
+      {%- for gkey, glabel, subs in ns.nav %}
         <a href="{{ subs[0][0] }}" class="{% if ns.group==gkey %}on{% endif %}">{{ glabel }}</a>
       {%- endfor %}
     </nav>
+    {%- if is_guest %}
+    <div class="user">
+      <span class="badge badge-warn" title="Temporary read-only grant — the control plane is not reachable from this session">READ-ONLY</span>
+      <span class="muted small">{{ request.scope.get('ops_guest_label') }} · expires in {{ (request.scope.get('ops_guest_expires_in') or 0) // 60 }}m</span>
+      <a href="/guest/logout">End session</a>
+    </div>
+    {%- else %}
     <div class="user"><a href="/logout">Logout</a></div>
+    {%- endif %}
   </header>
   {%- if ns.subs and ns.subs|length > 1 %}
   <div class="subnav">
