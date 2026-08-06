@@ -312,3 +312,96 @@ class TestLayerOneSplit:
         g = next(r for r in gross if r["regime"] == "RANGING")["avg_net_pct"]
         n = next(r for r in net if r["regime"] == "RANGING")["avg_net_pct"]
         assert n == pytest.approx(g - 0.07)
+
+
+class TestFiltersAndExport:
+    """Built 2026-08-06 on the owner's question: *"if we clear them then the
+    data will be clear to estimate right"*.
+
+    Clearing would have taken the closed book from 74 rows to 12 — the
+    unstamped rows carry a perfectly valid `pnl_pct` and are most of the
+    evidence; what they cannot do is appear in a split. So: a filter, not a
+    purge. The clean population is readable immediately and nothing is deleted.
+    """
+
+    def _rows(self):
+        # Built from the file's own `_row()` so the shape is the ledger's, not
+        # one chosen here — a fixture whose keys you picked asserts your
+        # assumption back at you.
+        return [
+            _row("a", pnl=2.0, tf="1d", regime_15m="RANGING"),      # both
+            _row("b", pnl=-1.0, tf="round"),                        # level only
+            _row("c", tf="", regime_15m="VOLATILE"),                # regime only
+            _row("d", pnl=-3.0, tf=""),                             # neither
+        ]
+
+    def test_four_stamp_states_not_two(self):
+        """The two fixes shipped an hour apart, so a row can carry one stamp and
+        not the other. Folding that middle population into either end would
+        misdescribe exactly the rows a reader wonders about."""
+        from app.routes.price_action import stamp_state
+        got = [stamp_state(r) for r in self._rows()]
+        assert got == ["full", "partial", "partial", "none"]
+
+    def test_the_filter_narrows_and_does_not_delete(self):
+        from app.routes.price_action import filter_lane_rows
+        rows = self._rows()
+        assert len(filter_lane_rows(rows, stamped="full")) == 1
+        assert len(filter_lane_rows(rows, stamped="none")) == 1
+        assert len(filter_lane_rows(rows, stamped="all")) == 4
+        assert len(rows) == 4, "filtering must not mutate the source"
+
+    def test_each_option_is_counted_without_its_own_selector(self):
+        """#90/#91: a selector applied to its own counts makes every option read
+        `n = whatever I picked`."""
+        from app.routes.price_action import selector_options
+        opts = selector_options(
+            self._rows(), stamped="full", regime="", level="", status="")
+        # `stamped` counts ignore the active `stamped` filter …
+        assert opts["stamped"] == {"full": 1, "partial": 2, "none": 1}
+        # … while every other selector honours it.
+        assert opts["level"] == {"1d": 1}
+
+    def test_selectors_compose(self):
+        from app.routes.price_action import filter_lane_rows
+        rows = self._rows()
+        assert len(filter_lane_rows(rows, stamped="full", level="1d")) == 1
+        assert len(filter_lane_rows(rows, stamped="full", level="round")) == 0
+
+    def test_every_panel_is_recomputed_on_the_filtered_rows(self):
+        """A summary over the whole ledger above a filtered table is not a
+        summary of anything the reader is looking at."""
+        with _client(self._rows()) as c:
+            full = c.get("/signals/price-action?stamped=full").text
+            everything = c.get("/signals/price-action").text
+        assert "<strong>1</strong> of 4 rows" in full
+        assert "<strong>4</strong> of 4 rows" in everything
+        # …and the headline moved with the filter, not just the row count.
+        assert full != everything
+
+    def test_the_export_is_uncapped_and_carries_the_stamp_state(self):
+        """A truncated export is #97 wearing a download button. And the stamp
+        state rides into the CSV so the two populations stay separable in a
+        spreadsheet — which is where a mixed population gets averaged."""
+        from app.routes.price_action import EXPORT_COLS
+        assert "stamp_state" in EXPORT_COLS
+        assert "pnl_pct" in EXPORT_COLS
+        with _client(self._rows()) as c:
+            r = c.get("/signals/price-action/export.csv")
+        assert r.status_code == 200
+        body = r.text
+        assert "stamp_state" in body.splitlines()[0]
+        assert len(body.strip().splitlines()) == 5      # header + 4 rows
+
+    def test_the_export_honours_the_same_filters_as_the_page(self):
+        """The download must never describe a different book than the screen."""
+        with _client(self._rows()) as c:
+            r = c.get("/signals/price-action/export.csv?stamped=full")
+        assert len(r.text.strip().splitlines()) == 2    # header + 1 row
+
+    def test_an_unstamped_row_keeps_its_pnl(self):
+        """The whole reason not to purge: the missing fields are labels, not
+        outcomes."""
+        from app.routes.price_action import filter_lane_rows
+        (row,) = filter_lane_rows(self._rows(), stamped="none")
+        assert row["pnl_pct"] == -3.0

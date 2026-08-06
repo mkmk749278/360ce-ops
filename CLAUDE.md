@@ -698,6 +698,72 @@ Rules the card carries:
   cause before it gets a caption" — the two states have different fixes and the
   conflation is the defect this card repairs.
 
+## `/signals/price-action` — the lane's own page, and why it is not a purge
+
+Phase 5's surface (engine `src/price_action_lane.py`). Every row is a signal the
+engine generated **from structure alone** and diverted before the queue.
+
+**Two pages were both called "Price action" and only one was reachable**
+(2026-08-06). The label sat on `/signals/structural-snap` — the SL/TP1 geometry
+repair, a different mechanism — while this page had no nav entry at all and set
+`active: "signals"`, the *Feed* tab's key, so the Feed pill lit up on a page that
+was not the feed. `tests/test_nav.py` now derives the requirement from the route
+decorators and parses `base.html`'s NAV literal: a new literal page under
+`/signals/` fails CI until it is linked, no two labels or active keys may
+collide, and every destination is driven as a real request. **A hand-maintained
+nav is a floor** — the `is_tradfi_perp` rule wearing a fifth hat.
+
+### Filter, do not purge
+
+The owner asked whether clearing the rows written before a stamp existed would
+make the data clearer to estimate from. **It would have taken the closed book
+from 74 rows to 12.** Those rows lack `entry_regime` and `level_source_tf` and
+carry a perfectly valid `pnl_pct` — they cannot appear in a *split* and they are
+most of the *evidence*. Precision comes from n, so a purge makes the estimate
+smaller, not clearer.
+
+And the splits were **already** clean: `unstamped` is its own bucket and is never
+folded into a real one, so it cannot contaminate a cell. The only place those
+rows pool is the headline, where pooling is correct because PnL is valid on every
+row. Same call `/track-record` already makes with `UNPLACED`.
+
+So the page filters instead:
+
+- **Four stamp states, not two.** The level provenance and layer 1 shipped about
+  an hour apart, so rows between them carry one stamp and not the other.
+  `full` / `partial` / `none` — that middle population is real and is exactly the
+  set a reader wonders about.
+- **Each selector's counts are measured with every filter applied EXCEPT its
+  own** (#90/#91). A selector applied to its own counts makes every option read
+  *"n = whatever I picked"*.
+- **Every panel recomputes on the filtered rows**, and the table cap applies
+  **after** filtering (#97) and says on screen when it bit.
+- **The export is uncapped and shares one loader with the page**, so the download
+  can never describe a different book than the screen — a truncated export is #97
+  wearing a download button. `stamp_state` rides on every row, because a
+  spreadsheet is precisely where two populations get averaged into one.
+
+### Layer 1 — the split the lane exists to be judged on
+
+§1 of the program doc defines this lane's trigger **relative to the prevailing
+trend** (a break with it is a BOS, against it a CHoCH). The lane reads location,
+trigger and confirmation and has **no context layer**, so it takes both
+identically. Both timeframes render side by side and are never pooled: the
+scanner classifies on 5m and the lane triggers on 15m, and a 15m downtrend with a
+5m bounce is exactly the setup this lane keeps buying.
+
+The regime label set is **not** enumerated here — the engine's detector owns it,
+and a list kept in ops is silent by construction on the next label.
+
+### Read n first, and say how many cells
+
+The whole closed book is under 100 rows. `round` levels read 55% win over 11
+closed rows while every swing timeframe sits at 0% — interesting because it cuts
+*against* the program doc, and **CI [28%, 79%], best of 16 cells drawn**. It is
+not a finding. `FAILED_AUCTION_RECLAIM` (+0.846R on three rows, CI [−1.00,
++2.00], promotion requested within the day) is the standing example of what
+reading a thin cell costs.
+
 ## Data sources (one-line each)
 
 | Source | Module |
