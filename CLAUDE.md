@@ -698,6 +698,54 @@ Rules the card carries:
   cause before it gets a caption" — the two states have different fixes and the
   conflation is the defect this card repairs.
 
+## The read-only door (`/guest`) — a second tier that can never write
+
+Added 2026-08-06 (`docs/READ_ONLY_ACCESS.md`) for the owner's question: *"give
+access to you to browse our ops page to load data … except control Panel, from
+control I generate temporary code … and I can disable that access too"*. The
+owner mints a short-lived code on `/control`; the holder exchanges it at
+`/guest` for a read-only session; the owner revokes it from the same card.
+
+Rules, each of which is a rule already in this file arriving at the auth layer:
+
+- **The scope table is TOTAL, because a deny-list is silent on the next page.**
+  `guest_scope` classifies every registered route as guest-readable or
+  owner-only, `tests/test_guest_access.py` derives that requirement from
+  `app.routes`, and an unclassified route is denied at runtime. A deny-list
+  would have handed tomorrow's ops page to every live code the day it shipped —
+  `is_tradfi_perp`'s name list and `MEASUREMENT_SUFFIXES` wearing a fourth hat.
+  When CI says "unclassified route(s)", classify it; do not delete the
+  assertion.
+- **"GET is safe" is false here, and the counter-example is load-bearing.**
+  `/exit-backtest/run-now` is a GET link that starts a `docker exec` job on the
+  production engine — deliberately, because a proxy was eating the form POST. A
+  method-only gate hands a read-only guest a job trigger. The method check is
+  rule 1 *and* the route table is rule 2; neither is sufficient.
+- **Revocation is re-read per request, never trusted from the session.** The
+  cookie carries the grant *id*; the grant is looked up on every request. A
+  login-time check would make "I can disable that access too" true only once the
+  cookie expired, which is not what the sentence means. Same shape as the
+  engine-is-the-source-of-truth rule in the control doctrine: ops holds no
+  authorisation state locally, it re-reads it.
+- **The nav is filtered from the set the gate enforces**, injected as a Jinja
+  global — not from a second list of guest-visible pages. A nav that mirrored
+  the gate would drift, and the drift is invisible until somebody clicks a link
+  that 403s. The fix for a drifting mirror is not a second mirror.
+- **A refusal states its cause**, on the 403 page and in the audit row, and
+  every owner-only entry carries a written reason (a test asserts none is
+  blank). "403" with no reason is "blank needs a cause before it gets a caption"
+  at the auth layer — the reader cannot tell *you may not* from *this is
+  broken*.
+- **The guest-side lockout must never reach the owner.** Ten failed codes closes
+  `/guest` for fifteen minutes; `/login` is a different route and unaffected. A
+  throttle that can lock the owner out of his own kill switch is a worse failure
+  than the one it prevents.
+- **Scope is fixed at read; there is no scope parameter.** A tier that can
+  *sometimes* write is one whose blast radius has to be re-derived at every call
+  site. Read-only is the only second tier that needs no such argument, and the
+  control doctrine above (owner-gated, audited, PRG-confirmed) is unchanged by
+  this because nothing here can write.
+
 ## Data sources (one-line each)
 
 | Source | Module |

@@ -15,6 +15,8 @@ control action.
 """
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
@@ -24,6 +26,17 @@ from app.routes.positions import _enrich_row
 router = APIRouter()
 
 _VALID_MODES = {"off", "paper", "live"}
+
+#: (form value, label, seconds). Deliberately short by default — a read-only
+#: grant that outlives the reason it was minted is the one nobody remembers to
+#: revoke, and the whole tier exists to be temporary.
+_GUEST_TTL_CHOICES: list[tuple[str, str, int]] = [
+    ("1h", "1 hour", 3600),
+    ("6h", "6 hours", 6 * 3600),
+    ("24h", "24 hours", 24 * 3600),
+    ("7d", "7 days", 7 * 86400),
+]
+_GUEST_TTLS = {key: sec for key, _label, sec in _GUEST_TTL_CHOICES}
 
 
 def _is_error(result: object) -> bool:
@@ -55,6 +68,15 @@ async def _render(request: Request):
                     str(entry.get("category") or "Other"), []
                 ).append(entry)
 
+    # A freshly-minted guest code is shown exactly once, on the redirect that
+    # follows the mint. It is held in process memory keyed by a one-shot nonce
+    # in the flash rather than in the flash itself, so the plaintext code never
+    # rides in the session cookie and a refresh cannot re-display it.
+    new_code = None
+    if isinstance(flash, dict) and flash.get("code_nonce"):
+        pending = getattr(request.app.state, "guest_pending_codes", None) or {}
+        new_code = pending.pop(flash["code_nonce"], None)
+
     return templates.TemplateResponse(
         "control.html",
         {
@@ -68,6 +90,9 @@ async def _render(request: Request):
             "tunable_groups": tunable_groups,
             "tunables_initialised": tunables_initialised,
             "audit": audit.tail(settings.audit_log_path, limit=25),
+            "guest_grants": request.app.state.guest_access.list_grants(),
+            "guest_ttl_choices": _GUEST_TTL_CHOICES,
+            "guest_new_code": new_code,
             "flash": flash,
         },
     )
@@ -358,6 +383,101 @@ async def control_reset_signals(request: Request):
     else:
         detail = result.get("error") if isinstance(result, dict) else result
         text = f"Full reset failed: {detail}"
+    request.session["_control_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse("/control", status_code=303)
+
+
+@router.post("/control/guest-access/issue")
+async def control_guest_issue(
+    request: Request,
+    label: str = Form(""),
+    ttl: str = Form("6h"),
+):
+    """Mint a temporary read-only access code.
+
+    The code grants ``GET`` on the classified read pages only — never the
+    control panel, the diag runner, the subscriber tables or the ``/api/v1``
+    token surface (``app/guest_scope.py`` holds the table, and a route nobody
+    has classified is denied). It is displayed once here and cannot be
+    recovered afterwards; the store keeps only its SHA-256 hash."""
+    settings = request.app.state.settings
+    store = request.app.state.guest_access
+    ttl_key = (ttl or "").strip()
+    ttl_sec = _GUEST_TTLS.get(ttl_key)
+    if ttl_sec is None:
+        request.session["_control_flash"] = {
+            "ok": False,
+            "text": f"Rejected — unknown duration {ttl_key!r}.",
+        }
+        return RedirectResponse("/control", status_code=303)
+
+    code, grant_id = store.issue(label=label, ttl_sec=ttl_sec)
+    # Hand the plaintext to the next render through process memory, not the
+    # session cookie. Popped on display; a restart just loses it, which costs
+    # one re-mint.
+    pending = getattr(request.app.state, "guest_pending_codes", None)
+    if pending is None:
+        pending = {}
+        request.app.state.guest_pending_codes = pending
+    nonce = secrets.token_hex(8)
+    pending[nonce] = code
+
+    audit.record(
+        settings.audit_log_path,
+        action="guest_access_issued",
+        params={"label": label or "guest", "ttl": ttl_key, "grant_id": grant_id},
+        result={},
+        ok=True,
+    )
+    request.session["_control_flash"] = {
+        "ok": True,
+        "text": f"Read-only code minted ({ttl_key}). Copy it now — it is not shown again.",
+        "code_nonce": nonce,
+    }
+    return RedirectResponse("/control", status_code=303)
+
+
+@router.post("/control/guest-access/revoke")
+async def control_guest_revoke(
+    request: Request,
+    grant_id: str = Form(""),
+    scope: str = Form("one"),
+):
+    """Kill one read-only grant, or all of them.
+
+    Revocation takes effect on the guest's **next request** — the session holds
+    only the grant id and the middleware re-reads the grant every time — so
+    there is no window in which a revoked code keeps working."""
+    settings = request.app.state.settings
+    store = request.app.state.guest_access
+
+    if scope == "all":
+        n = store.revoke_all()
+        audit.record(
+            settings.audit_log_path,
+            action="guest_access_revoked_all",
+            params={"count": n},
+            result={},
+            ok=True,
+        )
+        text = f"Revoked {n} read-only code(s). Any open guest session ends on its next request."
+        request.session["_control_flash"] = {"ok": True, "text": text}
+        return RedirectResponse("/control", status_code=303)
+
+    grant_id = (grant_id or "").strip()
+    ok = store.revoke(grant_id) if grant_id else False
+    audit.record(
+        settings.audit_log_path,
+        action="guest_access_revoked",
+        params={"grant_id": grant_id},
+        result={} if ok else {"error": "not found or already dead"},
+        ok=ok,
+    )
+    text = (
+        "Read-only code revoked — the session ends on its next request."
+        if ok
+        else "Nothing to revoke: that code is already revoked or expired."
+    )
     request.session["_control_flash"] = {"ok": ok, "text": text}
     return RedirectResponse("/control", status_code=303)
 

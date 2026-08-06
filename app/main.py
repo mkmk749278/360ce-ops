@@ -19,6 +19,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.app_tokens import AppTokenStore
 from app.auth_mw import AuthRedirectMiddleware
+from app import guest_scope
+from app.guest_access import GuestAccessStore
 from app.totp import TotpGate
 from app.device_registry import DeviceRegistry
 from app.config import load_settings
@@ -43,6 +45,7 @@ from app.routes import (
     diag,
     emission_controller,
     exit_backtest,
+    guest,
     invalidations,
     pairs,
     performance,
@@ -73,6 +76,11 @@ logger = logging.getLogger("ops")
 
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+# base.html filters its nav for a read-only guest. It reads the SAME set the
+# gate enforces rather than keeping a second list of guest-visible pages — a
+# nav that mirrored the scope table would drift from it, and the drift is
+# invisible until somebody clicks a link that 403s.
+templates.env.globals["GUEST_READ_ROUTES"] = guest_scope.GUEST_READ_ROUTES
 
 
 @asynccontextmanager
@@ -84,6 +92,12 @@ async def lifespan(app: FastAPI):
     app.state.totp_gate = TotpGate(settings.totp_secret)
     app.state.engine_api = EngineApiClient(settings)
     app.state.app_tokens = AppTokenStore(settings.app_tokens_path)
+    # Temporary read-only grants (owner mints from /control). Dead records
+    # are purged at boot so the file cannot grow forever; purging changes no
+    # access decision, since an expired grant already fails verification.
+    app.state.guest_access = GuestAccessStore(settings.guest_access_path)
+    app.state.guest_access.purge()
+    app.state.guest_pending_codes = {}
     app.state.device_registry = DeviceRegistry(settings.device_tokens_path)
     app.state.data_volume = DataVolumeReader(settings)
     app.state.monitor_logs = MonitorLogsReader(settings)
@@ -115,6 +129,7 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 app.include_router(auth.router)
+app.include_router(guest.router)
 app.include_router(api_v1.router)
 app.include_router(pulse.router)
 app.include_router(truth.router)
