@@ -32,6 +32,86 @@
   </p>
 </div>
 
+{# ── filters ──────────────────────────────────────────────────────────── #}
+{# Two builders rather than one plus string surgery: the page carries fee_pct
+   and the export does not, and rewriting a query string with `replace` is the
+   kind of thing that works until a value happens to contain the needle. #}
+{% macro sel_params(over) -%}
+{%- for k in ['stamped','regime','level','status'] -%}
+{%- set v = over.get(k, sel[k]) -%}
+{%- if v %}&{{ k }}={{ v }}{% endif -%}
+{%- endfor -%}
+{%- endmacro %}
+
+{% macro qs(over) -%}?fee_pct={{ fee_pct }}{{ sel_params(over) }}{%- endmacro %}
+
+{% macro export_qs() -%}?_={{ sel_params({}) }}{%- endmacro %}
+
+<div class="card">
+  <h2>Filters</h2>
+  <p class="muted small">
+    Every panel below is recomputed with the selection applied — a summary over
+    the whole ledger above a filtered table is not a summary of anything you are
+    looking at (#90). <strong>Each option's own count is measured with every
+    filter applied EXCEPT its own</strong>, because a selector applied to its own
+    counts makes every option read <em>n = whatever I picked</em>.
+  </p>
+
+  <h3 class="small">Stamps — four states, not two</h3>
+  <p class="muted small">
+    The level provenance and layer 1 shipped about an hour apart on 2026-08-06,
+    so rows written between them carry one stamp and not the other. That middle
+    population is real and gets its own state rather than being folded into
+    either end. <strong>An unstamped row is not a bad row</strong> — its
+    <code>pnl_pct</code> is perfectly valid and it is most of the closed book;
+    what it cannot do is appear in a split.
+  </p>
+  <p>
+    {% for key, meaning in stamp_states %}
+    {% set n = options.stamped.get(key) if key != 'all' else n_all %}
+    <a href="{{ qs({'stamped': '' if key == 'all' else key}) }}"
+       class="badge {% if sel.stamped == key or (key == 'all' and not sel.stamped) %}badge-ok{% endif %}"
+       title="{{ meaning }}">{{ key }} ({{ n or 0 }})</a>
+    {% endfor %}
+  </p>
+
+  {% for field, label in [('regime', 'Regime (trigger timeframe)'),
+                          ('level', 'Level swept'),
+                          ('status', 'Status')] %}
+  {% if options[field] %}
+  <h3 class="small">{{ label }}</h3>
+  <p>
+    <a href="{{ qs({field: ''}) }}"
+       class="badge {% if not sel[field] %}badge-ok{% endif %}">all</a>
+    {% for key, n in options[field] | dictsort %}
+    {% if key %}
+    <a href="{{ qs({field: key}) }}"
+       class="badge {% if sel[field] == key %}badge-ok{% endif %}">{{ key }} ({{ n }})</a>
+    {% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
+  {% endfor %}
+
+  <p class="muted small">
+    Showing <strong>{{ n_shown }}</strong> of {{ n_all }} rows.
+    {% if capped %}
+    <span class="badge badge-warn">table capped at {{ row_cap }}</span>
+    The cap is a <strong>render</strong> bound applied after every filter — the
+    CSV below is uncapped, because a truncated export is a row cap wearing a
+    download button.
+    {% endif %}
+  </p>
+  <p>
+    <a class="badge" href="/signals/price-action/export.csv{{ export_qs() }}">
+      Download CSV — current selection
+    </a>
+    <span class="muted small">every column the ledger carries, uncapped, with
+      the stamp state on each row so the two populations stay separable in a
+      spreadsheet</span>
+  </p>
+</div>
+
 {# ── the headline ─────────────────────────────────────────────────────── #}
 {% set s = summary %}
 <div class="card">
