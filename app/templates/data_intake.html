@@ -630,6 +630,125 @@
   </table>
 </div>
 
+{# ── Price-action lane census ────────────────────────────────────────────── #}
+{% set pa = (report.derived or {}).price_action_lane or {} %}
+<div class="card">
+  <h2>Price-action lane — why it produced what it produced</h2>
+
+  {# The state leads, before any count. An unread measurement flag makes every
+     zero below mean "switched off" rather than "quiet", and those are not the
+     same page. #}
+  {% if not pa.present %}
+    <p><span class="badge badge-err">NOT REPORTED</span>
+      <span class="muted small">
+        the engine's data-intake payload carries no <code>price_action_lane</code>
+        block. That is an engine older than 2026-08-06, or the lane failed to
+        import — <strong>not</strong> a lane with nothing to say.
+        {% if pa.error %}Cause: <code>{{ pa.error }}</code>{% endif %}
+      </span></p>
+  {% else %}
+    <p>
+      {% if pa.measure_enabled %}<span class="badge badge-ok">MEASURING</span>
+      {% else %}<span class="badge badge-warn">MEASURE DISABLED</span>{% endif %}
+      <span class="muted small">
+        Phase 5 — the one path in this engine whose <strong>trigger</strong> is
+        structure rather than an indicator. Dark throughout: it publishes only to
+        <code>dark_emission</code>, so nothing here reaches a channel, a push, the
+        app feed or an order.
+      </span>
+    </p>
+
+    <p class="muted small">
+      <strong>Emission is not the health signal.</strong> The trigger is rare by
+      design, so zero rows is a quiet market and paging on it would teach a reader
+      to ignore this card. What the table answers is <em>which refusal is doing the
+      work</em> — and the four classes below have four different next moves.
+      Pooling any two of them into "no signals" is how a page reports a fault that
+      is not happening.
+    </p>
+
+    <table class="kv">
+      <tr><th>Evaluated</th><td>
+        {{ pa.evaluated }}
+        <span class="muted small">candidate evaluations since engine start — the
+          denominator for every share below. Rows are <strong>not</strong> the
+          denominator: dividing refusals by emissions would put a rare-by-design
+          numerator under a rare-by-design denominator and produce noise.</span>
+      </td></tr>
+      <tr><th>Stamped</th><td>
+        {{ pa.emitted }}
+        <span class="muted small">rows written to the dark lane, read on
+          <a href="/signals/price-action">/signals/price-action</a>. One row is one
+          <strong>move</strong>, not one scan — the 30-minute per-symbol throttle is
+          the <code>cooldown</code> line below.</span>
+      </td></tr>
+    </table>
+
+    {% if not lane_rows %}
+      <p class="muted small">
+        No refusals counted yet.
+        {% if pa.evaluated %}Every evaluation produced a row, which for this lane
+        would be extraordinary — read it as a defect before reading it as a
+        result.{% else %}The lane has not been evaluated since the engine
+        started; if this persists past a scan cycle, the call site is not being
+        reached.{% endif %}
+      </p>
+    {% else %}
+      <h3 class="small">Where the candidates went</h3>
+      <table>
+        <thead><tr>
+          <th>Refusal</th><th>Class</th><th>Count</th><th>Share of evaluations</th>
+          <th>What it means</th>
+        </tr></thead>
+        <tbody>
+          {% for r in lane_rows %}
+          <tr>
+            <td><code>{{ r.reason }}</code></td>
+            <td>
+              {% if r.cls == 'fault' %}<span class="badge badge-err">fault</span>
+              {% elif r.cls == 'coverage' %}<span class="badge badge-warn">coverage</span>
+              {% elif r.cls == 'unclassified' %}<span class="badge badge-warn">unclassified</span>
+              {% else %}<span class="badge">{{ r.cls }}</span>{% endif %}
+            </td>
+            <td>{{ r.count }}</td>
+            <td>{% if r.share is not none %}{{ '%.1f'|format(r.share * 100) }}%{% else %}—{% endif %}</td>
+            <td class="small muted">
+              {% if r.why %}{{ r.why }}
+              {% else %}<strong>This page has no sentence for this reason.</strong>
+                The engine added it and ops has not caught up — the count is real,
+                the interpretation is missing.{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+
+      <h3 class="small">By class</h3>
+      <table>
+        <thead><tr><th>Class</th><th>Count</th><th>Share</th><th>What you do</th></tr></thead>
+        <tbody>
+          {% for cls, meaning in lane_classes %}
+          {% set t = lane_class_totals.get(cls) %}
+          {% if t %}
+          <tr>
+            <td>{{ cls }}</td>
+            <td>{{ t.count }}</td>
+            <td>{{ '%.1f'|format(t.share * 100) }}%</td>
+            <td class="small muted">{{ meaning }}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted small">
+        Only classes the engine actually reported are rendered — an absent class is
+        an absent count, never a zero we invented. Rollups are computed over
+        exactly the rows in the table above (#90).
+      </p>
+    {% endif %}
+  {% endif %}
+</div>
+
 {# ── Series ──────────────────────────────────────────────────────────────── #}
 <div class="card">
   <h2>Candle series</h2>
