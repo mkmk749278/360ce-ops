@@ -168,6 +168,57 @@ def concentration(rows: list[dict]) -> dict:
     }
 
 
+#: Layer-1 regime buckets are NOT enumerated here. The engine's regime detector
+#: owns the label set, and a list ops keeps would be silent by construction on
+#: the next label it adds — `MEASUREMENT_SUFFIXES` wearing a fourth hat. The
+#: split iterates whatever the rows carry.
+
+
+def by_regime(rows: list[dict], *, fee_pct: float, key: str) -> list[dict]:
+    """Split the book by layer 1 — "is the prevailing trend with us or not".
+
+    §1 of the price-action program defines this lane's own trigger relative to
+    the prevailing trend: a break WITH it is a BOS (continuation), AGAINST it a
+    CHoCH (reversal). The lane takes both identically, so this is the first
+    split that can say whether that is what is costing it.
+
+    Every row before 2026-08-06 carries no regime at all — the field was
+    declared and never assigned — so those land in `unstamped`, which is
+    **counted apart from every real bucket**. Folding them into one would let a
+    bucket take credit for rows nobody classified, and there is no honest
+    backfill: the regime at entry is knowable only at entry (#817).
+    """
+    buckets: dict[str, list[dict]] = {}
+    for r in rows:
+        buckets.setdefault(str(r.get(key) or "unstamped"), []).append(r)
+    out = []
+    for name, bucket in sorted(buckets.items()):
+        closed = [x for x in bucket if _f(x.get("pnl_pct")) is not None]
+        wins = sum(1 for x in closed if (_f(x.get("pnl_pct")) or 0.0) > 0)
+        gross = sum(_f(x.get("pnl_pct")) or 0.0 for x in closed)
+        out.append({
+            "regime": name,
+            "n": len(bucket),
+            "n_closed": len(closed),
+            "win_rate": (wins / len(closed) * 100.0) if closed else None,
+            "avg_net_pct": (
+                (gross - fee_pct * len(closed)) / len(closed) if closed else None
+            ),
+            "unstamped": name == "unstamped",
+        })
+    return out
+
+
+def regime_timeframes(rows: list[dict]) -> list[str]:
+    """Which timeframes the 5m-column labels actually came from.
+
+    The scanner classifies on 5m and this lane triggers on 15m. Never pool
+    timeframes silently — if this returns more than one, the column is mixed and
+    the page says so.
+    """
+    return sorted({str(r.get("regime_tf") or "") for r in rows if r.get("regime_tf")})
+
+
 def by_level_source(rows: list[dict]) -> list[dict]:
     """Split by which timeframe produced the swept level.
 
@@ -228,6 +279,9 @@ async def price_action_page(
     summary = summarize(rows, fee_pct=fee)
     sources = by_level_source(rows)
     conc = concentration(rows)
+    regimes_entry = by_regime(rows, fee_pct=fee, key="regime")
+    regimes_trigger = by_regime(rows, fee_pct=fee, key="regime_15m")
+    regime_tfs = regime_timeframes(rows)
     shown = rows[:TABLE_ROW_CAP]
 
     return request.app.state.templates.TemplateResponse(
@@ -239,6 +293,9 @@ async def price_action_page(
             "summary": summary,
             "sources": sources,
             "concentration": conc,
+            "regimes_entry": regimes_entry,
+            "regimes_trigger": regimes_trigger,
+            "regime_tfs": regime_tfs,
             "error": error,
             "fee_pct": fee,
             "capped": len(rows) > len(shown),

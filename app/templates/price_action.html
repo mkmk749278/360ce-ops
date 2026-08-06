@@ -164,6 +164,87 @@
 </div>
 {% endif %}
 
+{# ── layer 1 ──────────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>Layer 1 — was the prevailing trend with the trade?</h2>
+  <p class="muted small">
+    §1 of the price-action program defines this lane's own trigger
+    <strong>relative to the prevailing trend</strong>: a break <em>with</em> it is
+    a BOS (continuation), <em>against</em> it a CHoCH (reversal). The lane takes
+    both identically — it reads location, trigger and confirmation, and has no
+    context layer at all. This is the first split that can say whether that is
+    what costs it.
+  </p>
+  <p class="muted small">
+    The field was <strong>declared and never assigned</strong> until 2026-08-06,
+    so every earlier row is <code>unstamped</code> — counted apart, never folded
+    into a real bucket, and <strong>not backfillable</strong>: the regime at
+    entry is knowable only at entry.
+    <strong>This table is expected to be almost all <code>unstamped</code>
+    today</strong>, and to become readable as new rows arrive. That is the
+    honest state, not a fault.
+  </p>
+
+  <h3 class="small">
+    On the lane's own trigger timeframe
+    <span class="muted">— the one layer 1 actually asks for here</span>
+  </h3>
+  <table>
+    <thead><tr><th>Regime</th><th>Rows</th><th>Closed</th><th>Win %</th><th>Net / signal</th></tr></thead>
+    <tbody>
+      {% for r in regimes_trigger %}
+      <tr>
+        <td>
+          {% if r.unstamped %}<span class="badge badge-warn">unstamped</span>
+          {% else %}<code>{{ r.regime }}</code>{% endif %}
+        </td>
+        <td>{{ r.n }}</td>
+        <td>{{ r.n_closed }}</td>
+        <td>{% if r.win_rate is not none %}{{ '%.0f'|format(r.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if r.avg_net_pct is not none %}{{ '%+.3f'|format(r.avg_net_pct) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3 class="small">
+    On the scanner's regime timeframe
+    {% if regime_tfs %}<span class="muted">— {{ regime_tfs|join(', ') }}</span>{% endif %}
+    {% if regime_tfs|length > 1 %}<span class="badge badge-warn">mixed</span>{% endif %}
+  </h3>
+  <p class="muted small">
+    Kept beside the trigger-timeframe read rather than instead of it: the
+    scanner classifies on 5m and this lane triggers on 15m, so
+    <strong>a disagreement between the two is information</strong>, not noise.
+    Pooling them would hide exactly the case worth seeing — a 15m downtrend with
+    a 5m bounce is the setup this lane keeps buying.
+  </p>
+  <table>
+    <thead><tr><th>Regime</th><th>Rows</th><th>Closed</th><th>Win %</th><th>Net / signal</th></tr></thead>
+    <tbody>
+      {% for r in regimes_entry %}
+      <tr>
+        <td>
+          {% if r.unstamped %}<span class="badge badge-warn">unstamped</span>
+          {% else %}<code>{{ r.regime }}</code>{% endif %}
+        </td>
+        <td>{{ r.n }}</td>
+        <td>{{ r.n_closed }}</td>
+        <td>{% if r.win_rate is not none %}{{ '%.0f'|format(r.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if r.avg_net_pct is not none %}{{ '%+.3f'|format(r.avg_net_pct) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    <strong>Read <code>n</code> before any win rate here.</strong> This lane's
+    whole closed book is under 50 rows and a bucket of three has a win rate that
+    means nothing — <code>FAILED_AUCTION_RECLAIM</code> read +0.846R on three
+    rows with a CI of [−1.00, +2.00] and a promotion was requested within the
+    day. Nothing on this page chooses a filter; it says where the losses sit.
+  </p>
+</div>
+
 {# ── by level source ──────────────────────────────────────────────────── #}
 {% if sources %}
 <div class="card">
