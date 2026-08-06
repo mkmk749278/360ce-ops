@@ -67,6 +67,7 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/signals/structural-snap/live.csv",
         "/signals/structural-veto",
         "/signals/price-action",
+        "/signals/price-action/export.csv",
         # -- performance ----------------------------------------------------
         "/profit",
         "/profit/export.csv",
