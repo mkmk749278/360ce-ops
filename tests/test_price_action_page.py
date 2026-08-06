@@ -247,3 +247,68 @@ class TestConcentration:
         from app.routes.price_action import concentration
         c = concentration(self._rows())
         assert c["rows_per_move"] > 1.0
+
+
+class TestLayerOneSplit:
+    """§1 of the program doc defines this lane's trigger relative to the
+    prevailing trend, and the lane has no context layer at all. `entry_regime`
+    was declared on `LaneSignal` and never assigned, so the question could not
+    even be asked (owner-directed audit, 2026-08-06)."""
+
+    def _rows(self):
+        return [
+            {"regime": "TRENDING_DOWN", "regime_15m": "TRENDING_DOWN",
+             "regime_tf": "5m", "pnl_pct": -2.0},
+            {"regime": "RANGING", "regime_15m": "TRENDING_DOWN",
+             "regime_tf": "5m", "pnl_pct": -1.0},
+            {"regime": "RANGING", "regime_15m": "RANGING",
+             "regime_tf": "5m", "pnl_pct": 3.0},
+            {"pnl_pct": -1.5},                      # pre-fix row, no regime
+        ]
+
+    def test_pre_fix_rows_are_unstamped_never_folded_into_a_real_bucket(self):
+        """There is no honest backfill — the regime at entry is knowable only at
+        entry (#817). Folding them in would let a bucket take credit for rows
+        nobody classified."""
+        from app.routes.price_action import by_regime
+        out = by_regime(self._rows(), fee_pct=0.07, key="regime")
+        names = {r["regime"] for r in out}
+        assert "unstamped" in names
+        un = next(r for r in out if r["regime"] == "unstamped")
+        assert un["n"] == 1 and un["unstamped"] is True
+        assert sum(r["n"] for r in out) == 4
+
+    def test_the_two_timeframes_are_split_not_pooled(self):
+        """A 15m downtrend with a 5m bounce is the setup this lane keeps buying.
+        Pooling the two reads would hide exactly that case."""
+        from app.routes.price_action import by_regime
+        entry = by_regime(self._rows(), fee_pct=0.07, key="regime")
+        trigger = by_regime(self._rows(), fee_pct=0.07, key="regime_15m")
+        e = {r["regime"]: r["n"] for r in entry}
+        t = {r["regime"]: r["n"] for r in trigger}
+        assert e["RANGING"] == 2 and e["TRENDING_DOWN"] == 1
+        assert t["TRENDING_DOWN"] == 2 and t["RANGING"] == 1
+        assert e != t, "the two reads must be able to disagree"
+
+    def test_the_label_set_is_not_mirrored_from_the_engine(self):
+        """A list ops keeps is silent by construction on the next label the
+        engine adds. The split iterates whatever the rows carry."""
+        from app.routes.price_action import by_regime
+        out = by_regime(
+            [{"regime": "SOME_FUTURE_REGIME", "pnl_pct": 1.0}], fee_pct=0.0
+            , key="regime")
+        assert out[0]["regime"] == "SOME_FUTURE_REGIME"
+
+    def test_the_regime_timeframe_is_reported_and_badged_when_mixed(self):
+        from app.routes.price_action import regime_timeframes
+        assert regime_timeframes(self._rows()) == ["5m"]
+        mixed = self._rows() + [{"regime_tf": "15m"}]
+        assert regime_timeframes(mixed) == ["15m", "5m"]
+
+    def test_fees_are_charged_in_the_split(self):
+        from app.routes.price_action import by_regime
+        gross = by_regime(self._rows(), fee_pct=0.0, key="regime")
+        net = by_regime(self._rows(), fee_pct=0.07, key="regime")
+        g = next(r for r in gross if r["regime"] == "RANGING")["avg_net_pct"]
+        n = next(r for r in net if r["regime"] == "RANGING")["avg_net_pct"]
+        assert n == pytest.approx(g - 0.07)
