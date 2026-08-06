@@ -219,6 +219,103 @@ def regime_timeframes(rows: list[dict]) -> list[str]:
     return sorted({str(r.get("regime_tf") or "") for r in rows if r.get("regime_tf")})
 
 
+#: Which stamps a row carries. FOUR states, not two — the level provenance
+#: (#891) and layer 1 (#892) shipped about an hour apart, so rows written
+#: between them carry one and not the other. Folding that middle population into
+#: either end would misdescribe it, and it is exactly the rows a reader is most
+#: likely to wonder about.
+STAMP_STATES: list[tuple[str, str]] = [
+    ("all", "Everything in the ledger"),
+    ("full", "Carries BOTH the level source and the regime — the clean population"),
+    ("partial", "Carries one stamp and not the other (written between the two fixes)"),
+    ("none", "Carries neither — written before either fix"),
+]
+
+
+def _has_level_stamp(row: dict) -> bool:
+    return bool(str(row.get("level_source_tf") or ""))
+
+
+def _has_regime_stamp(row: dict) -> bool:
+    return bool(str(row.get("regime_15m") or "") or str(row.get("regime") or ""))
+
+
+def stamp_state(row: dict) -> str:
+    """`full` / `partial` / `none` for one row."""
+    n = _has_level_stamp(row) + _has_regime_stamp(row)
+    return ("none", "partial", "full")[n]
+
+
+def filter_lane_rows(
+    rows: list[dict],
+    *,
+    stamped: str = "",
+    regime: str = "",
+    level: str = "",
+    status: str = "",
+) -> list[dict]:
+    """Each selector applied independently, so a caller can omit one when
+    counting that selector's own options (#90/#91). A selector applied to its
+    own counts makes every option describe only itself.
+    """
+    out = rows
+    if stamped and stamped != "all":
+        out = [r for r in out if stamp_state(r) == stamped]
+    if regime:
+        out = [r for r in out if str(r.get("regime_15m") or "unstamped") == regime]
+    if level:
+        out = [r for r in out if str(r.get("level_source_tf") or "unstamped") == level]
+    if status:
+        out = [r for r in out if str(r.get("status") or "") == status]
+    return out
+
+
+def selector_options(
+    rows: list[dict], *, stamped: str, regime: str, level: str, status: str,
+) -> dict:
+    """Every option's count, measured with every OTHER filter applied.
+
+    #90/#91: a count computed with its own selector applied makes each option
+    describe only itself — every row would read "n = whatever I picked".
+    """
+    def _count(key, getter, **skip):
+        base = filter_lane_rows(
+            rows,
+            stamped="" if key == "stamped" else stamped,
+            regime="" if key == "regime" else regime,
+            level="" if key == "level" else level,
+            status="" if key == "status" else status,
+        )
+        counts: dict[str, int] = {}
+        for r in base:
+            counts[getter(r)] = counts.get(getter(r), 0) + 1
+        return counts
+
+    return {
+        "stamped": _count("stamped", stamp_state),
+        "regime": _count(
+            "regime", lambda r: str(r.get("regime_15m") or "unstamped")),
+        "level": _count(
+            "level", lambda r: str(r.get("level_source_tf") or "unstamped")),
+        "status": _count("status", lambda r: str(r.get("status") or "")),
+    }
+
+
+#: Export columns. Everything a row carries that a reader could want offline,
+#: in a stable order — the CSV is a surface and inherits the page's rules, so
+#: gross and net both appear and nothing here divides by a stop.
+EXPORT_COLS: list[str] = [
+    "signal_id", "symbol", "side", "setup_class", "emitted_at", "closed_at",
+    "status", "entry", "stop_loss", "tp1", "exit_price",
+    "pnl_pct", "mfe_pct", "mae_pct",
+    "stamp_state",
+    "regime_15m", "regime", "regime_tf",
+    "level_source_tf", "level_type", "level_price", "level_score",
+    "sweep_extreme", "sweep_depth_pct", "delta_quote", "rr",
+    "bars_seen", "last_resolved_at", "bars_behind", "stalled",
+]
+
+
 def by_level_source(rows: list[dict]) -> list[dict]:
     """Split by which timeframe produced the swept level.
 
@@ -247,33 +344,74 @@ def by_level_source(rows: list[dict]) -> list[dict]:
     return out
 
 
-@router.get("/signals/price-action")
-async def price_action_page(
-    request: Request,
-    fee_pct: float = Query(DEFAULT_FEE_PCT),
-):
+async def _load_and_mark(request: Request) -> tuple[list[dict], dict, str]:
+    """Every lane row, freshness-graded and marked. Shared by page and export so
+    the download can never describe a different book than the screen."""
     vol = request.app.state.data_volume
     error = ""
     rows: list[dict] = []
     try:
         rows = reduce_lane_rows(vol.dark_signals())
     except Exception as exc:  # noqa: BLE001
-        error = f"dark ledger unreadable: {type(exc).__name__}: {exc}"
+        return [], {}, f"dark ledger unreadable: {type(exc).__name__}: {exc}"
 
-    # One request for the whole futures book, TTL-cached — marking N open rows
-    # costs one call, not N, so the page's cost does not scale with open trades.
     prices: dict = {}
     if rows:
         try:
             prices = await request.app.state.binance_klines.fetch_all_prices()
         except Exception:  # noqa: BLE001
             prices = {}
-
     now = time.time()
-    # Freshness FIRST — a mark is only meaningful once the reader knows whether
-    # the row beside it is still being advanced by the engine (#108).
     mark_freshness(rows, now=now)
     mark_live_pnl(rows, prices)
+    for r in rows:
+        r["stamp_state"] = stamp_state(r)
+    return rows, prices, error
+
+
+@router.get("/signals/price-action/export.csv")
+async def price_action_export(
+    request: Request,
+    stamped: str = Query(""),
+    regime: str = Query(""),
+    level: str = Query(""),
+    status: str = Query(""),
+):
+    """The current selection as CSV — **uncapped**, unlike the rendered table.
+
+    A truncated export is #97 wearing a download button: the row cap is a render
+    bound and must not follow the data off the page.
+    """
+    from app.reports import csv_response
+
+    rows, _prices, _err = await _load_and_mark(request)
+    rows = filter_lane_rows(
+        rows, stamped=stamped, regime=regime, level=level, status=status,
+    )
+    data = [[r.get(c) for c in EXPORT_COLS] for r in rows]
+    return csv_response("price_action_lane", EXPORT_COLS, data)
+
+
+@router.get("/signals/price-action")
+async def price_action_page(
+    request: Request,
+    fee_pct: float = Query(DEFAULT_FEE_PCT),
+    stamped: str = Query(""),
+    regime: str = Query(""),
+    level: str = Query(""),
+    status: str = Query(""),
+):
+    all_rows, _prices, error = await _load_and_mark(request)
+    rows = all_rows
+
+    # Selector option counts BEFORE the filter narrows anything — each option
+    # measured with every filter applied except its own (#90/#91).
+    options = selector_options(
+        all_rows, stamped=stamped, regime=regime, level=level, status=status,
+    )
+    rows = filter_lane_rows(
+        all_rows, stamped=stamped, regime=regime, level=level, status=status,
+    )
 
     fee = max(0.0, min(1.0, float(fee_pct)))
     summary = summarize(rows, fee_pct=fee)
@@ -283,6 +421,7 @@ async def price_action_page(
     regimes_trigger = by_regime(rows, fee_pct=fee, key="regime_15m")
     regime_tfs = regime_timeframes(rows)
     shown = rows[:TABLE_ROW_CAP]
+    capped = len(rows) > TABLE_ROW_CAP
 
     return request.app.state.templates.TemplateResponse(
         "price_action.html",
@@ -298,7 +437,14 @@ async def price_action_page(
             "regime_tfs": regime_tfs,
             "error": error,
             "fee_pct": fee,
-            "capped": len(rows) > len(shown),
+            "options": options,
+            "stamp_states": STAMP_STATES,
+            "sel": {"stamped": stamped, "regime": regime,
+                    "level": level, "status": status},
+            "n_all": len(all_rows),
+            "n_shown": len(rows),
+            "capped": capped,
+            "row_cap": TABLE_ROW_CAP,
             "total_rows": len(rows),
         },
     )
