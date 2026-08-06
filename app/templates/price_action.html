@@ -120,6 +120,50 @@
   {% endif %}
 </div>
 
+{# ── concentration ────────────────────────────────────────────────────── #}
+{% if concentration and concentration.n_rows %}
+<div class="card">
+  <h2>How many moves is that, really?</h2>
+  <p class="muted small">
+    Every rate above is computed <strong>per row</strong>, and a sweep persists
+    for several bars — so one move can contribute several rows. #816 cost a
+    session over exactly this: counted per row a population read 32% win /
+    −0.364R and per move 55% / +0.003R. <strong>The sign of the verdict was an
+    artefact of re-detection.</strong> De-duplicating is a judgement call;
+    counting them silently is not.
+  </p>
+  <table class="kv">
+    <tr><th>Rows</th><td>{{ concentration.n_rows }}</td></tr>
+    <tr><th>Distinct moves</th><td>
+      {{ concentration.n_moves }}
+      <span class="muted small">by <code>symbol · side · entry</code> to 4
+        significant figures — two stamps of the same sweep differ in the last
+        tick and are not two moves</span>
+    </td></tr>
+    <tr><th>Rows per move</th><td>
+      {{ '%.2f'|format(concentration.rows_per_move) }}
+      {% if concentration.rows_per_move >= 1.5 %}
+        <span class="badge badge-warn">concentrated</span>
+      {% endif %}
+      <span class="muted small">1.00 means every row is its own move</span>
+    </td></tr>
+    <tr><th>Distinct symbols</th><td>{{ concentration.n_symbols }}</td></tr>
+    <tr><th>Largest single move</th><td>
+      <code>{{ concentration.top }}</code> —
+      {{ '%.1f'|format(concentration.top_share * 100) }}% of all rows
+    </td></tr>
+  </table>
+  <p class="muted small">
+    The engine throttles one row per symbol per 30 minutes
+    (<code>price_action_lane.EMIT_COOLDOWN_S</code>). Until 2026-08-06 that
+    throttle lived in memory while this ledger lived on disk, so
+    <strong>every deploy re-armed it</strong> and a setup still live across a
+    restart bought a second row at the same price. Fixed engine-side; this panel
+    stays, because a throttle can regress and a row count alone cannot show it.
+  </p>
+</div>
+{% endif %}
+
 {# ── by level source ──────────────────────────────────────────────────── #}
 {% if sources %}
 <div class="card">

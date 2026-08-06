@@ -127,6 +127,47 @@ def summarize(rows: list[dict], *, fee_pct: float) -> dict:
     }
 
 
+def concentration(rows: list[dict]) -> dict:
+    """Distinct moves behind the row count, and the largest one's share.
+
+    A sweep persists for several bars, so one move can contribute several rows
+    — and every rate on this page is computed per ROW. `#816` cost a session
+    over exactly this: counted per row a population read 32% win / −0.364R and
+    per move 55% / +0.003R, so **the sign of the verdict was an artefact of
+    re-detection**.
+
+    The engine throttles (`price_action_lane.EMIT_COOLDOWN_S`), and on
+    2026-08-06 that throttle was in memory while this ledger was on disk, so
+    every deploy re-armed it and duplicates landed anyway. Fixed engine-side;
+    this panel stays, because a throttle can regress and a row count alone
+    cannot show it. Entry is rounded into the key — two stamps of the same
+    sweep differ in the last tick and are not two moves.
+    """
+    if not rows:
+        return {"n_rows": 0, "n_moves": 0, "top_share": 0.0, "top": "",
+                "rows_per_move": 0.0, "n_symbols": 0}
+    counts: dict[str, int] = {}
+    symbols: set[str] = set()
+    for r in rows:
+        sym = str(r.get("symbol") or "?")
+        symbols.add(sym)
+        entry = _f(r.get("entry"))
+        # 4 significant figures: the same level re-detected drifts by ticks.
+        stamp = f"{entry:.4g}" if entry else "?"
+        counts[f"{sym} {r.get('side') or '?'} @{stamp}"] = (
+            counts.get(f"{sym} {r.get('side') or '?'} @{stamp}", 0) + 1
+        )
+    top, n = max(counts.items(), key=lambda kv: kv[1])
+    return {
+        "n_rows": len(rows),
+        "n_moves": len(counts),
+        "top_share": n / len(rows),
+        "top": top,
+        "rows_per_move": len(rows) / len(counts),
+        "n_symbols": len(symbols),
+    }
+
+
 def by_level_source(rows: list[dict]) -> list[dict]:
     """Split by which timeframe produced the swept level.
 
@@ -186,6 +227,7 @@ async def price_action_page(
     fee = max(0.0, min(1.0, float(fee_pct)))
     summary = summarize(rows, fee_pct=fee)
     sources = by_level_source(rows)
+    conc = concentration(rows)
     shown = rows[:TABLE_ROW_CAP]
 
     return request.app.state.templates.TemplateResponse(
@@ -196,6 +238,7 @@ async def price_action_page(
             "rows": shown,
             "summary": summary,
             "sources": sources,
+            "concentration": conc,
             "error": error,
             "fee_pct": fee,
             "capped": len(rows) > len(shown),
