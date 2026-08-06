@@ -7,25 +7,34 @@ shape for the owner and the wrong shape for anything else — there was no way t
 let a collaborator, or an AI agent, *read* the measurement pages without handing
 over the key that arms live trading.
 
-This is that second door. The owner mints a short-lived code from `/control`;
-the holder exchanges it for a **read-only** session; the owner revokes it from
-the same card.
+This is that second door. The owner mints a short-lived code from **Control →
+Access** (`/control/access`); the holder exchanges it for a **read-only**
+session; the owner revokes it from the same page.
 
 ---
 
 ## For the owner
 
-**Mint.** `/control` → *Temporary read-only access* → label it, pick a duration
-(1h / 6h / 24h / 7d, default 6h), *Generate*. The code is displayed **once**, on
-that one render. It is not recoverable afterwards — the store keeps only its
-SHA-256 hash — so if it scrolls past, revoke it and mint another. Hand over the
-code plus `https://ops.luminapp.org/guest`.
+Everything lives on **Control → Access** (`/control/access`) — its own sub-tab,
+not a card on the engine page. It is separated deliberately: every other control
+writes to the *engine*, this writes to ops' own access store, and a revoke
+sitting between the kill switch and auto-mode reads like an engine action. The
+page also carries its own flash (`_access_flash`), because two writers on one
+flash key means an action can render its result on a page the operator did not
+come from.
 
-**Watch.** The same card lists every grant: how many requests it has made, when
-it was last used, and how many requests were **refused**. A non-zero refusal
-count is not necessarily an attack — a stale bookmark or a link in a page body
-does it — but it is the number worth reading, and each refusal is in the audit
-log with the path and the reason.
+**Mint.** *Generate a code* → label it, pick a duration (1h / 6h / 24h / 7d,
+default 6h). The code is displayed **once**, on the render that follows. It is
+not recoverable afterwards — the store keeps only its SHA-256 hash — so if it
+scrolls past, revoke it and mint another. Hand over the code plus
+`https://ops.luminapp.org/guest`.
+
+**Watch.** *Issued codes* lists every grant: how many requests it has made, when
+it was last used, and how many were **refused**. A non-zero refusal count is not
+necessarily an attack — a stale bookmark or a link in a page body does it — but
+it is the number worth reading. *Access log* below it carries the mints, logins,
+revocations and every refusal with its path and stated reason, filtered to this
+subsystem rather than repeating the engine's control history.
 
 **Revoke.** *Revoke* on one grant, or *Revoke all*. It takes effect on the
 guest's **next request**: the session holds only the grant id and the grant is
@@ -63,9 +72,15 @@ the whole Performance tab, the Strategy Lab and Layer G, the truth report,
 alerts, data-intake, the audit board, and **every CSV/JSON export** on those
 pages.
 
-**Not readable, and it will say why:** this control panel, the diag runner,
+**Not readable, and it will say why:** the control panel and its Access sub-tab
+(a holder must not see the live grants, let alone mint one), the diag runner,
 subscriber tables (users / referrals / trials), the raw data volume, the
 `/api/v1` token surface — and **every** write, on every route.
+
+Measured against the live nav, a holder sees **5 of 6 groups** — Overview,
+Signals, Performance, Autonomy, Diagnostics, with Control absent entirely — and
+inside Diagnostics **5 of 6** sub-tabs, Diag runner being the one withheld. Every
+other sub-tab in those groups is reachable.
 
 ---
 
