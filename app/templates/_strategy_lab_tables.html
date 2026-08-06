@@ -65,6 +65,26 @@
 <section class="card">
   <h2>Strategy × Context edge matrix</h2>
   {% if matrix_rows %}
+  {#- This table rendered all 9,261 cells — 3.9 MB, of which 62% read
+      INSUFFICIENT_DATA, i.e. the page telling the reader nothing 5,766 times.
+      The default is now the cells that carry a verdict, most-evidence-first,
+      capped as a render bound. Every other panel on this page still reduces
+      over the whole matrix. -#}
+  <p class="muted small">
+    <strong>{{ matrix.total }}</strong> cells measured ·
+    <strong>{{ matrix.decidable }}</strong> carry a verdict ·
+    <strong>{{ matrix.thin }}</strong> below the {{ thresholds.edge_min_samples }}-sample
+    floor{% if not matrix.show_all %}, not shown{% endif %}.
+    Showing {{ matrix.shown }}, most evidence first{% if matrix.cap_bit %} —
+    <strong>capped at {{ matrix.cap }}</strong>, so there are more below this
+    line{% endif %}.
+    {% if matrix.show_all %}
+      <a href="/strategy-lab">Hide the cells with no verdict</a>
+    {% else %}
+      <a href="/strategy-lab?show=all">Show all {{ matrix.total }}</a>
+    {% endif %}
+    · <a href="/strategy-lab/export.csv">the CSV is uncapped and holds every cell</a>.
+  </p>
   <table class="data-table">
     <thead>
       <tr>
@@ -74,7 +94,7 @@
       </tr>
     </thead>
     <tbody>
-    {% for r in matrix_rows %}
+    {% for r in matrix.rows %}
       <tr>
         <td class="mono">{{ r.strategy }}</td>
         <td class="mono small">{{ r.context_key }}</td>
