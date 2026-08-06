@@ -73,6 +73,103 @@ STREAM_KIND_COPY: list[tuple[str, str, str]] = [
 ]
 
 
+#: What each price-action-lane refusal *means*, and what a reader does about it.
+#: Keyed by the engine's own reason strings (`price_action_lane.REFUSE_*`).
+#:
+#: This is copy, **not a mirror of the reason list**. The page renders whatever
+#: refusals the engine sends and looks its sentence up here; a reason with no
+#: entry renders under its raw name with an `unclassified` badge rather than
+#: being dropped or quietly bucketed. That matters because the alternative —
+#: iterating a list ops keeps — is silent by construction on the next reason
+#: somebody adds, which is the `MEASUREMENT_SUFFIXES` drift and the
+#: `is_tradfi_perp` deny-list wearing a third hat. One writer, one reader.
+#:
+#: The four classes exist because they have four different next moves, and
+#: pooling any two of them into "no signals" is how a page reports a fault that
+#: is not happening.
+LANE_REFUSAL_COPY: dict[str, tuple[str, str]] = {
+    # fault — the lane is blind and cannot answer at all
+    "no_levels": ("fault", "the LevelBook holds nothing for this symbol, so "
+                           "there is no level to sweep. The lane is blind here."),
+    "short_series": ("fault", "not enough bars to look back over. Blind for a "
+                              "different reason, and it fixes differently."),
+    "bad_geometry": ("fault", "entry, stop and target did not form a usable "
+                              "trade. Rare by construction — a run of these is "
+                              "a defect, not a market."),
+    # coverage — a layer this lane depends on does not reach the symbol
+    "no_footprint": ("coverage", "the delta-confirmation layer (Phase 2b) does "
+                                 "not cover this symbol. Nothing is wrong with "
+                                 "the market; we cannot confirm."),
+    # market — the setup was genuinely not on offer, or was and failed its test
+    "no_sweep": ("market", "no level was swept and reclaimed on the newest "
+                           "closed bar. The setup is not on offer — this is the "
+                           "quiet case and it needs no action."),
+    "delta_opposed": ("market", "a sweep was found and the flow disagreed with "
+                                "it. This is the confirmation layer WORKING, "
+                                "not a refusal to look."),
+    "no_opposing_target": ("market", "nothing structural ahead to target, so "
+                                     "there is no honest TP1."),
+    "rr_below_floor": ("market", "the trade exists and does not pay. Counted "
+                                 "apart from the ones we could not see."),
+    # throttle — our own decision, and the one reading that proves the lane fires
+    "cooldown": ("throttle", "a setup was found and deliberately not stamped: "
+                             "this symbol emitted inside the window. A non-zero "
+                             "count here is POSITIVE evidence the lane fires — "
+                             "the unit of evidence is the move, not the scan."),
+}
+
+#: Render order for the class rollup. Fault first because it is the only class
+#: that is ours to fix today.
+LANE_REFUSAL_CLASSES: list[tuple[str, str]] = [
+    ("fault", "the lane is blind — ours to fix"),
+    ("coverage", "a dependency does not reach the symbol"),
+    ("market", "the setup was not on offer, or failed its own test"),
+    ("throttle", "found and deliberately not stamped"),
+    ("unclassified", "the engine sent a reason this page has no sentence for"),
+]
+
+
+def lane_refusal_rows(report: Any) -> list[dict[str, Any]]:
+    """Refusals as rows, largest share first, every engine reason represented.
+
+    Deliberately driven by the engine's payload rather than by
+    `LANE_REFUSAL_COPY`'s keys: a reason ops has never heard of must appear —
+    named, badged `unclassified` — instead of vanishing into a total that still
+    adds up.
+    """
+    # Nested under `derived`, where the engine assembles it. Walked rather
+    # than assumed: the first cut of this page read it off the top level —
+    # a location ops chose — and its fixture agreed, so the test went green
+    # over a card that would have rendered NOT REPORTED against the real
+    # engine. Pinned on the producing side too (360-v2
+    # `test_price_action_lane.test_the_payload_key_is_the_one_ops_reads`).
+    lane = ((report or {}).get("derived") or {}).get("price_action_lane") or {}
+    refusals = lane.get("refusals") or {}
+    shares = lane.get("refusal_share") or {}
+    rows: list[dict[str, Any]] = []
+    for reason, count in refusals.items():
+        cls, why = LANE_REFUSAL_COPY.get(reason, ("unclassified", ""))
+        rows.append({
+            "reason": reason,
+            "count": int(count or 0),
+            "share": shares.get(reason),
+            "cls": cls,
+            "why": why,
+        })
+    rows.sort(key=lambda r: (-(r["share"] or 0.0), -r["count"], r["reason"]))
+    return rows
+
+
+def lane_class_totals(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Per-class rollup over the same rows the table shows (#90)."""
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        agg = out.setdefault(r["cls"], {"count": 0, "share": 0.0})
+        agg["count"] += r["count"]
+        agg["share"] += r["share"] or 0.0
+    return out
+
+
 def _pool_badge(state: str) -> tuple[str, str]:
     """(css class, label) for a pool state. Named states, never a boolean."""
     return {
@@ -107,6 +204,8 @@ async def data_intake_page(request: Request):
         error = error or f"engine reported: {report['error']}"
         report = None
 
+    lane_rows = lane_refusal_rows(report)
+
     return request.app.state.templates.TemplateResponse(
         "data_intake.html",
         {
@@ -116,5 +215,8 @@ async def data_intake_page(request: Request):
             "error": error,
             "stream_kind_copy": STREAM_KIND_COPY,
             "pool_badge": _pool_badge,
+            "lane_rows": lane_rows,
+            "lane_class_totals": lane_class_totals(lane_rows),
+            "lane_classes": LANE_REFUSAL_CLASSES,
         },
     )

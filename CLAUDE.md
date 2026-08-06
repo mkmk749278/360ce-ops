@@ -650,6 +650,54 @@ entry is knowable only at entry — so records closed before that deploy render 
 own `UNPLACED` bucket rather than being folded into a real regime.
 
 
+## `/diagnostics/data-intake` — the price-action lane card
+
+Added 2026-08-06, one PR **after** the census it renders, which is the whole
+lesson. Engine #889 shipped `_price_action_lane_report()` and a PR body saying
+*"`/api/data-intake` now carries the refusal mix"*. Both true. This page rendered
+nothing for it, so the owner — who had just asked why the lane produced no
+signals — opened the page the answer was supposed to be on and found no such
+card.
+
+**A field one repo writes and no repo reads is #817 with the arrow reversed, and
+it is harder to catch**: the producing side's test passed, because it asserted
+its own function's return shape. That is a mock asserting your assumption back at
+you one repo short of the reader. It is now pinned on the producing side by
+driving the real assembler.
+
+Rules the card carries:
+
+- **The block is nested under `derived`, and the first cut read it off the top
+  level.** The ops fixture agreed, because a fixture chooses a location and then
+  agrees with you about it — every test green over a card that would have
+  rendered `NOT REPORTED` against the real engine. `zone_distance_atr` with the
+  path wrong instead of the field.
+- **The classification is COPY, not a mirror of the engine's reason list.** The
+  table iterates **the engine's payload** and looks each reason up in
+  `LANE_REFUSAL_COPY`; a reason ops has never heard of renders under its raw name
+  badged `unclassified`, never dropped and never silently bucketed. Iterating
+  ops' own keys would be silent by construction on the next reason —
+  `MEASUREMENT_SUFFIXES` wearing a third hat.
+- **Four classes, because they have four different next moves.** `fault`
+  (`no_levels` / `short_series` / `bad_geometry` — the lane is blind, ours to
+  fix) · `coverage` (`no_footprint` — Phase 2b does not reach the symbol) ·
+  `market` (`no_sweep` / `delta_opposed` / `no_opposing_target` /
+  `rr_below_floor` — not on offer, or offered and failed its own test) ·
+  `throttle` (`cooldown`). Pooling any two into "no signals" is how a page
+  reports a fault that is not happening.
+- **`cooldown` is not a refusal and must never sit in `market`.** It means a
+  setup *was* found and deliberately not stamped, so a non-zero count is
+  **positive evidence the lane fires**. Bucketed with `no_sweep` it reads as a
+  quiet market when it was us throttling — #816 arriving from the display side.
+- **Emission is not the health signal, and the card says so.** The trigger is
+  rare by design: zero rows is a quiet market. A card that reads three stamped
+  rows as a fault teaches the owner to ignore it.
+- **The denominator is evaluations, never rows.** Dividing refusals by emissions
+  puts a rare-by-design numerator under a rare-by-design denominator.
+- **A missing block reads as an old engine, not a quiet lane.** "Blank needs a
+  cause before it gets a caption" — the two states have different fixes and the
+  conflation is the defect this card repairs.
+
 ## Data sources (one-line each)
 
 | Source | Module |
