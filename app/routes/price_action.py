@@ -288,7 +288,7 @@ async def price_action_page(
         "price_action.html",
         {
             "request": request,
-            "active": "signals",
+            "active": "price_action",
             "rows": shown,
             "summary": summary,
             "sources": sources,

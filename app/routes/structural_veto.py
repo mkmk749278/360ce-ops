@@ -43,7 +43,7 @@ async def structural_veto_page(request: Request, setup: str = ""):
         "structural_veto.html",
         {
             "request": request,
-            "active": "signals",
+            "active": "structural_veto",
             "report": report,
             "setup": setup,
         },
