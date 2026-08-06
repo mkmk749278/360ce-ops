@@ -201,3 +201,49 @@ def test_the_route_is_registered_before_signal_detail():
 def test_the_live_request_does_not_404():
     with _client([_row("a", pnl=1.0)]) as c:
         assert c.get("/signals/price-action").status_code == 200
+
+
+class TestConcentration:
+    """Every rate on this page is per row, and a sweep persists for several
+    bars. #816: counted per row a population read 32% win / −0.364R and per
+    move 55% / +0.003R — the sign of the verdict was an artefact of
+    re-detection. Disclosing that is not optional; de-duplicating silently
+    would be the other mistake."""
+
+    def _rows(self):
+        return [
+            {"symbol": "COTIUSDT", "side": "SHORT", "entry": 0.013942, "pnl_pct": -2.97},
+            {"symbol": "COTIUSDT", "side": "SHORT", "entry": 0.013942, "pnl_pct": -2.97},
+            {"symbol": "COTIUSDT", "side": "SHORT", "entry": 0.01269, "pnl_pct": -3.58},
+            {"symbol": "BANKUSDT", "side": "LONG", "entry": 0.04209, "pnl_pct": 3.32},
+        ]
+
+    def test_repeated_stamps_of_one_move_collapse(self):
+        from app.routes.price_action import concentration
+        c = concentration(self._rows())
+        assert c["n_rows"] == 4
+        assert c["n_moves"] == 3          # the two identical COTI rows are one move
+        assert c["n_symbols"] == 2
+        assert c["top"].startswith("COTIUSDT SHORT")
+        assert c["top_share"] == 0.5
+
+    def test_rows_per_move_is_one_when_nothing_repeats(self):
+        from app.routes.price_action import concentration
+        rows = [
+            {"symbol": "AUSDT", "side": "LONG", "entry": 1.0},
+            {"symbol": "BUSDT", "side": "SHORT", "entry": 2.0},
+        ]
+        assert concentration(rows)["rows_per_move"] == 1.0
+
+    def test_an_empty_ledger_does_not_divide_by_zero(self):
+        from app.routes.price_action import concentration
+        c = concentration([])
+        assert c["n_moves"] == 0 and c["rows_per_move"] == 0.0
+
+    def test_the_panel_renders_and_names_the_restart_cause(self):
+        """"Blank needs a cause before it gets a caption" — the duplicates in
+        the owner's window came from the throttle not surviving a restart, and
+        the panel says so rather than leaving the reader to infer a market."""
+        from app.routes.price_action import concentration
+        c = concentration(self._rows())
+        assert c["rows_per_move"] > 1.0
