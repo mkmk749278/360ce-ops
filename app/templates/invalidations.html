@@ -22,7 +22,29 @@
       {% endfor %}
     </div>
   {% else %}
-    <div class="muted">No invalidation records loaded.</div>
+    {#- Three states, three different next moves. The old caption was a bare
+        "No invalidation records loaded", which named none of them and read
+        identically whether the audit was broken or nothing had been killed. -#}
+    {% if blank and blank.state == 'missing' %}
+      <div class="muted">
+        <span class="badge badge-muted">NOT WRITTEN</span>
+        The engine has not written <code>invalidation_records.json</code> to the data
+        volume yet. Nothing to fix here — this page has nothing to read until it does.
+      </div>
+    {% elif blank and blank.state == 'unreadable' %}
+      <div class="flash flash-err">
+        <span class="badge sev-high">UNREADABLE</span>
+        The artifact is on the volume and could not be parsed: {{ blank.detail }}.
+        <div class="muted">That is a fault on our side, not a quiet market — the counts
+        below are <em>unknown</em>, not zero.</div>
+      </div>
+    {% else %}
+      <div class="muted">
+        <span class="badge badge-ok">QUIET</span>
+        The audit is readable and holds no records — no signal has been invalidated in
+        the window. This is the quiet case, not a fault.
+      </div>
+    {% endif %}
   {% endif %}
 </section>
 

@@ -136,6 +136,29 @@ def _classify(records: Any) -> dict:
     }
 
 
+def _blank_cause(records: Any) -> dict:
+    """Why this page is empty — because "blank needs a cause before it gets a
+    caption", and the caption here was a bare "No invalidation records loaded".
+
+    Three states with three different next moves, pooled into one sentence that
+    named none of them: the artifact is **missing** (the engine has not written
+    it — nothing to do but wait, or check the engine is up), it is **unreadable**
+    (a real fault, ours), or it is **present and empty** (no signal has been
+    invalidated in the window — the quiet case, and not a fault at all). A
+    reader who cannot tell "the audit is broken" from "nothing has been killed"
+    will eventually treat both as noise."""
+    if isinstance(records, dict) and records.get("error"):
+        detail = str(records.get("error"))
+        missing = "not found" in detail.lower() or "no such file" in detail.lower()
+        return {
+            "state": "missing" if missing else "unreadable",
+            "detail": detail,
+        }
+    if isinstance(records, (list, dict)) and not records:
+        return {"state": "empty", "detail": ""}
+    return {"state": "empty", "detail": ""}
+
+
 @router.get("/invalidations")
 async def invalidations(request: Request):
     vol = request.app.state.data_volume
@@ -144,7 +167,12 @@ async def invalidations(request: Request):
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "invalidations.html",
-        {"request": request, "agg": agg, "active": "invalidations"},
+        {
+            "request": request,
+            "agg": agg,
+            "active": "invalidations",
+            "blank": _blank_cause(records) if not agg.get("totals") else None,
+        },
     )
 
 

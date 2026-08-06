@@ -447,12 +447,62 @@ def reduce_allocations(alloc: Any, now_ts: Optional[float] = None) -> dict:
     }
 
 
-def _build_view(vol) -> dict:
+#: Render bound for the edge matrix, applied after the verdict split and after
+#: sorting — never inside a reducer (#97). The export stays uncapped, because a
+#: truncated download is the same defect wearing a button.
+MATRIX_ROW_CAP = 400
+
+
+def split_matrix(rows: list[dict], *, show_all: bool = False) -> dict:
+    """Decision-grade cells first, and say what was withheld.
+
+    The matrix had **9,261 cells on 2026-08-06 and 5,766 of them —
+    62% — read INSUFFICIENT_DATA**: a cell below ``EDGE_MIN_SAMPLES`` carries no
+    verdict by construction, so those rows are the page telling the reader
+    nothing, 5,766 times, in 3.9 MB of HTML. Nothing was wrong with any number;
+    the page was simply unreadable, which for a surface whose whole job is to be
+    read is the same as being broken.
+
+    Two rules this follows rather than invents:
+
+    * **The cap is a render bound.** It applies here, after the split and the
+      sort, and the page says when it bit — never inside a reducer, which is how
+      `/signals/sar` came to filter the newest 300 rows of a 2,000-row ledger.
+    * **The sort must not manufacture a leaderboard.** Sorting by edge puts the
+      best-looking cell of thousands on the top line, and "best of N" is not a
+      fact about the winner until N is on screen. So the default order is **most
+      evidence first** (``n`` descending); the cells that a decision could rest
+      on come first for the reason that they are the cells a decision could rest
+      on, not because they flatter.
+    """
+    decidable = [r for r in rows if r.get("verdict") != "INSUFFICIENT_DATA"]
+    thin = len(rows) - len(decidable)
+    shown = rows if show_all else decidable
+    shown = sorted(shown, key=lambda r: (-(r.get("n") or 0), str(r.get("strategy") or "")))
+    capped = shown[:MATRIX_ROW_CAP]
+    return {
+        "rows": capped,
+        "total": len(rows),
+        "decidable": len(decidable),
+        "thin": thin,
+        "shown": len(capped),
+        "cap_bit": len(shown) > len(capped),
+        "cap": MATRIX_ROW_CAP,
+        "show_all": show_all,
+    }
+
+
+def _build_view(vol, *, show_all: bool = False) -> dict:
     mc_raw = vol.market_context()
     affinity = mc_raw.get("strategy_affinity") if isinstance(mc_raw, dict) else None
     matrix_rows = reduce_edge_matrix(vol.strategy_edge(), affinity)
     return {
         "context": reduce_context_card(mc_raw),
+        # Every panel below still reduces over the WHOLE matrix — the split is a
+        # render bound on one table, not a filter on the page's arithmetic. A
+        # rollup measured on the capped rows would silently become a rollup of
+        # "the 400 cells with the most evidence".
+        "matrix": split_matrix(matrix_rows, show_all=show_all),
         "matrix_rows": matrix_rows,
         "per_strategy": reduce_per_strategy(matrix_rows),
         "geometry": reduce_geometry_ab(matrix_rows),
@@ -472,17 +522,17 @@ def _build_view(vol) -> dict:
 
 
 @router.get("/strategy-lab")
-async def strategy_lab(request: Request):
+async def strategy_lab(request: Request, show: str = ""):
     templates = request.app.state.templates
-    ctx = _build_view(request.app.state.data_volume)
+    ctx = _build_view(request.app.state.data_volume, show_all=show == "all")
     ctx.update({"request": request, "active": "strategy_lab"})
     return templates.TemplateResponse("strategy_lab.html", ctx)
 
 
 @router.get("/_partial/strategy_lab")
-async def strategy_lab_partial(request: Request):
+async def strategy_lab_partial(request: Request, show: str = ""):
     templates = request.app.state.templates
-    ctx = _build_view(request.app.state.data_volume)
+    ctx = _build_view(request.app.state.data_volume, show_all=show == "all")
     ctx.update({"request": request})
     return templates.TemplateResponse("_strategy_lab_tables.html", ctx)
 

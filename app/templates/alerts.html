@@ -2,11 +2,37 @@
 {% block title %}Alerts · 360 CE Ops{% endblock %}
 {% block content %}
 <h1>Safety Alerts</h1>
+{#- This paragraph said "Telegram is unavailable — check it regularly; there is
+    no push", and both halves were false (corrected 2026-08-06). Telegram is NOT
+    banned in-region — CLAUDE.md carries that correction from 2026-07-25 — and
+    the agent has paged via FCM push since Phase 4 (`app/fcm.py`, tokens in
+    `app/device_registry.py`). The sentence told the owner to treat this page as
+    the only way he would ever learn about a naked position, which is the one
+    thing an alert surface must never get wrong in that direction. -#}
 <p class="muted">
   Live findings from the 24/7 monitoring agent (naked position, signing
-  service, engine / Redis health). This is the alert surface now that
-  Telegram is unavailable — check it regularly; there is no push.
+  service, engine / Redis health) — the same Redis state the agent writes, so
+  what is here is what fired.
 </p>
+{#- Read, never asserted. The delivery path is the one thing this page must not
+    describe from memory: it told the owner "there is no push" for weeks after
+    push shipped, and the opposite error — promising a page over a disabled-safe
+    no-op — is worse. -#}
+{% if push.armed %}
+<p class="muted small">
+  <span class="badge badge-ok">PUSH ARMED</span>
+  Alerts are pushed to {{ push.devices }} registered device{{ '' if push.devices == 1 else 's' }}
+  as they fire. This page is the shared record, not the only way you find out.
+</p>
+{% else %}
+<p class="muted small">
+  <span class="badge badge-warn">PULL ONLY</span>
+  {% if not push.configured %}No <code>FIREBASE_SERVICE_ACCOUNT</code> is configured, so every
+  push send is a no-op.{% else %}No device is registered, so a push has nowhere to go.{% endif %}
+  <strong>Nothing pages you</strong> — this page is the only way you learn about a naked
+  position, so check it, or arm push.
+</p>
+{% endif %}
 
 {% if error %}
 <div class="flash flash-err">

@@ -823,6 +823,64 @@ Rules, each of which is a rule already in this file arriving at the auth layer:
   control doctrine above (owner-gated, audited, PRG-confirmed) is unchanged by
   this because nothing here can write.
 
+## The 2026-08-06 panel surf — what reading every page found
+
+The owner asked for a pass over all the panels. Fetching all 26 and looking at
+what they *rendered* — not at what their code intended — turned up four defects,
+three of which were invisible to the suite by construction, because **a
+paragraph, a caption and a page size are none of them assertions.**
+
+- **Two dead pages, for four days.** `/signals/sar` and `/sar-exit` both read
+  UNAVAILABLE — *unexpected ledger shape* — beside an mtime updating every few
+  minutes. The engine writes this ledger through
+  `suppression_audit.SuppressedCandidateStore`, which it **shares** with
+  `suppressed_candidates.json`; when that store gained a schema-2 envelope on
+  2026-08-02 to carry the suppression audit's eviction counts, *this* file
+  changed shape with it. **A schema bump made for one consumer silently changed
+  the file of another** — #817's class at the level of the container rather than
+  the field, and the tell was in the writer, whose loader carries a comment
+  explaining that a bare list is the pre-schema shape. The producing side knew
+  there were two shapes; no reader here was told. `_unwrap_records` takes both,
+  and a loader error still passes through untouched, because *could not read*
+  and *shape I do not know* have different fixes.
+- **A caption that named a benign cause for a state with another one.** Over
+  that UNAVAILABLE badge sat the words *"An empty ledger here means off, not
+  broken."* The ledger was neither empty nor off. This is "blank needs a cause
+  before it gets a caption" broken from the caption's side, and it is worse than
+  a bare blank, because it sends the reader to a switch instead of a parser. The
+  caption now follows the state.
+- **An alert page describing a delivery path it did not have.** `/alerts` said
+  *"Telegram is unavailable — check it regularly; there is no push."* Both
+  halves false: this file has carried the *Telegram is not banned* correction
+  since 2026-07-25, and FCM push shipped in Phase 4. Together they told the owner
+  that this page was the only way he would ever learn about a naked position —
+  **the one direction an alert surface must never be wrong in.** The page no
+  longer asserts a path; it reads whether push is armed (service account **and**
+  a registered device) and names which half is missing. Note the fix's own trap,
+  caught mid-edit: replacing it with *"the agent pushes these"* would have been
+  the same defect with the opposite sign, since push is disabled-safe and a
+  missing service account makes every send a silent no-op.
+- **A 3.9 MB table, 62% of it saying nothing.** The Strategy×Context matrix
+  rendered all **9,261** cells, of which **5,766 read INSUFFICIENT_DATA** — a
+  cell under `EDGE_MIN_SAMPLES` carries no verdict by construction. Nothing was
+  wrong with any number; the page was simply unreadable, which for a surface
+  whose whole job is to be read is the same as being broken. The default is now
+  the cells that carry a verdict, capped at 400 as a **render bound** applied
+  after the split and the sort (#97's rule, unapplied on this repo's biggest
+  page), with the counts and the cap on screen, `?show=all` to restore them, and
+  the CSV uncapped. Two things it deliberately does not do: **the sort is by
+  evidence, not by edge** — sorting by edge puts the best-looking cell of
+  thousands on the top line, and "best of N" is not a fact about the winner
+  until N is on screen — and **every other panel still reduces over the whole
+  matrix**, since a rollup measured on the capped rows would quietly become a
+  rollup of "the 400 cells with the most evidence".
+
+The general lesson, and it is why the surf was worth doing: **every one of these
+pages had passing tests.** A test proves the code does what you wrote; it says
+nothing about whether the page reads correctly, whether its sentences are still
+true, or whether anyone can get through it. Read the rendered output
+periodically — the defects it finds are not the ones CI is shaped to catch.
+
 ## Data sources (one-line each)
 
 | Source | Module |

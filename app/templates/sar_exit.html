@@ -26,10 +26,28 @@
     <span class="stat"><span class="n">{{ status.pending }}</span> awaiting window</span>
     <span class="stat"><span class="n">{{ status.pairs }}</span> complete pairs</span>
   </div>
+  {#- The caption must follow the state. It used to say "an empty ledger here
+      means off, not broken" unconditionally — and on 2026-08-06 it said exactly
+      that over an UNAVAILABLE badge, while the ledger was neither empty nor off:
+      it was being written every few minutes in a shape ops could not read. A
+      caption asserting a benign cause for a state that has a different cause is
+      the "blank needs a cause before it gets a caption" rule broken from the
+      caption's side. -#}
+  {% if status.state == 'unavailable' %}
+  <p class="muted small"><strong>This is not the dark flag being off.</strong> The ledger
+  was found and could not be read ({{ status.detail }}), so every count above is
+  <em>unknown</em>, not zero — nothing on this page describes the mechanism until it loads.</p>
+  {% else %}
   <p class="muted small">The arm ships <strong>dark</strong>: it stamps nothing until
   <code>sar_exit_shadow_enabled</code> is switched on. An empty ledger here means off, not broken.
   Observe-only either way — no live exit, FSM transition or dispatch reads any of this, and
   activating a SAR exit is a separate owner-signed change.</p>
+  {% endif %}
+  {% if sampling and sampling.get('sampled') %}
+  <p class="muted small">Ring is <strong>capped</strong>: {{ sampling.retained }} records retained of
+  {{ sampling.stamped_total }} stamped. Every rate below is measured on that sample, not on the
+  whole population.</p>
+  {% endif %}
 </section>
 
 {% if totals.n %}

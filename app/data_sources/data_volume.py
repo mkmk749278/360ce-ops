@@ -35,6 +35,28 @@ SAR_LEDGER_FILE = f"sar_exit_candidates_v{SAR_LEDGER_VERSION}.json"
 
 _SAR_LEDGER_RE = re.compile(r"^sar_exit_candidates_v(\d+)\.json$")
 
+
+def _unwrap_records(raw: Any) -> Any:
+    """Return the record list from either ledger envelope.
+
+    The engine's ``SuppressedCandidateStore`` persisted a bare list until
+    2026-08-02 and a ``{"schema": N, "records": [...], ...}`` wrapper after it.
+    Both are valid on disk — a file written before the bump is still the file
+    until the store next flushes — so a reader that knows only one of them is
+    wrong half the time and, worse, is wrong in the direction that looks like a
+    data fault rather than a parsing one.
+
+    A loader error dict passes through untouched: "the file could not be read"
+    and "the file holds a shape I do not know" are different states with
+    different fixes, and pooling them is how a page reports a fault that is not
+    happening.
+    """
+    if isinstance(raw, dict) and not raw.get("error"):
+        records = raw.get("records")
+        if isinstance(records, list):
+            return records
+    return raw
+
 #: The **live** SAR mechanism's arm ledger (engine ``src/sar_live_shadow.py``,
 #: ``SarLiveLedger.DEFAULT_PATH``). Versioned in the filename for the same
 #: reason the replay ledger is: a schema bump gets a new file rather than
@@ -196,8 +218,51 @@ class DataVolumeReader:
 
         Pair every read with :meth:`sar_ledger_provenance` and render what it
         says: which file this is, when it was last written, and whether the
-        engine has already moved past it."""
-        return self._load(SAR_LEDGER_FILE)
+        engine has already moved past it.
+
+        **The envelope is versioned too, and that is a separate axis from the
+        filename** (2026-08-06). The engine writes this ledger through
+        ``suppression_audit.SuppressedCandidateStore``, which it *shares* with
+        ``suppressed_candidates.json`` — so when that store gained a schema-2
+        wrapper on 2026-08-02 to carry the suppression audit's per-gate eviction
+        counts, this file silently changed shape as well. The bump was made for
+        one consumer and changed the file of another. The engine's own loader
+        takes both shapes; ops only ever knew the bare list, so from that day
+        ``/signals/sar`` and ``/sar-exit`` both read UNAVAILABLE — for four days,
+        beside an mtime updating every few minutes, with the copy on screen
+        telling the owner an empty ledger means the flag is off.
+
+        This is the repo's own "a field one repo writes and no repo reads"
+        lesson at the level of the *container* rather than the field, and the
+        tell was there in the writer: its loader carries a comment explaining
+        that a list is the pre-schema shape, i.e. the producing side knew there
+        were two shapes and no reader here was told. Unwrap both, so a future
+        bump degrades to a named refusal instead of a page-wide UNAVAILABLE."""
+        return _unwrap_records(self._load(SAR_LEDGER_FILE))
+
+    def sar_ledger_sampling(self) -> dict[str, Any]:
+        """How much of the stamped population the ledger still holds.
+
+        Schema 2 carries ``stamped_total`` beside a **capped** ring, so a verdict
+        computed here is a verdict on a sample and the reader has to be told the
+        denominator — "n=396" and "396 of 24,000" support different decisions.
+        Absent on a pre-schema file, which is reported as ``unknown`` rather than
+        as "nothing was evicted": a missing count is not a zero."""
+        raw = self._load(SAR_LEDGER_FILE)
+        if not isinstance(raw, dict) or raw.get("error"):
+            return {"known": False}
+        records = raw.get("records")
+        if not isinstance(records, list):
+            return {"known": False}
+        total = raw.get("stamped_total")
+        if not isinstance(total, (int, float)):
+            return {"known": False, "retained": len(records)}
+        return {
+            "known": True,
+            "retained": len(records),
+            "stamped_total": int(total),
+            "sampled": int(total) > len(records),
+        }
 
     def sar_ledger_provenance(self) -> dict[str, Any]:
         """Which SAR ledger file the page is reading, and whether it is current.

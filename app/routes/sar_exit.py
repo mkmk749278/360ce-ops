@@ -863,6 +863,10 @@ def _build_view(vol) -> dict:
         # hours after #822 bumped the engine to v3, and every number on this
         # page described a population the engine had discarded.
         "ledger_source": vol.sar_ledger_provenance(),
+        # The ring is capped, so every rate on this page is a rate on a sample.
+        # Schema 2 carries the stamped total beside the retained records; the
+        # page says so rather than presenting `n` as the population.
+        "sampling": vol.sar_ledger_sampling(),
     }
 
 
