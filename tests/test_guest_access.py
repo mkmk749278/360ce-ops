@@ -254,6 +254,22 @@ def test_guest_cannot_read_subscriber_tables(client):
         assert client.get(path, follow_redirects=False).status_code == 403, path
 
 
+def test_guest_cannot_see_or_mint_access_grants(client):
+    """The access panel is the thing that hands out access. A read-only holder
+    reaching it would see every live grant and could mint another — so it is
+    owner-only on the same footing as the kill switch, and moving it to its own
+    sub-tab must not have loosened that."""
+    code = _mint(client)
+    _guest(client, code)
+    assert client.get("/control/access", follow_redirects=False).status_code == 403
+    assert client.post(
+        "/control/access/issue", data={"label": "x", "ttl": "7d"}, follow_redirects=False
+    ).status_code == 403
+    assert client.post(
+        "/control/access/revoke", data={"scope": "all"}, follow_redirects=False
+    ).status_code == 403
+
+
 def test_guest_cannot_run_the_diag_runner(client):
     code = _mint(client)
     _guest(client, code)
@@ -337,3 +353,59 @@ def test_unauthenticated_still_redirects_to_owner_login(client):
     r = client.get("/track-record", follow_redirects=False)
     assert r.status_code == 302
     assert r.headers["location"] == "/login"
+
+
+# ---------------------------------------------------------------------------
+# the owner's access sub-tab
+# ---------------------------------------------------------------------------
+def _owner(client: TestClient) -> None:
+    client.post("/login", data={"password": "test-token"})
+
+
+def test_access_page_renders_and_is_in_the_control_nav(client):
+    """The panel moved off the engine page onto its own sub-tab (2026-08-06).
+    A page that exists but is not linked is the nav defect this repo has already
+    paid for, so the link is asserted, not assumed."""
+    _owner(client)
+    r = client.get("/control/access")
+    assert r.status_code == 200
+    assert 'href="/control/access"' in r.text
+    # …and it is no longer a card on the engine page.
+    assert "Temporary read-only access" not in client.get("/control").text
+
+
+def test_minted_code_is_shown_once_and_not_again(client):
+    """The code rides to its render through process memory, not the session
+    cookie, so a refresh cannot re-display it — and neither can anyone who later
+    reads the cookie."""
+    _owner(client)
+    r = client.post(
+        "/control/access/issue", data={"label": "agent", "ttl": "1h"}, follow_redirects=True
+    )
+    assert r.status_code == 200
+    import re
+
+    m = re.search(r"<code>([0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5})</code>", r.text)
+    assert m, "the new code was not rendered"
+    code = m.group(1)
+    assert code not in client.get("/control/access").text
+    # It still works — shown once is not issued once.
+    assert app.state.guest_access.redeem(code) is not None
+
+
+def test_access_actions_flash_on_their_own_page(client):
+    """Separate flash key: an engine action and an access action sharing one key
+    means a result can render on a page the operator did not come from."""
+    _owner(client)
+    r = client.post(
+        "/control/access/revoke", data={"scope": "all"}, follow_redirects=False
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/control/access"
+
+
+def test_unknown_ttl_is_refused_not_defaulted(client):
+    _owner(client)
+    before = app.state.guest_access.live_count()
+    client.post("/control/access/issue", data={"label": "x", "ttl": "99y"}, follow_redirects=True)
+    assert app.state.guest_access.live_count() == before

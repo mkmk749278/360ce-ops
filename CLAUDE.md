@@ -769,8 +769,19 @@ reading a thin cell costs.
 Added 2026-08-06 (`docs/READ_ONLY_ACCESS.md`) for the owner's question: *"give
 access to you to browse our ops page to load data … except control Panel, from
 control I generate temporary code … and I can disable that access too"*. The
-owner mints a short-lived code on `/control`; the holder exchanges it at
-`/guest` for a read-only session; the owner revokes it from the same card.
+owner mints a short-lived code on **Control → Access** (`/control/access`); the
+holder exchanges it at `/guest` for a read-only session; the owner revokes it
+from the same page. Measured against the live nav, a holder sees 5 of the 6
+groups (Control absent entirely) and 5 of 6 Diagnostics sub-tabs (Diag runner
+withheld).
+
+**The panel is its own sub-tab, not a card on `/control`.** Every other control
+on that page writes to the *engine*; this writes to ops' own access store, and a
+revoke sitting between the kill switch and auto-mode reads as an engine action.
+It carries its own flash key for the same reason — two writers on one flash key
+means an action can render its result on a page the operator did not come from.
+The panel is itself owner-only and tested as such: a tier that could see the
+grant list could mint itself another.
 
 Rules, each of which is a rule already in this file arriving at the auth layer:
 
