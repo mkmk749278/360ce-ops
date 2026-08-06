@@ -14,6 +14,15 @@
       presentational: overlapping views are grouped under one primary tab with a
       secondary sub-nav.  `active` (set by each route) picks both the group and
       the sub-tab. -#}
+  {#- Two pages were both labelled "Price action" and only one was reachable.
+      `/signals/price-action` is the LANE — price action generating its own
+      signals — and it had NO entry at all, so it highlighted "Feed" and could
+      only be reached by typing the URL. `/signals/structural-snap` is the
+      SL/TP1 geometry repair, a different thing, now named for what it does.
+      `/signals/structural-veto` was missing outright. A page nobody can
+      navigate to is "measured but nowhere to look" (owner-caught 2026-08-06),
+      and `tests/test_nav.py` derives this list's requirements from the
+      registered routes so the next one cannot go missing the same way. -#}
   {%- set NAV = [
       ('overview', 'Overview', [('/', 'Pulse', 'pulse')]),
       ('signals', 'Signals', [
@@ -21,7 +30,9 @@
           ('/signals/sar-live', 'SAR live', 'sar_live'),
           ('/signals/dark-live', 'Dark feed', 'dark_live'),
           ('/signals/entry-features', 'Entry features', 'entry_features'),
-          ('/signals/structural-snap', 'Price action', 'structural_snap'),
+          ('/signals/price-action', 'Price action', 'price_action'),
+          ('/signals/structural-veto', 'Structural veto', 'structural_veto'),
+          ('/signals/structural-snap', 'Snap geometry', 'structural_snap'),
           ('/signals/sar', 'SAR signals', 'sar_signals'),
           ('/positions', 'Positions', 'positions'),
           ('/pairs', 'Pairs', 'pairs')]),
