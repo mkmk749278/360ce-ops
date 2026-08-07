@@ -417,9 +417,9 @@
           {% if r.get('is_stalled') %}<span class="badge sev-high" title="the newest closed bar for this symbol is bars behind the clock, so this arm's stop has not been recomputed since — the price beside it is live, the stop is not">stalled{% if r.get('bars_behind') is not none %} {{ "%.0f"|format(r.get('bars_behind')) }}b{% endif %}</span>{% endif %}
           {% if r.get('stall_reason') == 'no_series' %}<span class="badge sev-high" title="the store has no candles for this symbol/timeframe at all — the symbol has almost certainly rotated out of the scan universe">no candles</span>{% endif %}
         </td>
-        <td>{% if r.current_price is not none %}{{ "%.6g"|format(r.current_price) }}{% else %}—{% endif %}</td>
-        <td class="{% if r.unrealized_pct is not none and r.unrealized_pct > 0 %}pos{% elif r.unrealized_pct is not none and r.unrealized_pct < 0 %}neg{% endif %}">
-          {% if r.unrealized_pct is not none %}{{ "%+.2f"|format(r.unrealized_pct) }}%{% else %}—{% endif %}</td>
+        <td>{% if r.get('current_price') is not none %}{{ "%.6g"|format(r.get('current_price')) }}{% else %}—{% endif %}</td>
+        <td class="{% if r.get('unrealized_pct') is not none and r.get('unrealized_pct') > 0 %}pos{% elif r.get('unrealized_pct') is not none and r.get('unrealized_pct') < 0 %}neg{% endif %}">
+          {% if r.get('unrealized_pct') is not none %}{{ "%+.2f"|format(r.get('unrealized_pct')) }}%{% else %}—{% endif %}</td>
         <td>{% if r.governor == 'SAR' and r.sar_stop is not none %}{{ "%.6g"|format(r.sar_stop) }}
             {% elif r.governor == 'GEOMETRY' %}<span class="muted" title="SAR has not taken over; the original stop is still live">{{ r.stop_loss }}</span>
             {% else %}—{% endif %}</td>

@@ -693,3 +693,56 @@ class TestLayerOneRendersAndStatesItsLimits:
         from app.routes.price_action import EXPORT_COLS
         for col in ("vp_entry_zone", "vp_level_zone", "vp_poc_room_pct"):
             assert col in EXPORT_COLS, col
+
+
+# ── a terminal row that is deliberately unscored ──────────────────────────
+#
+# `INSUFFICIENT` (#839) is terminal AND carries no `pnl_pct` — it is the
+# absence of a measurement, never a 0R. It is therefore the one status that is
+# neither marked by `mark_live_pnl` (not OPEN) nor covered by a realized column,
+# and two such rows took this page down with a 500 on 2026-08-07.
+#
+# The suite could not have caught it: `_row()` builds `CLOSED`-with-a-pnl or
+# `OPEN`, so no fixture had ever been terminal and unscored. A fixture chooses a
+# shape and then agrees with you about it.
+
+def test_the_marked_keys_are_present_on_every_row_not_only_the_open_ones():
+    """The producer's own docstring promises "present-but-None, so the template
+    must not have to tell a missing key from an unknown value" — and it used to
+    keep that promise only for the rows it was about to mark anyway.
+
+    Derived, not hand-listed: whatever keys an OPEN row gains are exactly the
+    keys a terminal row must also carry, so a sixth marked key is covered here
+    without anyone editing this test.
+    """
+    from app.routes.dark_signals_live import mark_live_pnl
+
+    open_row = _row("open", pnl=None)
+    unscored = _row("insufficient", pnl=None, status="INSUFFICIENT")
+    before = set(unscored)
+    mark_live_pnl([open_row, unscored], {})
+
+    promised = set(open_row) - set(_row("probe", pnl=None))
+    assert promised, "the marker stopped writing keys — this test is now vacuous"
+    assert promised <= set(unscored) - before, (
+        "a terminal row is missing keys the template is told are always there: "
+        f"{promised - (set(unscored) - before)}"
+    )
+
+
+def test_a_terminal_unscored_row_renders_rather_than_500ing():
+    """Jinja's `Undefined` is not `None`, so a missing key sails straight
+    through an `is not none` guard and into `format()`. The guard has to hold
+    for a row that has neither a realized figure nor an unrealized one."""
+    with _client([_row("a", pnl=1.0), _row("b", pnl=None, status="INSUFFICIENT")]) as c:
+        r = c.get("/signals/price-action")
+    assert r.status_code == 200
+    assert "INSUFFICIENT" in r.text
+
+
+def test_no_price_leaves_an_open_row_renderable():
+    """Same guard from the other side: `fetch_all_prices` fails open to `{}`
+    (a Binance ban is routine here), so an OPEN row with no mark must render
+    the em-dash rather than take the page down."""
+    with _client([_row("a", pnl=None)]) as c:
+        assert c.get("/signals/price-action").status_code == 200

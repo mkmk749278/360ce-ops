@@ -465,16 +465,29 @@ def mark_live_pnl(rows: list[dict], prices: dict) -> list[dict]:
     KORUUSDT row unremarkable on the SAR tab.
     """
     for row in rows:
-        if str(row.get("status") or "") != STATUS_OPEN:
-            continue
-        # Present-but-None: the column means "we could not compute this", and
-        # the template must not have to tell a missing key from an unknown value.
+        # Present-but-None on EVERY row, not only the open ones: the column
+        # means "we could not compute this", and the template must not have to
+        # tell a missing key from an unknown value.
+        #
+        # This block used to sit BELOW the status check, so it described only
+        # the rows that were going to be marked anyway — the promise above was
+        # kept for exactly the population that did not need it. A terminal row
+        # is normally covered by `pnl_pct`, so the gap was invisible until a
+        # status that is terminal AND deliberately unscored appeared:
+        # `INSUFFICIENT` (#839 — the absence of a measurement, never 0R). Two
+        # such rows took `/signals/price-action` down with a 500, because a
+        # Jinja `Undefined` is not `None` and sails straight through an
+        # `is not none` guard into `format()`. The seam is here, not in the
+        # template that trusted the docstring.
         for key in (
             "current_price", "unrealized_pct", "unrealized_r",
             "room_to_sl_pct", "room_to_tp1_pct",
         ):
             row.setdefault(key, None)
         row.setdefault("level_crossed", "")
+
+        if str(row.get("status") or "") != STATUS_OPEN:
+            continue
 
         price = _f(prices.get(str(row.get("symbol") or "")))
         entry = _f(row.get("entry"))
