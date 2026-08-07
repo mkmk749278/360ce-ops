@@ -311,6 +311,40 @@ Two rules the page learned the day after it shipped:
   badly rather than as missing data. `level_not_stamped` is its own skip reason, on
   screen, counted apart from "the arm is still running" and "written before the arm
   shipped", because the reader's next move differs for each.
+- **A concentration key is not portable between lanes, and porting one blind would
+  have printed the exact reassurance it exists to prevent** (2026-08-07). The
+  price-action page groups a run by **time** — 90 minutes, three times the engine's
+  per-symbol emit throttle — because that lane re-enters a trending symbol every 30
+  minutes and one 4.5h burst carried its whole sign. Copying that key here finds
+  almost nothing: a dark candidate is diverted at the `signal_queue.put` site
+  **before** `SignalRouter._process`, so no per-symbol cooldown applies to it at all,
+  and its repeats are spread across hours instead of bunched. Median gap between
+  consecutive stamps on one symbol·side is **~12 hours**; only ~15% fall inside the
+  window. So the run key reads **1.10 rows/group, worst run 3 rows and 8% of the
+  loss** — *concentration is not a problem here* — over a book where the worst **ten
+  campaigns** (symbol·side across the whole window; 59 rows, **13%**) take the
+  selection from **−119.85% to +4.40%**. **82% of rows sit in a multi-row campaign
+  against 17% in a multi-row run.** Both render, neither is "the" number, and nothing
+  de-duplicates. Two things to keep: a window that derives from a throttle on one
+  lane is a **chosen** grouping on a lane with no throttle, and the page says which it
+  is; and re-detection here understates the loss (one row per campaign reads −0.342%
+  against −0.199% per row) — the opposite direction from #816, so "de-duplicate to be
+  safe" is not a safe default either.
+- **A coverage count says how many rows are missing and cannot say which way they
+  lean — grade the subset on the column every row has** (2026-08-07). The exit-method
+  table said *"measured over 217 rows … 245 excluded"*, which reads as a sampling
+  caveat and is a **directional** one: the priced rows averaged **−0.3215%** against
+  **−0.1706%** for the retired ones, and all the still-running rows were winners. The
+  held arm's reach also varies by path — **54%** of `MOVER_AVWAP_SCALP` against
+  **24%** of `FAILED_AUCTION_RECLAIM` — so a pooled average is weighted quite
+  differently from the per-path table below it. The row's own SL/TP1 `pnl_pct` is
+  recorded on **every** row whichever bucket it lands in, so the always-present column
+  is what grades the subset the second arm defines. Corollary that decides how to read
+  the table: a lean shared by both sides cancels out of **"vs the row's own exit"**
+  (same rows, same baseline) and does not cancel out of the absolute avg/total — so
+  the edge column survives and the level does not. Nothing is reweighted: a
+  rotated-out mover is not missing at random, and de-biasing needs a model of why the
+  candles stopped.
 - **…and a mark is only honest beside a row that can say whether it is still true.**
   This is #108 one page over, and it was avoided rather than paid for a third time:
   freshness is graded on the **engine's** stamps (`last_resolved_at`, `bars_behind`,

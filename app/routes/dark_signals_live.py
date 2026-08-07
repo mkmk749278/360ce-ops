@@ -206,6 +206,157 @@ def reduce_lane_rows(payload: Any) -> list[dict]:
     return out
 
 
+#: Same 90 minutes `/signals/price-action` groups a run by, so a reader moving
+#: between the two pages compares like with like.
+#:
+#: There it is *derived* — three times the engine's 30-minute per-symbol emit
+#: throttle. Here nothing derives it, and that difference is the finding rather
+#: than an oversight: a dark candidate is diverted at the `signal_queue.put`
+#: site, **before** `SignalRouter._process`, so `GLOBAL_SYMBOL_COOLDOWN_SECONDS`
+#: never applies to it. This lane has no per-symbol throttle at all. The window
+#: is therefore a chosen grouping, it is named as one on screen, and the panel
+#: publishes the campaign view beside it precisely because no single window can
+#: be the right one.
+RUN_GAP_S = 5_400.0
+
+
+def _net_pct(rows: list[dict], fee_pct: float) -> Optional[float]:
+    """Net PnL over the rows that carry one, fee charged per row.
+
+    A row with no readable `pnl_pct` is excluded rather than scored zero — an
+    open row is not a flat one, and `EXPIRED` already *is* a real 0.00%.
+    """
+    scored = [r for r in rows if _f(r.get("pnl_pct")) is not None]
+    if not scored:
+        return None
+    return sum(_f(r.get("pnl_pct")) or 0.0 for r in scored) - fee_pct * len(scored)
+
+
+def _group_stats(
+    groups: list[tuple[str, list[dict]]], rows: list[dict], fee_pct: float
+) -> dict:
+    """Shared shape for both groupings, so neither can quietly measure differently."""
+    book = _net_pct(rows, fee_pct)
+    # Groups carrying at least one scored row. NOT "losing groups" — a group
+    # whose rows are all still open has no net at all, and is a different thing
+    # from one that netted zero.
+    scored = [
+        (label, g, net) for label, g, net in
+        ((label, g, _net_pct(g, fee_pct)) for label, g in groups)
+        if net is not None
+    ]
+
+    worst = None
+    if scored:
+        label, g, net = min(scored, key=lambda x: x[2])
+        stamps = [s for s in (_f(r.get("emitted_at")) for r in g) if s is not None]
+        worst = {
+            "label": label,
+            "n_rows": len(g),
+            "hours": (max(stamps) - min(stamps)) / 3600.0 if len(stamps) >= 2 else 0.0,
+            "net_pct": net,
+            # Only meaningful while the book is losing: "this one group is N% of
+            # everything the selection lost". Over 100% means the rest is
+            # positive without it.
+            "share_of_book": (net / book * 100.0) if (book is not None and book < 0) else None,
+            # Exactly this group's rows — removing every row that merely shares
+            # a ticker would overstate what one group cost.
+            "book_without": _net_pct([r for r in rows if id(r) not in {id(x) for x in g}], fee_pct),
+        }
+
+    # How few groups it takes to change the sign. This is a CONCENTRATION
+    # measure, not a filter anyone could have run: the groups are chosen by
+    # already knowing their outcome, which is why the row share is printed
+    # beside it. A small k over a small row share is the finding — it says the
+    # verdict rests on a handful of symbols rather than on the paths.
+    to_flip = None
+    if book is not None and book < 0 and scored:
+        ordered = sorted(scored, key=lambda x: x[2])
+        running, removed = book, 0
+        for i, (_, g, net) in enumerate(ordered, start=1):
+            running -= net
+            removed += len(g)
+            if running >= 0:
+                to_flip = {
+                    "k": i,
+                    "n_rows": removed,
+                    "row_share": removed / len(rows) * 100.0 if rows else 0.0,
+                    "book_without": running,
+                }
+                break
+
+    multi = sum(len(g) for _, g in groups if len(g) > 1)
+    return {
+        "n_groups": len(groups),
+        "rows_per_group": (len(rows) / len(groups)) if groups else 0.0,
+        "multi_row_share": (multi / len(rows) * 100.0) if rows else 0.0,
+        "worst": worst,
+        "to_flip": to_flip,
+    }
+
+
+def concentration(rows: list[dict], *, fee_pct: float) -> dict:
+    """Two groupings of the same rows, because they answer different questions.
+
+    `/signals/price-action` learned (2026-08-07) that a move key of
+    ``symbol · side · entry`` is structurally blind to a trending symbol — a
+    trend hands out a new entry every time — and shipped a **run** panel keyed
+    on time-clustered re-entries. Porting that panel here alone would have been
+    wrong, and measuring it first is the only reason we know:
+
+    * **Runs** (this symbol, this side, re-stamped inside 90 minutes) find
+      almost nothing on this book. Median gap between consecutive stamps on one
+      symbol·side is ~12 hours and only ~15% of gaps fall inside the window, so
+      the worst run on the 2026-08-07 book was 3 rows and 8% of the loss.
+    * **Campaigns** (this symbol, this side, over the whole window) carry it:
+      183 campaigns over 445 closed rows, and the worst **eight** — 50 rows,
+      11% of the book — take it from −119.85% to positive.
+
+    That is the price-action lesson arriving with its own key wrong: a run panel
+    here would have read *"concentration is not a problem"* over a book whose
+    verdict is eleven percent of its rows. The dark lane spans days and has no
+    per-symbol throttle, so its repeats are spread out rather than bunched, and
+    a window narrow enough to mean "one move" cannot see them.
+
+    Both render, neither is "the" number, and **nothing de-duplicates** — that
+    judgement belongs to the reader, and counting silently is what this panel
+    exists to stop (#816 at the display side).
+    """
+    if not rows:
+        return {
+            "n_rows": 0, "book_net": None, "gap_minutes": RUN_GAP_S / 60.0,
+            "runs": None, "campaigns": None,
+        }
+
+    by_key: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        key = (str(row.get("symbol") or "?"), str(row.get("side") or "?"))
+        by_key.setdefault(key, []).append(row)
+
+    campaigns = [(f"{sym} {side}", g) for (sym, side), g in by_key.items()]
+
+    runs: list[tuple[str, list[dict]]] = []
+    for (sym, side), group in by_key.items():
+        ordered = sorted(group, key=lambda r: _f(r.get("emitted_at")) or 0.0)
+        run = [ordered[0]]
+        for prev, cur in zip(ordered, ordered[1:]):
+            a, b = _f(prev.get("emitted_at")), _f(cur.get("emitted_at"))
+            if a is not None and b is not None and (b - a) < RUN_GAP_S:
+                run.append(cur)
+            else:
+                runs.append((f"{sym} {side}", run))
+                run = [cur]
+        runs.append((f"{sym} {side}", run))
+
+    return {
+        "n_rows": len(rows),
+        "book_net": _net_pct(rows, fee_pct),
+        "gap_minutes": RUN_GAP_S / 60.0,
+        "runs": _group_stats(runs, rows, fee_pct),
+        "campaigns": _group_stats(campaigns, rows, fee_pct),
+    }
+
+
 def filter_rows(
     rows: list[dict], *, setup: str = "", gate: str = "", status: str = ""
 ) -> list[dict]:
@@ -778,6 +929,10 @@ async def dark_signals_live(
     max_profit = summarize_max_profit(selected)
     exits = compare_strategies(selected, target_pct=target, fee_pct=fee)
     coverage = hold_coverage(selected)
+    # On the filtered selection like every other panel (#90/#91) — a
+    # concentration figure over the whole ledger beside a one-path table would
+    # describe symbols the reader has filtered out.
+    conc = concentration(selected, fee_pct=fee)
     attach_strategy(selected, strategy, target, fee)
 
     # Truncate after filtering, never before (#97). The page says when it bit.
@@ -790,6 +945,7 @@ async def dark_signals_live(
         "max_profit": max_profit,
         "exits": exits,
         "hold_coverage": coverage,
+        "concentration": conc,
         "strategies": [(k, s.label) for k, s in catalog.items()],
         "strategy": strategy,
         "strategy_label": catalog[strategy].label,

@@ -519,23 +519,97 @@ def summarize_max_profit(rows: list[dict]) -> dict:
     }
 
 
+def _bucket(row: dict) -> str:
+    """Which coverage bucket a row falls in. One classifier, three readers."""
+    status = row.get("hold_status")
+    if status is None:
+        return SKIP_NO_ARM
+    if str(status) in HOLD_DECIDED:
+        return "decided"
+    if str(status) == HOLD_INSUFFICIENT:
+        return SKIP_UNMEASURED
+    return SKIP_RUNNING
+
+
+def _own_exit(rows: list[dict]) -> dict:
+    """The rows' OWN SL/TP1 outcome — the column that exists on every row.
+
+    Deliberately not the held arm's: this is the yardstick the arm's subset gets
+    measured against, so it has to be readable on rows the arm never scored.
+    """
+    vals = [v for v in (_f(r.get("pnl_pct")) for r in rows) if v is not None]
+    wins = sum(1 for v in vals if v > 0)
+    losses = sum(1 for v in vals if v < 0)
+    decided = wins + losses
+    return {
+        "n": len(rows),
+        "n_scored": len(vals),
+        "avg_pct": (sum(vals) / len(vals)) if vals else None,
+        # Flat rows (`EXPIRED` at exactly 0.00%) are excluded from the RATE and
+        # kept in the average — a walked window in which nothing happened is not
+        # a loss, and it still paid its round trip. "Three buckets, never two."
+        "win_rate": (wins / decided * 100.0) if decided else None,
+        "wins": wins,
+        "losses": losses,
+        "flat": len(vals) - decided,
+    }
+
+
 def hold_coverage(rows: list[dict]) -> dict:
     """How much of this selection the held arm can speak for, and why not the rest.
 
     Rendered whether or not anything is missing. A check that appears only when
     it trips teaches the reader that its absence means "fine", when it equally
     means the check stopped running — the rule `/signals/sar-live` paid for.
+
+    Two things beyond the counts, both added 2026-08-07 after reading the
+    rendered page rather than the code.
+
+    **Coverage is not uniform across paths**, and the exit-method table above is
+    the whole page's headline. On the 2026-08-07 book the arm had decided 54% of
+    `MOVER_AVWAP_SCALP` and **24%** of `FAILED_AUCTION_RECLAIM` — so "measured
+    over 217 rows" silently meant a book weighted quite differently from the one
+    the per-path table beside it shows. A reader cannot discount a path's
+    exit-method number without knowing that path's coverage, and it was nowhere.
+
+    **And the shortfall is directional, not merely a sample.** Every row carries
+    its own SL/TP1 `pnl_pct` whichever bucket it lands in, so that column can
+    grade whether the arm's subset represents the book — which is the one
+    question a coverage count cannot answer. It did not: the decided rows
+    averaged **−0.3215%** against **−0.1706%** for the retired ones, and all five
+    still-running rows were winners. The priced half is the *worse* half, so
+    every exit method's absolute number is pessimistic and its *edge over the
+    baseline* — measured on the same rows — is the figure that survives.
+
+    Saying "245 excluded" invites the reader to treat the residue as random.
+    This says which way it leans. It is the `/signals/sar-live` rule about
+    loss-selected samples, arriving at a population defined by a second arm's
+    reach rather than by a resolver's budget.
     """
     counts = {"decided": 0, SKIP_RUNNING: 0, SKIP_UNMEASURED: 0, SKIP_NO_ARM: 0}
+    buckets: dict[str, list[dict]] = {
+        "decided": [], SKIP_RUNNING: [], SKIP_UNMEASURED: [], SKIP_NO_ARM: [],
+    }
+    by_path: dict[str, dict] = {}
     for row in rows:
-        status = row.get("hold_status")
-        if status is None:
-            counts[SKIP_NO_ARM] += 1
-        elif str(status) in HOLD_DECIDED:
-            counts["decided"] += 1
-        elif str(status) == HOLD_INSUFFICIENT:
-            counts[SKIP_UNMEASURED] += 1
-        else:
-            counts[SKIP_RUNNING] += 1
+        bucket = _bucket(row)
+        counts[bucket] += 1
+        buckets[bucket].append(row)
+        path = str(row.get("setup_class") or "?")
+        agg = by_path.setdefault(path, {
+            "setup_class": path, "total": 0,
+            "decided": 0, SKIP_RUNNING: 0, SKIP_UNMEASURED: 0, SKIP_NO_ARM: 0,
+        })
+        agg["total"] += 1
+        agg[bucket] += 1
+
+    for agg in by_path.values():
+        agg["priced_share"] = agg["decided"] / agg["total"] * 100.0 if agg["total"] else 0.0
+
     counts["total"] = len(rows)
+    counts["by_path"] = sorted(by_path.values(), key=lambda a: -a["total"])
+    # Keyed by the same bucket names, so a new bucket cannot appear in the
+    # counts and be silently absent here.
+    counts["representativeness"] = {k: _own_exit(v) for k, v in buckets.items()}
+    counts["representativeness"]["all"] = _own_exit(rows)
     return counts
