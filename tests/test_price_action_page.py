@@ -555,3 +555,141 @@ class TestEpisodesSeeWhatTheMoveKeyCannot:
         from app.routes.price_action import episodes
         e = episodes([], fee_pct=0.0)
         assert e["n_episodes"] == 0 and e["rows_per_episode"] == 0.0
+
+
+# ── Layer 1 — Context, and the shadow rule over it ────────────────────────
+
+def _ctx_row(sid="a", pnl=None, zone="in", room=1.0, lvl="edge", **kw):
+    r = _row(sid=sid, pnl=pnl, **kw)
+    r["vp_entry_zone"] = zone
+    r["vp_poc_room_pct"] = room
+    r["vp_level_zone"] = lvl
+    return r
+
+
+class TestLayerOneContextSplit:
+    """The lane implements the program doc's layers 2/3/4 and had no layer 1.
+    A sweep+reclaim is a failed break — mean reversion — which pays in balance
+    and traps in imbalance, and those two states have an identical
+    layer-2/3/4 signature. That is why nothing already stamped separated them."""
+
+    def test_unstamped_is_its_own_bucket_never_folded_into_a_real_one(self):
+        from app.routes.price_action import by_context
+        rows = [
+            _ctx_row(sid="a", pnl=1.0, zone="in"),
+            _ctx_row(sid="b", pnl=-1.0, zone="out"),
+            _row(sid="c", pnl=-5.0),  # no layer-1 stamp at all
+        ]
+        out = {c["zone"]: c for c in by_context(rows, fee_pct=0.0, key="vp_entry_zone")}
+        assert set(out) == {"in", "out", "unstamped"}
+        assert out["unstamped"]["n"] == 1
+        assert out["unstamped"]["unstamped"] is True
+        assert out["in"]["n"] == 1, "an unstamped row must not land in a real bucket"
+
+    def test_the_level_zone_splits_independently_of_the_entry_zone(self):
+        from app.routes.price_action import by_context
+        rows = [_ctx_row(sid="a", pnl=1.0, zone="in", lvl="interior")]
+        entry = {c["zone"] for c in by_context(rows, fee_pct=0.0, key="vp_entry_zone")}
+        level = {c["zone"] for c in by_context(rows, fee_pct=0.0, key="vp_level_zone")}
+        assert entry == {"in"} and level == {"interior"}
+
+    def test_fees_are_charged_in_the_split(self):
+        from app.routes.price_action import by_context
+        rows = [_ctx_row(sid="a", pnl=1.0, zone="in")]
+        out = by_context(rows, fee_pct=0.07, key="vp_entry_zone")[0]
+        assert out["avg_net_pct"] == pytest.approx(0.93)
+
+
+class TestBalanceShadowRule:
+    """Applied to nothing, and half its cutoff is fitted — the page says so."""
+
+    def _book(self):
+        return [
+            # in balance, POC ahead -> kept
+            _ctx_row(sid="k1", pnl=3.0, zone="in", room=1.5),
+            _ctx_row(sid="k2", pnl=-1.0, zone="in", room=0.8),
+            # in balance but POC behind -> dropped
+            _ctx_row(sid="d1", pnl=-6.0, zone="in", room=-1.2),
+            # outside value -> dropped
+            _ctx_row(sid="d2", pnl=-4.0, zone="out", room=2.0),
+            # no layer-1 stamp -> abstain
+            _row(sid="u1", pnl=-9.0),
+        ]
+
+    def test_three_buckets_never_two(self):
+        from app.routes.price_action import balance_shadow
+        s = balance_shadow(self._book(), fee_pct=0.0)
+        assert s["keep"]["n"] == 2
+        assert s["drop"]["n"] == 2
+        assert s["unknown"]["n"] == 1, "an unstamped row must never count as kept"
+
+    def test_an_unstamped_row_is_never_folded_into_keep(self):
+        """How a candidate rule takes credit for rows it never filtered."""
+        from app.routes.price_action import balance_shadow
+        s = balance_shadow([_row(sid="u", pnl=5.0)], fee_pct=0.0)
+        assert s["keep"]["n"] == 0 and s["unknown"]["n"] == 1
+        assert s["unknown_frac"] == pytest.approx(1.0)
+
+    def test_room_must_be_positive_not_merely_present(self):
+        """POC behind the trade is the rotation going the wrong way — signed
+        toward the trade, so a negative value is a real reading, not missing."""
+        from app.routes.price_action import balance_shadow
+        s = balance_shadow([_ctx_row(sid="d", pnl=1.0, zone="in", room=-0.1)], fee_pct=0.0)
+        assert s["keep"]["n"] == 0 and s["drop"]["n"] == 1
+
+    def test_the_baseline_is_the_whole_book_and_does_not_move(self):
+        """If the baseline shifted with the rule's coverage, every Δ would be
+        measured against a different thing."""
+        from app.routes.price_action import balance_shadow
+        book = self._book()
+        a = balance_shadow(book, fee_pct=0.0)
+        b = balance_shadow(book + [_row(sid="u2")], fee_pct=0.0)  # open row, no pnl
+        assert a["base"]["n_closed"] == b["base"]["n_closed"]
+        assert a["base"]["avg_net_pct"] == pytest.approx(b["base"]["avg_net_pct"])
+
+    def test_kept_and_unknown_fractions_are_published(self):
+        from app.routes.price_action import balance_shadow
+        s = balance_shadow(self._book(), fee_pct=0.0)
+        assert s["kept_frac"] == pytest.approx(2 / 5)
+        assert s["unknown_frac"] == pytest.approx(1 / 5)
+
+    def test_the_decided_population_is_reported_apart_from_the_baseline(self):
+        """A rule that abstained on most of the book has not been tested on it."""
+        from app.routes.price_action import balance_shadow
+        s = balance_shadow(self._book(), fee_pct=0.0)
+        assert s["decided"]["n"] == 4
+        assert s["base"]["n"] == 5
+
+    def test_an_empty_book_does_not_divide_by_zero(self):
+        from app.routes.price_action import balance_shadow
+        s = balance_shadow([], fee_pct=0.0)
+        assert s["kept_frac"] is None and s["delta_vs_base"] is None
+
+
+class TestLayerOneRendersAndStatesItsLimits:
+
+    def test_the_page_renders_the_context_split_and_the_shadow_rule(self):
+        with _client([_ctx_row(sid="a", pnl=1.0)]) as c:
+            body = c.get("/signals/price-action").text
+        assert "Layer 1 — Context" in body
+        assert "balance_only" in body
+
+    def test_the_shadow_panel_says_it_is_applied_to_nothing(self):
+        with _client([_ctx_row(sid="a", pnl=1.0)]) as c:
+            body = c.get("/signals/price-action").text
+        assert "APPLIED TO NOTHING" in body
+
+    def test_the_page_admits_the_cutoff_is_partly_fitted_to_this_window(self):
+        """The owner accepted a fitted rule knowingly; the next reader was not
+        in that conversation. Copy is part of the measurement."""
+        with _client([_ctx_row(sid="a", pnl=1.0)]) as c:
+            body = c.get("/signals/price-action").text
+        assert "fitted" in body.lower()
+        assert "56.3%" in body, "the 54-variant warning belongs over this number"
+
+    def test_the_export_carries_the_layer_one_columns(self):
+        """A spreadsheet is precisely where two populations get averaged into
+        one — the stamp has to ride along or the split cannot be redone."""
+        from app.routes.price_action import EXPORT_COLS
+        for col in ("vp_entry_zone", "vp_level_zone", "vp_poc_room_pct"):
+            assert col in EXPORT_COLS, col

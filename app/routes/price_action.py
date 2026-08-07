@@ -287,6 +287,111 @@ def episodes(rows: list[dict], *, fee_pct: float) -> dict:
     }
 
 
+def by_context(rows: list[dict], *, fee_pct: float, key: str) -> list[dict]:
+    """Split by layer 1 — Context, the layer the lane was built without.
+
+    §1 of the program doc defines price action as a **four-layer** read; the
+    lane shipped with layers 2 (LevelBook), 3 (sweep + reclaim) and 4 (footprint
+    delta) and no layer 1, while `volume_profile.py` had computed POC and the
+    value area all along and the lane never imported it.
+
+    Why this split and not another: a sweep + reclaim is a **failed break**, so
+    it is a mean-reversion trade. It pays in **balance** (price rotating inside
+    a value area, rejected at the edge, returning toward POC) and traps in
+    **imbalance** (value being accepted away from the area, so each failed break
+    is a pause before continuation). Those two states have an identical
+    layer-2/3/4 signature, which is exactly why nothing already stamped could
+    separate them and why every column on this page looked like noise.
+
+    `unstamped` is its own bucket and is never folded into a real one — the
+    engine refuses rather than guessing when a profile cannot be built, and a
+    missing stamp is not a pass.
+    """
+    buckets: dict[str, list[dict]] = {}
+    for r in rows:
+        buckets.setdefault(str(r.get(key) or "unstamped"), []).append(r)
+    out = []
+    for name, bucket in sorted(buckets.items()):
+        closed = [x for x in bucket if _f(x.get("pnl_pct")) is not None]
+        wins = sum(1 for x in closed if (_f(x.get("pnl_pct")) or 0.0) > 0)
+        gross = sum(_f(x.get("pnl_pct")) or 0.0 for x in closed)
+        out.append({
+            "zone": name,
+            "n": len(bucket),
+            "n_closed": len(closed),
+            "win_rate": (wins / len(closed) * 100.0) if closed else None,
+            "avg_net_pct": (
+                (gross - fee_pct * len(closed)) / len(closed) if closed else None
+            ),
+            "unstamped": name == "unstamped",
+        })
+    return out
+
+
+def balance_shadow(rows: list[dict], *, fee_pct: float) -> dict:
+    """The what-if: keep only sweeps taken **in balance, with room to POC**.
+
+    Applied to **nothing**. This is a display-side counterfactual over rows the
+    engine already stamped and already emitted, and it changes no emission.
+
+    **Its cutoff is honest about where it comes from, and half of it is fitted.**
+    The *balance* half is not: "inside the value area" is the value area's own
+    70%-of-volume definition, which existed before this lane and was not chosen
+    to fit any window. The *rotation* half — requiring POC to sit ahead of the
+    trade — is a reasoned condition from auction theory, but **which** of the
+    several defensible layer-1 conditions to combine was picked while looking at
+    this book. So the number below is a hypothesis this window generated, not
+    one it tested, and it has to be re-earned on rows stamped after it shipped.
+    The owner was told this and asked for it anyway; the page says it too,
+    because the reader after him was not in that conversation.
+
+    Three buckets, never two: folding rows whose layer 1 never computed into
+    `keep` is how a rule takes credit for rows it never filtered.
+    """
+    keep, drop, unknown = [], [], []
+    for r in rows:
+        zone = str(r.get("vp_entry_zone") or "")
+        room = _f(r.get("vp_poc_room_pct"))
+        if not zone or room is None:
+            unknown.append(r)
+        elif zone == "in" and room > 0:
+            keep.append(r)
+        else:
+            drop.append(r)
+
+    def _m(rs: list[dict]) -> dict:
+        closed = [x for x in rs if _f(x.get("pnl_pct")) is not None]
+        if not closed:
+            return {"n": len(rs), "n_closed": 0, "win_rate": None, "avg_net_pct": None}
+        wins = sum(1 for x in closed if (_f(x.get("pnl_pct")) or 0.0) > 0)
+        gross = sum(_f(x.get("pnl_pct")) or 0.0 for x in closed)
+        return {
+            "n": len(rs),
+            "n_closed": len(closed),
+            "win_rate": wins / len(closed) * 100.0,
+            "avg_net_pct": (gross - fee_pct * len(closed)) / len(closed),
+        }
+
+    base = _m(rows)
+    kept = _m(keep)
+    # The baseline is measured on the WHOLE book the page is showing, and the
+    # delta against it is only meaningful where the rule actually had an opinion
+    # — so the tested population is named beside the kept fraction, and a rule
+    # that abstained on most of the book has not been tested whatever its delta.
+    decided = _m(keep + drop)
+    delta = (
+        None if kept["avg_net_pct"] is None or base["avg_net_pct"] is None
+        else kept["avg_net_pct"] - base["avg_net_pct"]
+    )
+    return {
+        "base": base, "keep": kept, "drop": _m(drop), "unknown": _m(unknown),
+        "decided": decided,
+        "delta_vs_base": delta,
+        "kept_frac": (len(keep) / len(rows)) if rows else None,
+        "unknown_frac": (len(unknown) / len(rows)) if rows else None,
+    }
+
+
 #: Layer-1 regime buckets are NOT enumerated here. The engine's regime detector
 #: owns the label set, and a list ops keeps would be silent by construction on
 #: the next label it adds — `MEASUREMENT_SUFFIXES` wearing a fourth hat. The
@@ -431,6 +536,10 @@ EXPORT_COLS: list[str] = [
     "regime_15m", "regime", "regime_tf",
     "level_source_tf", "level_type", "level_price", "level_score",
     "sweep_extreme", "sweep_depth_pct", "delta_quote", "rr",
+    # Layer 1 — Context. The column a spreadsheet needs to separate the two
+    # populations the lane could not previously tell apart.
+    "vp_entry_zone", "vp_level_zone", "vp_poc_room_pct", "vp_value_width_pct",
+    "vp_poc", "vp_vah", "vp_val",
     "bars_seen", "last_resolved_at", "bars_behind", "stalled",
 ]
 
@@ -537,6 +646,9 @@ async def price_action_page(
     sources = by_level_source(rows)
     conc = concentration(rows)
     eps = episodes(rows, fee_pct=fee)
+    ctx_entry = by_context(rows, fee_pct=fee, key="vp_entry_zone")
+    ctx_level = by_context(rows, fee_pct=fee, key="vp_level_zone")
+    shadow = balance_shadow(rows, fee_pct=fee)
     regimes_entry = by_regime(rows, fee_pct=fee, key="regime")
     regimes_trigger = by_regime(rows, fee_pct=fee, key="regime_15m")
     regime_tfs = regime_timeframes(rows)
@@ -553,6 +665,9 @@ async def price_action_page(
             "sources": sources,
             "concentration": conc,
             "episodes": eps,
+            "ctx_entry": ctx_entry,
+            "ctx_level": ctx_level,
+            "shadow": shadow,
             "regimes_entry": regimes_entry,
             "regimes_trigger": regimes_trigger,
             "regime_tfs": regime_tfs,
