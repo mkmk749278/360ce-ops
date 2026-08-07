@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Router drops — the last hop before a subscriber</h1>
+
+<p class="muted small">
+  Every other funnel in this dashboard stops at <strong>enqueue</strong>. The
+  scanner's own path funnel increments its <code>emitted</code> stage right after
+  <code>_enqueue_signal</code> succeeds, so that column counts enqueues and has
+  been labelled <em>emitted</em> the whole time. <code>SignalRouter._process</code>
+  then rejects on <strong>twelve</strong> further conditions before anything
+  reaches a channel, a push, the app feed or an order. This page is that hop.
+</p>
+
+<p class="muted small">
+  <strong>A drop is not a fault.</strong> Every gate here is doing its job — the
+  concurrency caps are blast-radius protection and nothing on this page is an
+  argument to widen them. It answers two separate questions: where the volume
+  goes, and whether one path is absorbing a <em>shared</em> budget that other
+  paths need.
+</p>
+
+{% if error %}
+  <div class="card"><span class="badge badge-bad">UNAVAILABLE</span>
+    <p class="small">Could not reach the engine: <code>{{ error }}</code></p>
+    <p class="muted small">
+      That is a fault on our side, not a quiet router — <em>could not read</em>
+      and <em>nothing was dropped</em> have different fixes.
+    </p>
+  </div>
+{% elif not reduced.available %}
+  <div class="card"><span class="badge badge-warn">NOT REPORTED</span>
+    <p class="small">{{ reduced.reason }}</p>
+    <p class="muted small">
+      The engine did not publish a census. Most likely an engine older than the
+      one that added <code>/internal/diag/router-delivery</code> —
+      <strong>not</strong> a router that dropped nothing, which would report
+      zeroes with a schema.
+    </p>
+  </div>
+{% else %}
+
+<div class="card">
+  <h2>Delivery</h2>
+  <table class="kv">
+    <tr><th>Dequeued</th><td>
+      {{ reduced.processed }}
+      <span class="muted small">the denominator for every share below —
+        <strong>never</strong> enqueues, which is a population this hop never saw</span>
+    </td></tr>
+    <tr><th>Delivered</th><td>
+      <strong>{{ reduced.delivered }}</strong>
+      {% if reduced.delivery_rate is not none %}
+        <span class="muted small">{{ '%.1f'|format(reduced.delivery_rate * 100) }}% of dequeued</span>
+      {% endif %}
+      <span class="muted small">— this is what "emitted" actually means, and only
+        the router knows it</span>
+    </td></tr>
+    <tr><th>Dropped</th><td>{{ reduced.dropped }}</td></tr>
+    <tr><th>Lost to a <em>shared</em> cap</th><td>
+      <strong>{{ reduced.shared_total }}</strong>
+      {% if reduced.shared_share is not none %}
+        <span class="muted small">{{ '%.1f'|format(reduced.shared_share * 100) }}% of dequeued</span>
+      {% endif %}
+      <span class="muted small">— the only drops one path can inflict on another</span>
+    </td></tr>
+  </table>
+  <p class="muted small">
+    <strong>Counters are cumulative since engine start and reset on restart.</strong>
+    They are in-process integers, not a ledger — a low number after a deploy is a
+    young process, not a quiet market.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Is one path eating the shared caps?</h2>
+  <p class="muted small">
+    Shared caps only: <code>same_direction_throttle</code> (a
+    <strong>global</strong> 3), <code>per_channel_cap</code> and
+    <code>correlation_group_limit</code>. Per-symbol gates are deliberately
+    excluded — a path with a large <code>symbol_channel_cooldown</code> count is
+    re-detecting its own symbol and taking nothing from anybody, and pooling that
+    in would manufacture crowding-out out of ordinary volume.
+  </p>
+  {% if by_setup %}
+  <table>
+    <thead><tr><th>Setup</th><th>Dropped by a shared cap</th><th>Share</th></tr></thead>
+    <tbody>
+      {% for r in by_setup %}
+      <tr>
+        <td><code>{{ r.setup }}</code></td>
+        <td>{{ r.n }}</td>
+        <td>{% if r.share is not none %}{{ '%.1f'|format(r.share * 100) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    <strong>Read this against each path's own volume, not alone.</strong> The
+    path that submits the most candidates will lose the most to any cap — that is
+    arithmetic, not crowding out. The crowding-out reading is a path whose share
+    <em>here</em> is far below its share of what the router dequeued, i.e. it is
+    being refused a shared budget that a bigger path is holding.
+  </p>
+  {% else %}
+    <p class="muted small">
+      No shared-cap drops recorded yet. On a young process that is the expected
+      state, not a finding.
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Every gate, and what it costs</h2>
+  {% if reduced.unclassified %}
+    <p class="small"><span class="badge badge-warn">unclassified</span>
+      This dashboard has never heard of:
+      {% for r in reduced.unclassified %}<code>{{ r }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+      Rendered under the engine's own name rather than dropped or bucketed — the
+      engine's reason list is the source of truth and a copy kept here would be
+      silent on the next gate it adds.
+    </p>
+  {% endif %}
+  <table>
+    <thead><tr>
+      <th>Gate</th><th>Kind</th><th>Dropped</th><th>Share of dequeued</th><th>By setup</th>
+    </tr></thead>
+    <tbody>
+      {% for r in reduced.rows %}
+      <tr>
+        <td><code>{{ r.reason }}</code>
+          {% if r.note %}<br><span class="muted small">{{ r.note }}</span>{% endif %}</td>
+        <td>
+          {% if r.kind == 'shared_cap' %}<span class="badge badge-warn">shared</span>
+          {% elif r.kind == 'per_candidate' %}<span class="muted small">per candidate</span>
+          {% else %}<span class="badge badge-warn">unclassified</span>{% endif %}
+        </td>
+        <td>{{ r.n }}</td>
+        <td>{% if r.share_of_processed is not none %}{{ '%.1f'|format(r.share_of_processed * 100) }}%{% else %}—{% endif %}</td>
+        <td>
+          {% if r.setups %}
+            {% for s in r.setups[:6] %}
+              <code>{{ s.setup }}</code> {{ s.n }}{% if not loop.last %} · {% endif %}
+            {% endfor %}
+            {% if r.setups|length > 6 %}<span class="muted small"> +{{ r.setups|length - 6 }} more</span>{% endif %}
+          {% else %}—{% endif %}
+          {% if r.unattributed %}
+            <br><span class="muted small">{{ r.unattributed }} carried no setup class</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    The gate total and its per-setup rows are <strong>never pooled</strong>: the
+    total is what the gate cost, the rows are how that cost spread across paths,
+    and a signal carrying no setup class lands in the total and in no row. That
+    shortfall is printed rather than absorbed.
+  </p>
+</div>
+
+{% endif %}
+
+<details class="card">
+  <summary>Raw payload</summary>
+  <pre class="small">{{ raw | tojson(indent=2) }}</pre>
+</details>
+
+{% endblock %}
