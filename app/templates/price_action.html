@@ -331,6 +331,149 @@
 </div>
 {% endif %}
 
+{# ── layer 1: Context (AMT) ───────────────────────────────────────────── #}
+<div class="card">
+  <h2>Layer 1 — Context: was this sweep taken in balance or in imbalance?</h2>
+  <p class="muted small">
+    §1 of the program doc defines price action as a <strong>four-layer</strong>
+    read. This lane shipped with layer 2 (LevelBook), layer 3 (sweep + reclaim)
+    and layer 4 (footprint delta) — and <strong>no layer 1 at all</strong>, while
+    <code>volume_profile.py</code> had computed POC and the value area since long
+    before the lane existed and the lane never imported it.
+  </p>
+  <p class="muted small">
+    Why this split and not another: a sweep + reclaim is a <strong>failed
+    break</strong>, so it is a mean-reversion trade. It pays in
+    <strong>balance</strong> — price rotating inside a value area, rejected at
+    the edge, returning toward POC — and it is a trap in
+    <strong>imbalance</strong>, where value is being accepted away from the area
+    and each failed break is a pause before continuation. Those two states
+    produce an <em>identical</em> layer-2/3/4 signature: same level, same sweep,
+    same aligned delta. That is why nothing already stamped could separate them,
+    and why every other column on this page reads like noise.
+  </p>
+  <p class="muted small">
+    These stamps arrive from 2026-08-07, so earlier rows are
+    <code>unstamped</code> — counted apart, never folded into a real bucket, and
+    <strong>not backfillable</strong>: the value area at entry is knowable only
+    at entry. Expect this table to be mostly unstamped until new rows arrive.
+  </p>
+
+  <h3 class="small">Was the ENTRY inside the value area?</h3>
+  <table>
+    <thead><tr><th>Zone</th><th>Rows</th><th>Closed</th><th>Win %</th><th>Net / signal</th></tr></thead>
+    <tbody>
+      {% for c in ctx_entry %}
+      <tr>
+        <td>{% if c.unstamped %}<span class="muted">unstamped</span>{% else %}<code>{{ c.zone }}</code>{% endif %}</td>
+        <td>{{ c.n }}</td><td>{{ c.n_closed }}</td>
+        <td>{% if c.win_rate is not none %}{{ '%.0f'|format(c.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if c.avg_net_pct is not none %}<span class="{{ 'good' if c.avg_net_pct > 0 else 'bad' }}">{{ '%+.3f'|format(c.avg_net_pct) }}%</span>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h3 class="small">Was the SWEPT LEVEL a value-area boundary?</h3>
+  <p class="muted small">
+    A level at the edge of accepted value is the textbook failed-break location;
+    one sitting mid-expansion is a level price is travelling through.
+  </p>
+  <table>
+    <thead><tr><th>Level</th><th>Rows</th><th>Closed</th><th>Win %</th><th>Net / signal</th></tr></thead>
+    <tbody>
+      {% for c in ctx_level %}
+      <tr>
+        <td>{% if c.unstamped %}<span class="muted">unstamped</span>{% else %}<code>{{ c.zone }}</code>{% endif %}</td>
+        <td>{{ c.n }}</td><td>{{ c.n_closed }}</td>
+        <td>{% if c.win_rate is not none %}{{ '%.0f'|format(c.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if c.avg_net_pct is not none %}<span class="{{ 'good' if c.avg_net_pct > 0 else 'bad' }}">{{ '%+.3f'|format(c.avg_net_pct) }}%</span>{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{# ── shadow rule ──────────────────────────────────────────────────────── #}
+{% if shadow %}
+<div class="card">
+  <h2>Shadow rule — <code>balance_only</code>
+    <span class="badge badge-warn">APPLIED TO NOTHING</span></h2>
+  <p class="muted small">
+    Keep a sweep only when the entry sits <strong>inside the value area</strong>
+    and <strong>POC is ahead of the trade</strong> — balance, with somewhere for
+    the rotation to go. This is computed here, on rows the engine already
+    stamped and already emitted. It changes no emission and never has.
+  </p>
+  <p class="muted small">
+    <strong>Half of this cutoff is fitted and you should read it that way.</strong>
+    "Inside the value area" is the value area's own 70%-of-volume definition,
+    which existed before this lane and was not chosen to fit any window. But
+    <em>which</em> of several defensible layer-1 conditions to combine was picked
+    while looking at this book — so the delta below is a hypothesis this window
+    <em>generated</em>, not one it tested. It has to be re-earned on rows stamped
+    after it shipped. A controlled test of 54 mechanical SMC variants produced a
+    best win rate of 56.3% and <strong>zero profitable after costs</strong>;
+    that is the standing warning over exactly this kind of number.
+  </p>
+  <table class="kv">
+    <tr><th>Rule abstained on</th><td>
+      {% if shadow.unknown_frac is not none %}
+        {{ '%.0f'|format(shadow.unknown_frac * 100) }}%
+        <span class="muted small">of rows carry no layer-1 stamp — its own
+          bucket, never folded into <code>keep</code>, because a rule must not
+          take credit for rows it never filtered</span>
+      {% else %}—{% endif %}
+    </td></tr>
+    <tr><th>Kept</th><td>
+      {% if shadow.kept_frac is not none %}{{ '%.0f'|format(shadow.kept_frac * 100) }}%{% else %}—{% endif %}
+      <span class="muted small">
+        {{ shadow.keep.n }} rows ({{ shadow.keep.n_closed }} closed).
+        <strong>Read n and the kept fraction before the delta</strong> — a rule
+        keeping nearly everything has not been tested whatever its delta says.
+      </span>
+    </td></tr>
+  </table>
+  <table>
+    <thead><tr><th>Population</th><th>Rows</th><th>Closed</th><th>Win %</th><th>Net / signal</th></tr></thead>
+    <tbody>
+      <tr><td>Whole book <span class="muted small">(the baseline; it does not move)</span></td>
+        <td>{{ shadow.base.n }}</td><td>{{ shadow.base.n_closed }}</td>
+        <td>{% if shadow.base.win_rate is not none %}{{ '%.0f'|format(shadow.base.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if shadow.base.avg_net_pct is not none %}<span class="{{ 'good' if shadow.base.avg_net_pct > 0 else 'bad' }}">{{ '%+.3f'|format(shadow.base.avg_net_pct) }}%</span>{% else %}—{% endif %}</td></tr>
+      <tr><td><strong>Would keep</strong></td>
+        <td>{{ shadow.keep.n }}</td><td>{{ shadow.keep.n_closed }}</td>
+        <td>{% if shadow.keep.win_rate is not none %}{{ '%.0f'|format(shadow.keep.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if shadow.keep.avg_net_pct is not none %}<span class="{{ 'good' if shadow.keep.avg_net_pct > 0 else 'bad' }}">{{ '%+.3f'|format(shadow.keep.avg_net_pct) }}%</span>{% else %}—{% endif %}</td></tr>
+      <tr><td>Would remove
+          <span class="muted small">colours inverted — this is the performance of
+            rows the rule would have <em>dropped</em>, so negative is the rule
+            looking right</span></td>
+        <td>{{ shadow.drop.n }}</td><td>{{ shadow.drop.n_closed }}</td>
+        <td>{% if shadow.drop.win_rate is not none %}{{ '%.0f'|format(shadow.drop.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if shadow.drop.avg_net_pct is not none %}<span class="{{ 'bad' if shadow.drop.avg_net_pct > 0 else 'good' }}">{{ '%+.3f'|format(shadow.drop.avg_net_pct) }}%</span>{% else %}—{% endif %}</td></tr>
+      <tr><td>Abstained <span class="muted small">no layer-1 stamp — a count, not a verdict</span></td>
+        <td>{{ shadow.unknown.n }}</td><td>{{ shadow.unknown.n_closed }}</td>
+        <td>{% if shadow.unknown.win_rate is not none %}{{ '%.0f'|format(shadow.unknown.win_rate) }}%{% else %}—{% endif %}</td>
+        <td>{% if shadow.unknown.avg_net_pct is not none %}{{ '%+.3f'|format(shadow.unknown.avg_net_pct) }}%{% else %}—{% endif %}</td></tr>
+    </tbody>
+  </table>
+  <p class="muted small">
+    Δ vs the whole book:
+    {% if shadow.delta_vs_base is not none %}
+      <strong class="{{ 'good' if shadow.delta_vs_base > 0 else 'bad' }}">{{ '%+.3f'|format(shadow.delta_vs_base) }}%</strong> per signal.
+    {% else %}—{% endif %}
+    Measured against the whole book rather than against the rows the rule
+    decided, so the baseline cannot drift as the rule's coverage changes; the
+    decided population ({{ shadow.decided.n_closed }} closed) is published above
+    so a rule that abstained on most of the book cannot read as one that was
+    tested on it. Promotion to an enforcing rule is a
+    <strong>new evaluator path</strong> and an owner-sign-off item in its own
+    right — not a flag on this page.
+  </p>
+</div>
+{% endif %}
+
 {# ── layer 1 ──────────────────────────────────────────────────────────── #}
 <div class="card">
   <h2>Layer 1 — was the prevailing trend with the trade?</h2>
