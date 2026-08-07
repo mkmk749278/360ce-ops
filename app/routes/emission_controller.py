@@ -123,16 +123,27 @@ def classify_ledger(rows: list[dict]) -> dict:
             name = str(row.get("strategy") or "?")
             by_key[name] = by_key.get(name, 0) + 1
     promotions = counts["routable"] + counts["unroutable"] + counts["unclassified"]
-    wasted_pct = (counts["unroutable"] / promotions * 100.0) if promotions else 0.0
+    # Honest denominator: how much of the split rests on rows the engine actually
+    # stamped. A high unclassified count means the window predates the
+    # measurement, not that the controller is behaving well.
+    classified = counts["routable"] + counts["unroutable"]
+    # The rate is measured on `classified`, NOT on `promotions`.
+    #
+    # `unroutable` is only knowable for a row the engine stamped, so dividing it
+    # by every promotion puts a numerator drawn from one population over a
+    # denominator drawn from a larger one — and the unstamped rows can only ever
+    # push the figure DOWN, on the panel whose entire job is to show how much
+    # budget is being wasted. On 2026-08-07 the live page read **19%** (10 of 52)
+    # where the measured share was **83%** (10 of 12): a 4.3x understatement of
+    # #806/#807, computed one line above the value that would have been right.
+    # Mirror the engine's denominators, including this one.
+    wasted_pct = (counts["unroutable"] / classified * 100.0) if classified else None
     return {
         "counts": counts,
         "promotions": promotions,
         "wasted_pct": wasted_pct,
         "unroutable_by_key": dict(sorted(by_key.items(), key=lambda kv: (-kv[1], kv[0]))),
-        # Honest denominator: how much of the split rests on rows the engine
-        # actually stamped. A high unclassified count means the window predates
-        # the measurement, not that the controller is behaving well.
-        "classified": counts["routable"] + counts["unroutable"],
+        "classified": classified,
     }
 
 

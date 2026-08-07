@@ -136,27 +136,72 @@ def _classify(records: Any) -> dict:
     }
 
 
-def _blank_cause(records: Any) -> dict:
+#: How long an empty audit may sit unwritten before "quiet" stops being a
+#: defensible reading. The engine rewrites this artifact on its audit cycle, so
+#: a day of silence is not a slow market — it is a writer that has stopped.
+STALE_WRITER_SEC = 24 * 3600
+
+
+def _blank_cause(records: Any, provenance: Any = None) -> dict:
     """Why this page is empty — because "blank needs a cause before it gets a
     caption", and the caption here was a bare "No invalidation records loaded".
 
-    Three states with three different next moves, pooled into one sentence that
-    named none of them: the artifact is **missing** (the engine has not written
-    it — nothing to do but wait, or check the engine is up), it is **unreadable**
-    (a real fault, ours), or it is **present and empty** (no signal has been
-    invalidated in the window — the quiet case, and not a fault at all). A
-    reader who cannot tell "the audit is broken" from "nothing has been killed"
-    will eventually treat both as noise."""
+    Four states with four different next moves. The artifact is **missing** (the
+    engine has not written it — wait, or check the engine is up), it is
+    **unreadable** (a real fault, ours), it is **present, empty and fresh** (no
+    signal has been invalidated recently — the quiet case, and not a fault), or
+    it is **present, empty and stale**.
+
+    That fourth state is the one this function shipped without, and the cost was
+    the exact defect the docstring above was written to prevent, arriving from
+    the caption's side. On 2026-08-07 ``invalidation_records.json`` was **2
+    bytes, last written 22 days earlier**, over a book that had closed 1,043
+    signals and whose ``/raw-edge`` exit mix independently read **0%
+    invalidation**. This page said: *"no signal has been invalidated in the
+    window. This is the quiet case, not a fault."* Both sentences were false,
+    and the second sent the reader away from the writer.
+
+    An empty file cannot describe itself — *nothing happened* and *the writer
+    stopped* are byte-identical — so the mtime is not decoration here, it is the
+    only thing that separates the two states. When it is unavailable the state is
+    ``empty_unknown``: an unknown is not a pass.
+    """
     if isinstance(records, dict) and records.get("error"):
         detail = str(records.get("error"))
-        missing = "not found" in detail.lower() or "no such file" in detail.lower()
+        low = detail.lower()
+        # `DataVolumeReader._load` reports an absent file as ``"missing: <path>"``
+        # and this check matched neither of its own producer's words, so a file
+        # the engine had simply never written rendered under UNREADABLE — "a
+        # fault on our side, not a quiet market" — which is the opposite of the
+        # truth and the opposite next move. The "not found" / "no such file"
+        # variants stay for an OSError message that phrases it differently.
+        missing = low.startswith("missing:") or "not found" in low or "no such file" in low
         return {
             "state": "missing" if missing else "unreadable",
             "detail": detail,
         }
-    if isinstance(records, (list, dict)) and not records:
-        return {"state": "empty", "detail": ""}
-    return {"state": "empty", "detail": ""}
+    # Note there is no "records present but unclassified" state here, and there
+    # must not be: `_classify` buckets a verdict-less row under UNCLASSIFIED and
+    # renders it, so `agg["totals"]` is truthy and the caller never reaches this
+    # function. A branch for it would be a caption nothing can display — which
+    # is the defect class this whole function exists to close, so it is worth
+    # saying out loud rather than adding one on the assumption it is needed.
+    prov = provenance if isinstance(provenance, dict) else {}
+    age = prov.get("age_sec")
+    if age is None:
+        return {"state": "empty_unknown", "detail": "", "age_sec": None,
+                "modified_at": prov.get("modified_at")}
+    if float(age) > STALE_WRITER_SEC:
+        return {
+            "state": "empty_stale",
+            "detail": "",
+            "age_sec": float(age),
+            "age_days": float(age) / 86400.0,
+            "modified_at": prov.get("modified_at"),
+            "bound_hours": STALE_WRITER_SEC // 3600,
+        }
+    return {"state": "empty", "detail": "", "age_sec": float(age),
+            "modified_at": prov.get("modified_at")}
 
 
 @router.get("/invalidations")
@@ -171,7 +216,10 @@ async def invalidations(request: Request):
             "request": request,
             "agg": agg,
             "active": "invalidations",
-            "blank": _blank_cause(records) if not agg.get("totals") else None,
+            "blank": (
+                _blank_cause(records, vol.artifact_age("invalidation_records.json"))
+                if not agg.get("totals") else None
+            ),
         },
     )
 

@@ -373,10 +373,10 @@
         <td>{{ r.side }}</td>
         <td class="small">
           {% if r.level_source_tf %}<code>{{ r.level_source_tf }}</code>{% endif %}
-          {% if r.level_price %}{{ r.level_price }}{% endif %}
+          {% if r.level_price %}{{ r.level_price | price }}{% endif %}
         </td>
-        <td>{{ r.entry }}</td>
-        <td class="small muted">{{ r.stop_loss }} / {{ r.tp1 }}</td>
+        <td>{{ r.entry | price }}</td>
+        <td class="small muted">{{ r.stop_loss | price }} / {{ r.tp1 | price }}</td>
         <td>
           {{ r.status }}
           {% if r.freshness and r.status == 'OPEN' %}

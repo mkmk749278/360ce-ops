@@ -67,7 +67,10 @@
     it repairs a filter the engine already computes and then discards. A rule
     whose threshold is a judgement stays in shadow until this page has the
     evidence to move it. Flip either from
-    <a href="/control">Control → Signal gating</a>.
+    {#- The switch lives behind the owner gate, so a read-only session gets the
+        NAME of the surface and not a link into a 403. -#}
+    {% if may_use(request, "/control") %}<a href="/control">Control → Signal gating</a>.
+    {% else %}<strong>Control → Signal gating</strong> (owner-only).{% endif %}
   </p>
 
   {% if quality.rules %}

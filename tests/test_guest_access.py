@@ -409,3 +409,106 @@ def test_unknown_ttl_is_refused_not_defaulted(client):
     before = app.state.guest_access.live_count()
     client.post("/control/access/issue", data={"label": "x", "ttl": "99y"}, follow_redirects=True)
     assert app.state.guest_access.live_count() == before
+
+
+# ---------------------------------------------------------------------------
+# The nav was filtered; the CONTROLS were not (2026-08-07).
+#
+# `test_guest_nav_offers_nothing_it_cannot_reach` walked links on ONE page and
+# looked at `href` only. `/exit-backtest` is guest-readable and rendered, to a
+# read-only session, a `POST /exit-backtest/run` form and a
+# `GET /exit-backtest/run-now` job trigger — with the copy "Button not
+# responding? Use the plain link" between them. The gate held (both 403), so
+# this was never a security defect; it is the nav's own rule stopping one layer
+# short, and a control that 403s is indistinguishable from a broken page.
+#
+# The requirement is DERIVED — every guest-readable page is rendered and every
+# actionable target in it is driven — rather than written as a list of controls
+# to hide, which would be silent on the next one.
+# ---------------------------------------------------------------------------
+
+
+def _guest_readable_pages() -> list[str]:
+    """Literal HTML pages a guest may read, straight off the scope table."""
+    from app import guest_scope
+
+    skip = {"/guest", "/guest/logout", "/logout", "/login"}
+    return sorted(
+        p for p in guest_scope.GUEST_READ_ROUTES
+        if "{" not in p
+        and not p.startswith("/_partial")
+        and not p.endswith((".csv", ".json", ".md"))
+        and p not in skip
+    )
+
+
+def test_no_guest_page_renders_a_control_the_guest_cannot_use(client, monkeypatch):
+    import re
+
+    code = _mint(client)
+    _guest(client, code)
+
+    offending: list[str] = []
+    for page in _guest_readable_pages():
+        r = client.get(page)
+        if r.status_code != 200:
+            continue
+        body = r.text
+        # Every actionable target the page hands the reader: form actions
+        # (including htmx's hx-post/hx-get) and plain links.
+        targets: set[tuple[str, str]] = set()
+        for m in re.finditer(r'<form[^>]*>', body):
+            tag = m.group(0)
+            action = re.search(r'action="(/[^"]*)"', tag)
+            method = re.search(r'method="([a-zA-Z]+)"', tag)
+            if action:
+                targets.add((action.group(1), (method.group(1) if method else "GET").upper()))
+        for m in re.finditer(r'hx-(post|put|delete|patch)="(/[^"]*)"', body):
+            targets.add((m.group(2), m.group(1).upper()))
+        for href in re.findall(r'href="(/[^"#?]*)"', body):
+            if href.startswith("/static") or href in ("/guest/logout", "/logout"):
+                continue
+            targets.add((href, "GET"))
+
+        for path, method in sorted(targets):
+            resp = client.request(method, path, follow_redirects=False)
+            if resp.status_code == 403:
+                offending.append(f"{page} offers {method} {path}")
+
+    assert not offending, (
+        "guest-readable pages rendered controls the gate refuses:\n  "
+        + "\n  ".join(offending)
+        + "\nHide them with may_use(request, <path>, <method>) — the scope table "
+          "is the one writer; do not add a second list."
+    )
+
+
+def test_exit_backtest_hides_its_trigger_from_a_guest_and_says_why(client):
+    """The specific page the derived check was written for.
+
+    Pinned separately because a future refactor could satisfy the sweep above by
+    removing the page from the guest scope entirely — which would lose the
+    results, and the results are data.
+    """
+    code = _mint(client)
+    _guest(client, code)
+    body = client.get("/exit-backtest").text
+
+    assert 'action="/exit-backtest/run"' not in body
+    assert "/exit-backtest/run-now" not in body
+    assert "Button not responding?" not in body
+    # …and the reader is told it is a tier limit, not a missing feature.
+    assert "<strong>cannot start a run</strong>" in body
+    # The results themselves are still on the page.
+    assert "Exit-method backtest" in body
+
+
+def test_the_owner_still_sees_the_trigger(client):
+    """`may_use` decides what to RENDER; it must never take a control away from
+    the owner, whose session is the one that runs the job."""
+    client.post("/login", data={"password": "test-token"}, follow_redirects=False)
+    body = client.get("/exit-backtest").text
+    assert 'action="/exit-backtest/run"' in body
+    assert "/exit-backtest/run-now" in body
+    assert "cannot start a run" not in body
+    assert "Button not responding?" in body

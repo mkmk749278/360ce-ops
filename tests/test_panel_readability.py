@@ -265,21 +265,68 @@ def test_alerts_reads_its_delivery_path_rather_than_asserting_one(monkeypatch):
 # blank needs a cause
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
-    "payload,expect",
+    "payload,age_sec,expect",
     [
-        ({"error": "not found: invalidation_records.json"}, "NOT WRITTEN"),
-        ({"error": "Expecting value: line 1"}, "UNREADABLE"),
-        ([], "QUIET"),
+        ({"error": "not found: invalidation_records.json"}, None, "NOT WRITTEN"),
+        # `_load`'s OWN wording for an absent file. This branch matched neither
+        # of its producer's phrasings until 2026-08-07, so a file the engine had
+        # never written rendered as UNREADABLE — "a fault on our side".
+        ({"error": "missing: /engine-data/invalidation_records.json"}, None, "NOT WRITTEN"),
+        ({"error": "Expecting value: line 1"}, None, "UNREADABLE"),
+        # Empty AND freshly written: the genuine quiet case.
+        ([], 120.0, "QUIET"),
+        # Empty and 22 days unwritten — the live state on 2026-08-07, over a
+        # book that had closed 1,043 signals. Not quiet; a stopped writer.
+        ([], 22 * 86400.0, "WRITER STALE"),
+        # Empty with no readable mtime: an unknown, never the quiet case.
+        ([], None, "AGE UNKNOWN"),
     ],
 )
-def test_invalidations_names_why_it_is_empty(monkeypatch, payload, expect):
-    """Three states, three next moves. The caption was one sentence naming none
-    of them, so 'the audit is broken' and 'nothing has been killed' read alike."""
+def test_invalidations_names_why_it_is_empty(monkeypatch, payload, age_sec, expect):
+    """Blank needs a cause — and an empty artifact cannot supply one itself.
+
+    "Nothing happened" and "the writer stopped" are byte-identical, so the
+    mtime is the only thing separating them. This page called a 2-byte file
+    last written 22 days earlier "the quiet case, not a fault".
+    """
     from app.data_sources import data_volume as dv
 
     monkeypatch.setattr(dv.DataVolumeReader, "_load", lambda self, name: payload)
+    monkeypatch.setattr(
+        dv.DataVolumeReader,
+        "artifact_age",
+        lambda self, name: {
+            "exists": age_sec is not None,
+            "age_sec": age_sec,
+            "modified_at": "2026-07-16 04:00 UTC" if age_sec else None,
+        },
+    )
     with TestClient(app) as client:
         _login(client)
         body = client.get("/invalidations").text
         assert expect in body
         assert "No invalidation records loaded." not in body
+        # The sentence that was wrong renders for exactly one of these states.
+        if expect != "QUIET":
+            assert "This is the quiet case, not a fault" not in body
+
+
+def test_rows_with_no_verdict_render_as_a_table_not_as_a_blank(monkeypatch):
+    """Why there is no "present but unclassified" blank state.
+
+    `_classify` buckets a verdict-less row under UNCLASSIFIED and renders it, so
+    `agg["totals"]` is truthy and `_blank_cause` is never reached. Pinned because
+    the first cut of the staleness fix added a caption for that state — a branch
+    nothing can display, which is the defect class the function exists to close.
+    """
+    from app.data_sources import data_volume as dv
+
+    monkeypatch.setattr(
+        dv.DataVolumeReader, "_load", lambda self, name: [{"setup_class": "X"}]
+    )
+    with TestClient(app) as client:
+        _login(client)
+        body = client.get("/invalidations").text
+        assert "UNCLASSIFIED" in body
+        for badge in ("QUIET", "WRITER STALE", "AGE UNKNOWN", "NOT WRITTEN"):
+            assert badge not in body

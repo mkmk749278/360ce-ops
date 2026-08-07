@@ -61,6 +61,14 @@ class _BanCircuit:
         self._cooldown = max(1.0, cooldown_sec)
         self._max = max(self._cooldown, max_sec)
         self._open_until = 0.0  # monotonic deadline
+        #: What Binance actually said when the breaker last tripped, trimmed.
+        #:
+        #: Recorded because the page above this had been *asserting* a cause:
+        #: "Root cause is engine-side (a dead key hammering listenKey)" was
+        #: hardcoded copy from the 2026-07-24 diagnosis and rendered for every
+        #: future ban, whatever caused it. A breaker that knows what tripped it
+        #: can report; one that does not must say nothing rather than guess.
+        self._last_reason: str = ""
 
     @property
     def open(self) -> bool:
@@ -69,8 +77,16 @@ class _BanCircuit:
     def seconds_remaining(self) -> float:
         return max(0.0, self._open_until - time.monotonic())
 
+    @property
+    def last_reason(self) -> str:
+        return self._last_reason
+
     def note_ban(self, body: str, *, now_wall: float | None = None) -> None:
         """Open (or extend) the breaker in response to a ban body."""
+        # Binance's message carries the code and the deadline; keep it verbatim
+        # and bounded rather than classified, because a classifier here would be
+        # the same guess the hardcoded sentence was, one layer down.
+        self._last_reason = " ".join((body or "").split())[:300]
         cooldown = self._cooldown
         match = _BAN_UNTIL_RE.search(body or "")
         if match:
@@ -127,6 +143,15 @@ class BinanceKlinesClient:
     @property
     def ban_seconds_remaining(self) -> float:
         return self._circuit.seconds_remaining()
+
+    @property
+    def ban_reason(self) -> str:
+        """Binance's own words from the response that tripped the breaker.
+
+        Empty when the breaker was opened without a body we kept — in which case
+        the surface must report the ban and stay silent on the cause.
+        """
+        return self._circuit.last_reason
 
     @property
     def client(self) -> httpx.AsyncClient:

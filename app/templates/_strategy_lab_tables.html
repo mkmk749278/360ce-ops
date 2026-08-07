@@ -85,10 +85,49 @@
     {% endif %}
     · <a href="/strategy-lab/export.csv">the CSV is uncapped and holds every cell</a>.
   </p>
+
+  {#- The denominator, beside the verdicts rather than in a footnote. Each cell
+      is a deque(maxlen=50) engine-side, so `n` is min(actual, 50): a cell
+      reading n=50 may stand for fifty outcomes or five thousand, and until
+      2026-08-07 this table published 1,731 such cells with nothing saying so.
+      The engine has counted the evictions since 2026-08-04; this reducer
+      dropped them on its own `"|" not in key` guard. Absent is NOT zero. -#}
+  <p class="muted small">
+    {% if matrix_sampling.reported %}
+      <strong>{{ matrix_sampling.at_cap }}</strong> of
+      {{ matrix_sampling.decidable }} verdict-carrying cells sit at the
+      <strong>{{ matrix_sampling.window }}-outcome ring cap</strong>, and
+      <strong>{{ matrix_sampling.sampled }}</strong> have provably evicted
+      older outcomes — for those, <code>n</code> is a rolling most-recent-{{ matrix_sampling.window }}
+      window, not a population.
+      {% if matrix_sampling.visible_frac is not none %}
+        Across the whole matrix this page can see
+        <strong>{{ "%.0f"|format(matrix_sampling.visible_frac * 100) }}%</strong>
+        of the outcomes ever recorded ({{ matrix_sampling.held_total }} held,
+        {{ matrix_sampling.evicted_total }} evicted); an evicted outcome shaped
+        the strategy's history and is unreachable to every reader of this page.
+      {% endif %}
+      A cell at the cap beside a sparse one is a rolling window beside an
+      all-time record — the two answer different questions and this table
+      cannot pool them for you.
+    {% else %}
+      <span class="badge badge-warn">SAMPLING NOT REPORTED</span>
+      The engine wrote no per-cell eviction map, so this page cannot say whether
+      a cell reading <code>n = {{ matrix_sampling.window }}</code> holds
+      {{ matrix_sampling.window }} outcomes or thousands —
+      <strong>{{ matrix_sampling.at_cap }}</strong> of
+      {{ matrix_sampling.decidable }} verdict-carrying cells are at that cap.
+      This is an unknown, not a clean result: rendering “nothing evicted” from an
+      absent key is how a missing measurement comes to read as a finding.
+    {% endif %}
+  </p>
+
   <table class="data-table">
     <thead>
       <tr>
-        <th>Strategy</th><th>Context</th><th>n</th>
+        <th>Strategy</th><th>Context</th>
+        <th title="outcomes the cell currently holds — capped at the engine's ring size">n</th>
+        <th title="outcomes pushed out of the ring; blank when the engine did not report">evicted</th>
         <th>emit/supp/shadow</th><th>Win%</th><th>Avg R</th>
         <th>Edge (Wilson R)</th><th>Verdict</th><th>Fit</th>
       </tr>
@@ -98,7 +137,11 @@
       <tr>
         <td class="mono">{{ r.strategy }}</td>
         <td class="mono small">{{ r.context_key }}</td>
-        <td>{{ r.n }}</td>
+        <td>{{ r.n }}{% if r.at_cap %}<span class="muted small" title="at the ring cap — n is a rolling window, not a count">*</span>{% endif %}</td>
+        {#- Three states, never two: a number, a proven zero, and an em-dash for
+            "the engine did not report". A 0 rendered for an absent stamp is the
+            flattering reading and the one nobody would question. -#}
+        <td class="small">{% if r.evicted is none %}<span class="muted" title="engine reported no eviction map for this store">—</span>{% else %}{{ r.evicted }}{% endif %}</td>
         <td class="small">{{ r.n_emitted }}/{{ r.n_suppressed }}/{{ r.n_shadow }}</td>
         <td>{{ "%.0f"|format(r.win_rate * 100) }}%</td>
         <td>{{ "%+.2f"|format(r.avg_r) }}</td>

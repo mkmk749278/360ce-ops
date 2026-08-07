@@ -50,13 +50,13 @@
       <td class="side-{{ (r.direction or '')|lower }}">{{ r.direction }}</td>
       <td>{{ r.status }}</td>
       <td>{{ r.setup_class }}</td>
-      <td class="mono">{{ r.entry }}</td>
-      <td class="mono neg">{{ r.stop_loss }}</td>
-      <td class="mono pos">{{ r.tp1 }}</td>
-      <td class="mono pos">{{ r.tp2 }}</td>
-      <td class="mono">{{ r.current_price }}</td>
-      <td class="mono small">{{ r.candle_1m_high }} / {{ r.candle_1m_low }}</td>
-      <td class="mono small">{% if r.candle_1m_age_sec is not none %}{{ r.candle_1m_age_sec }}{% else %}—{% endif %}</td>
+      <td class="mono">{{ r.entry | price }}</td>
+      <td class="mono neg">{{ r.stop_loss | price }}</td>
+      <td class="mono pos">{{ r.tp1 | price }}</td>
+      <td class="mono pos">{{ r.tp2 | price }}</td>
+      <td class="mono">{{ r.current_price | price }}</td>
+      <td class="mono small">{{ r.candle_1m_high | price }} / {{ r.candle_1m_low | price }}</td>
+      <td class="mono small">{{ r.candle_1m_age_sec | secs }}</td>
       <td class="mono {% if r.sl_breach_distance_pct is not none and r.sl_breach_distance_pct <= 0 %}neg{% endif %}">
         {% if r.sl_breach_distance_pct is not none %}{{ "%.3f"|format(r.sl_breach_distance_pct) }}{% else %}—{% endif %}
       </td>

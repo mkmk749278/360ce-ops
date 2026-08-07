@@ -221,3 +221,32 @@ def guest_may(app, scope) -> tuple[bool, str]:
     if reason:
         return False, f"owner-only: {reason}"
     return False, "not classified for read-only access"
+
+
+def may_use(request, path: str, method: str = "GET") -> bool:
+    """May the CURRENT session use this control? — the template-side companion.
+
+    The nav has been filtered from ``GUEST_READ_ROUTES`` since the tier shipped,
+    but **in-page controls were not**, and the filtering stopped exactly one
+    layer short of the thing that matters most. ``/exit-backtest`` is
+    guest-readable and rendered, to a read-only session, both a
+    ``POST /exit-backtest/run`` form and a ``GET /exit-backtest/run-now`` link
+    that starts a ``docker exec`` job on the production engine — with the copy
+    *"Button not responding? Use the plain link"* sitting between them, coaching
+    the reader straight into the 403 (2026-08-07).
+
+    The gate held, so this was never a security defect; it is the nav's own rule
+    unapplied one level down, and a control that 403s is indistinguishable from
+    a broken page. Same two rules as ``guest_may``, read off the same table —
+    **not** a second list of "controls a guest may see", because a nav that
+    mirrored the gate would drift and the drift is invisible until somebody
+    clicks.
+
+    Owner sessions get True unconditionally: this decides what to *render*, and
+    the gate above still decides what is *served*.
+    """
+    if getattr(request, "scope", {}).get("ops_role") != "guest":
+        return True
+    if method.upper() not in GUEST_METHODS:
+        return False
+    return str(path) in GUEST_READ_ROUTES

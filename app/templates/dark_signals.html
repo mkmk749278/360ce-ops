@@ -46,12 +46,25 @@
 {% endif %}
 
 {% if ban_seconds %}
+{#- This banner used to end: "Root cause is engine-side (a dead key hammering
+    listenKey) — not this page." That sentence was HARDCODED from the
+    2026-07-24 diagnosis and rendered for every ban since, whatever caused it —
+    while nothing on this page observes a cause at all. Copy is part of the
+    measurement, and a caption naming one cause for a state with several sends
+    the reader to the wrong subsystem. What the breaker CAN report is what
+    Binance said; what it cannot report, it no longer claims. -#}
 <section class="card" style="border-color:#c0392b;margin-bottom:.75rem">
   <strong class="neg">Binance IP-ban cooldown active</strong>
   <span class="small muted"> — the box is temporarily banned from Binance REST, so
     candle fetches are paused (~{{ (ban_seconds // 60) + 1 }} min remaining). Rows show
     degraded rather than hanging; they'll fill automatically once the ban lifts.
-    Root cause is engine-side (a dead key hammering listenKey) — not this page.</span>
+    The ban is on the <em>box</em>, not on this page: any process sharing this IP
+    can have spent the request weight, and this breaker cannot see which.</span>
+  {% if ban_reason %}
+  <div class="small muted" style="margin-top:.35rem">
+    Binance said: <code>{{ ban_reason }}</code>
+  </div>
+  {% endif %}
 </section>
 {% endif %}
 
