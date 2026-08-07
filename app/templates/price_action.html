@@ -148,8 +148,25 @@
     {% if s.n_closed %}
     <tr><th>Win rate</th><td>
       {{ '%.0f'|format(s.win_rate) }}%
-      <span class="muted small">{{ s.wins }}W / {{ s.losses }}L — closed rows only.
-        Open rows carry a live mark below but are in no realized figure.</span>
+      <span class="muted small">of all {{ s.n_closed }} closed rows</span>
+      {% if s.flats and s.win_rate_decided is not none %}
+        &nbsp;·&nbsp;
+        {{ '%.0f'|format(s.win_rate_decided) }}%
+        <span class="muted small">of the {{ s.n_decided }} that resolved to a level</span>
+      {% endif %}
+      <span class="muted small">
+        {{ s.wins }}W / {{ s.losses }}L{% if s.flats %} / {{ s.flats }} flat{% endif %} — closed rows only.
+        Open rows carry a live mark below but are in no realized figure.
+        {% if s.flats %}
+          A <code>flat</code> is an <code>EXPIRED</code> row: the engine walked its
+          window, neither level was touched, and it scored the row 0.00%.
+          <strong>That is not a loss</strong> — it is counted apart rather than
+          folded into one, which is why two denominators are published and
+          neither is called <em>the</em> win rate. Both are shown because both
+          are defensible and they describe different populations: a flat trade
+          still consumed a round trip, so it stays in the money figures below.
+        {% endif %}
+      </span>
     </td></tr>
     <tr><th>PnL — gross</th><td>
       <span class="{{ 'good' if s.gross_pct > 0 else 'bad' }}">
@@ -241,6 +258,76 @@
     restart bought a second row at the same price. Fixed engine-side; this panel
     stays, because a throttle can regress and a row count alone cannot show it.
   </p>
+  <p class="muted small">
+    <strong>That key cannot see a trending symbol</strong>, because a trend hands
+    out a different entry every time — so every re-entry into one collapse counts
+    as its own “move” and this panel reads clean. The next one asks the question
+    this one is shaped wrong for.
+  </p>
+</div>
+{% endif %}
+
+{# ── episodes: the concentration the move key is blind to ─────────────── #}
+{% if episodes and episodes.n_episodes %}
+<div class="card">
+  <h2>…and how many separate <em>runs</em> is that?</h2>
+  <p class="muted small">
+    An <strong>episode</strong> is consecutive rows on one <code>symbol · side</code>
+    less than {{ '%.0f'|format(episodes.gap_minutes) }} minutes apart — three times
+    the engine's own throttle. One symbol whipsawing for four hours while the lane
+    buys reclaimed support every 30 minutes is <strong>one directional bet re-taken</strong>,
+    not a dozen independent reads of the market, however different the entries look.
+    Nothing here de-duplicates anything: <strong>de-duplicating is a judgement call
+    and it is yours</strong> — counting them silently is what this panel exists to
+    stop.
+  </p>
+  <table class="kv">
+    <tr><th>Episodes</th><td>
+      {{ episodes.n_episodes }}
+      <span class="muted small">against {{ episodes.n_rows }} rows</span>
+    </td></tr>
+    <tr><th>Rows per episode</th><td>
+      {{ '%.2f'|format(episodes.rows_per_episode) }}
+      {% if episodes.rows_per_episode >= 1.5 %}
+        <span class="badge badge-warn">concentrated</span>
+      {% endif %}
+      <span class="muted small">1.00 means no symbol was re-entered inside the window</span>
+    </td></tr>
+    <tr><th>Rows inside a multi-row run</th><td>
+      {{ '%.0f'|format(episodes.multi_row_share * 100) }}%
+    </td></tr>
+    {% if episodes.worst %}
+    <tr><th>Worst single run</th><td>
+      <code>{{ episodes.worst.label }}</code> —
+      {{ episodes.worst.n_rows }} rows over {{ '%.1f'|format(episodes.worst.hours) }}h,
+      net <span class="bad">{{ '%+.2f'|format(episodes.worst.net_pct) }}%</span>
+      {% if episodes.worst.share_of_book is not none %}
+        <span class="muted small">= {{ '%.0f'|format(episodes.worst.share_of_book) }}%
+          of everything the lane lost</span>
+      {% endif %}
+    </td></tr>
+    <tr><th>Book without it</th><td>
+      {% if episodes.book_net is not none and episodes.worst.book_without is not none %}
+        <span class="{{ 'good' if episodes.book_net > 0 else 'bad' }}">{{ '%+.2f'|format(episodes.book_net) }}%</span>
+        →
+        <span class="{{ 'good' if episodes.worst.book_without > 0 else 'bad' }}">{{ '%+.2f'|format(episodes.worst.book_without) }}%</span>
+        {% if episodes.book_net <= 0 and episodes.worst.book_without > 0 %}
+          <span class="badge badge-warn">the verdict's sign is one run</span>
+        {% endif %}
+        <span class="muted small">net, this episode's rows removed</span>
+      {% else %}—{% endif %}
+    </td></tr>
+    {% endif %}
+  </table>
+  <p class="muted small">
+    This is <strong>#816 arriving at the display side</strong> — <em>a throttle on
+    rate is not a throttle on evidence</em>. The 30-minute cooldown bounds how
+    <em>often</em> a symbol may stamp and says nothing about how many rows one
+    continuous move can contribute. If the sign of the verdict above flips when a
+    single run is removed, <strong>the verdict is a fact about that run</strong>,
+    and no split further down this page can be read as a fact about the mechanism
+    until the book is wider than one symbol's bad afternoon.
+  </p>
 </div>
 {% endif %}
 
@@ -260,9 +347,22 @@
     so every earlier row is <code>unstamped</code> — counted apart, never folded
     into a real bucket, and <strong>not backfillable</strong>: the regime at
     entry is knowable only at entry.
-    <strong>This table is expected to be almost all <code>unstamped</code>
-    today</strong>, and to become readable as new rows arrive. That is the
-    honest state, not a fault.
+    {% set _u = (regimes_trigger | selectattr('regime', 'equalto', 'unstamped') | list) %}
+    {% set _un = (_u[0].n if _u else 0) %}
+    {% if summary and summary.n_total %}
+      {% set _pct = _un / summary.n_total * 100 %}
+      <strong>{{ _un }} of {{ summary.n_total }} rows ({{ '%.0f'|format(_pct) }}%)
+      are <code>unstamped</code> today.</strong>
+      {% if _pct >= 50 %}
+        The table is mostly unstamped and becomes readable as new rows arrive —
+        that is the honest state, not a fault.
+      {% else %}
+        The stamped rows are now the majority, so the buckets below carry the
+        weight of this split; the unstamped bucket stays visible rather than
+        being dropped, because it is still real evidence and its
+        <code>pnl_pct</code> is perfectly valid.
+      {% endif %}
+    {% endif %}
   </p>
 
   <h3 class="small">
@@ -318,10 +418,16 @@
   </table>
   <p class="muted small">
     <strong>Read <code>n</code> before any win rate here.</strong> This lane's
-    whole closed book is under 50 rows and a bucket of three has a win rate that
-    means nothing — <code>FAILED_AUCTION_RECLAIM</code> read +0.846R on three
-    rows with a CI of [−1.00, +2.00] and a promotion was requested within the
-    day. Nothing on this page chooses a filter; it says where the losses sit.
+    whole closed book is
+    {% if summary and summary.n_closed %}<strong>{{ summary.n_closed }}</strong>
+    rows across {{ sources|length }} buckets{% else %}thin{% endif %}, and a
+    bucket of three has a win rate that means nothing —
+    <code>FAILED_AUCTION_RECLAIM</code> read +0.846R on three rows with a CI of
+    [−1.00, +2.00] and a promotion was requested within the day. Read the
+    episode panel above before any of these cells: while one run can flip the
+    book's sign, a bucket's win rate is partly a fact about which buckets that
+    run happened to land in. Nothing on this page chooses a filter; it says
+    where the losses sit.
   </p>
 </div>
 

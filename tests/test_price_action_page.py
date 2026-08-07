@@ -405,3 +405,153 @@ class TestFiltersAndExport:
         from app.routes.price_action import filter_lane_rows
         (row,) = filter_lane_rows(self._rows(), stamped="none")
         assert row["pnl_pct"] == -3.0
+
+
+# ── a flat expiry is not a loss ───────────────────────────────────────────
+
+class TestFlatExpiriesAreNotLosses:
+    """`EXPIRED` rows are scored **0.00%** by the engine — a walked window in
+    which neither level was touched. They are flat, not losing.
+
+    Reported as losses they cost the 2026-08-07 book 5pp of win rate: the page
+    read `115W / 347L` where the book was `115W / 267L / 80 flat`, and 25% where
+    the rows that actually resolved to a level read 30%. Same class as the
+    repo's standing "three buckets, never two" rule — folding a population that
+    was never measured into one that was is how a rate describes rows nobody
+    scored.
+    """
+
+    def _book(self):
+        # 2 winners, 3 losers, 5 flat expiries.
+        return (
+            [_row(sid=f"w{i}", pnl=4.0, status="CLOSED_TP1") for i in range(2)]
+            + [_row(sid=f"l{i}", pnl=-2.0, status="CLOSED_SL") for i in range(3)]
+            + [_row(sid=f"e{i}", pnl=0.0, status="EXPIRED") for i in range(5)]
+        )
+
+    def test_a_zero_pnl_expiry_is_counted_flat_not_lost(self):
+        s = summarize(self._book(), fee_pct=0.0)
+        assert s["wins"] == 2
+        assert s["losses"] == 3, "an expiry that lost nothing is not a loss"
+        assert s["flats"] == 5
+
+    def test_both_denominators_are_published_and_differ(self):
+        """Where two denominators are defensible, publish both — and here they
+        genuinely describe different populations, so the rates differ."""
+        s = summarize(self._book(), fee_pct=0.0)
+        assert s["n_closed"] == 10 and s["n_decided"] == 5
+        assert s["win_rate"] == pytest.approx(20.0)          # of everything closed
+        assert s["win_rate_decided"] == pytest.approx(40.0)  # of what reached a level
+
+    def test_a_flat_row_still_pays_its_round_trip(self):
+        """It opened and it closed, so the fee is real — the flat bucket changes
+        the win rate and must not quietly change the money."""
+        s = summarize(self._book(), fee_pct=0.07)
+        assert s["fees_pct"] == pytest.approx(0.07 * 10)
+
+    def test_a_book_with_no_expiries_reports_no_flats_and_one_rate(self):
+        s = summarize([_row(sid="w", pnl=1.0), _row(sid="l", pnl=-1.0)], fee_pct=0.0)
+        assert s["flats"] == 0
+        assert s["win_rate"] == s["win_rate_decided"] == pytest.approx(50.0)
+
+
+# ── concentration the move key cannot see ─────────────────────────────────
+
+class TestEpisodesSeeWhatTheMoveKeyCannot:
+    """`concentration()` keys on `symbol · side · entry`, which is right for the
+    same sweep re-stamped at the same price and **structurally blind to a
+    trend**: a collapsing symbol hands out a different entry every 30 minutes,
+    so every re-entry counts as its own "move" and the panel reads clean.
+
+    On the 2026-08-07 book it read 1.12 rows/move and "largest single move =
+    1.0% of all rows" while BEATUSDT fell 2.45 → 2.06 and the lane bought
+    reclaimed support nine times on the way down: one symbol, one side, 4.5
+    hours, −85.71% against a whole-book net of −78.25%. Remove that one run and
+    the book reads +7.46% — **the sign of the verdict was one episode.**
+    """
+
+    def _collapse(self):
+        """Nine longs into one downtrend, 30 minutes apart, each at a new price
+        — so the move key sees nine distinct moves and no concentration."""
+        return [
+            _row(sid=f"c{i}", pnl=-8.0, status="CLOSED_SL",
+                 symbol="BEATUSDT", side="LONG",
+                 entry=2.45 - i * 0.04, at=1_700_000_000.0 + i * 1_800.0)
+            for i in range(9)
+        ] + [_row(sid="ok", pnl=6.0, status="CLOSED_TP1",
+                  symbol="HFTUSDT", side="LONG", entry=1.0, at=1_700_500_000.0)]
+
+    def test_the_move_key_reports_this_book_as_unconcentrated(self):
+        """The premise. If this ever stops holding, the episode panel's reason
+        for existing has changed and the copy must change with it."""
+        from app.routes.price_action import concentration
+        c = concentration(self._collapse())
+        assert c["n_moves"] == 10, "nine distinct entries read as nine moves"
+        assert c["rows_per_move"] == 1.0
+        assert c["top_share"] == pytest.approx(0.1)
+
+    def test_episodes_collapse_the_run_the_move_key_split(self):
+        from app.routes.price_action import episodes
+        e = episodes(self._collapse(), fee_pct=0.0)
+        assert e["n_episodes"] == 2, "nine re-entries into one collapse are one run"
+        assert e["rows_per_episode"] == pytest.approx(5.0)  # 10 rows / 2 runs
+        # 9 of 10 rows sit inside a multi-row run — the move key said 0%.
+        assert e["multi_row_share"] == pytest.approx(0.9)
+
+    def test_the_worst_run_is_named_with_its_share_of_the_loss(self):
+        from app.routes.price_action import episodes
+        e = episodes(self._collapse(), fee_pct=0.0)
+        w = e["worst"]
+        assert w["label"] == "BEATUSDT LONG"
+        assert w["n_rows"] == 9
+        assert w["net_pct"] == pytest.approx(-72.0)
+        assert w["hours"] == pytest.approx(4.0)
+
+    def test_the_book_without_that_run_flips_sign(self):
+        """The number that decides whether any split further down the page can
+        be read as a fact about the mechanism."""
+        from app.routes.price_action import episodes
+        e = episodes(self._collapse(), fee_pct=0.0)
+        assert e["book_net"] == pytest.approx(-66.0)
+        assert e["worst"]["book_without"] == pytest.approx(6.0)
+        assert e["book_net"] < 0 < e["worst"]["book_without"]
+
+    def test_removing_only_the_episode_not_the_whole_symbol(self):
+        """A later, unrelated run on the same ticker must survive the removal —
+        otherwise the panel overstates what one run cost."""
+        from app.routes.price_action import episodes
+        rows = self._collapse() + [
+            _row(sid="later", pnl=5.0, status="CLOSED_TP1", symbol="BEATUSDT",
+                 side="LONG", entry=1.5, at=1_700_900_000.0)
+        ]
+        e = episodes(rows, fee_pct=0.0)
+        assert e["worst"]["n_rows"] == 9
+        # 6.0 from HFT + 5.0 from the later BEAT run — the ticker is not purged.
+        assert e["worst"]["book_without"] == pytest.approx(11.0)
+
+    def test_a_gap_wider_than_the_window_starts_a_new_episode(self):
+        from app.routes.price_action import episodes, EPISODE_GAP_S
+        rows = [
+            _row(sid="a", pnl=-1.0, symbol="XUSDT", side="LONG", at=1_000.0),
+            _row(sid="b", pnl=-1.0, symbol="XUSDT", side="LONG",
+                 at=1_000.0 + EPISODE_GAP_S + 1),
+        ]
+        assert episodes(rows, fee_pct=0.0)["n_episodes"] == 2
+
+    def test_opposite_sides_are_never_one_episode(self):
+        from app.routes.price_action import episodes
+        rows = [
+            _row(sid="a", pnl=-1.0, symbol="XUSDT", side="LONG", at=1_000.0),
+            _row(sid="b", pnl=-1.0, symbol="XUSDT", side="SHORT", at=1_060.0),
+        ]
+        assert episodes(rows, fee_pct=0.0)["n_episodes"] == 2
+
+    def test_an_all_open_book_refuses_a_worst_run_rather_than_inventing_zero(self):
+        from app.routes.price_action import episodes
+        e = episodes([_row(sid="o", symbol="XUSDT", at=1_000.0)], fee_pct=0.0)
+        assert e["worst"] is None and e["book_net"] is None
+
+    def test_an_empty_ledger_does_not_divide_by_zero(self):
+        from app.routes.price_action import episodes
+        e = episodes([], fee_pct=0.0)
+        assert e["n_episodes"] == 0 and e["rows_per_episode"] == 0.0
