@@ -73,16 +73,26 @@ def test_classify_handles_error_and_non_list():
 
 
 # ---------------------------------------------------------------------------
-# "Blank needs a cause" — including when the blank is a STOPPED WRITER.
+# "Blank needs a cause" — and the cause is NOT the file's age.
 #
-# The first cut of `_blank_cause` gave this page three states and then called a
-# 2-byte file last written 22 days earlier "the quiet case, not a fault", over
-# a book that had closed 1,043 signals (2026-08-07). An empty artifact cannot
-# describe itself: "nothing happened" and "the writer stopped" are byte-
-# identical, and only the mtime separates them.
+# The first fix here graded an empty ledger on mtime and badged a 22-day-old
+# file WRITER STALE. The owner corrected it: invalidation and pre-TP are
+# PER-USER settings (OWNER_BRIEF B17), not engine-wide. With nobody opted in,
+# no kill fires, nothing is written, and an old empty file is correct — so the
+# alarming caption was the /alerts trap with the sign flipped, and an alarming
+# wrong caption is worse than a benign one because it sends the owner to debug
+# a working subsystem.
+#
+# What ops CAN observe is whether a row was OWED: the closed-signal record
+# stamps INVALIDATED on exactly the signals that write here. On 2026-08-07 the
+# live book had 0 of 1,043 — consistent with the feature being off for every
+# user, and not evidence of anything else.
 # ---------------------------------------------------------------------------
 
-from app.routes.invalidations import STALE_WRITER_SEC, _blank_cause  # noqa: E402
+from app.routes.invalidations import (  # noqa: E402
+    _blank_cause,
+    _invalidated_closes,
+)
 
 
 class _VolSettings:
@@ -92,60 +102,71 @@ class _VolSettings:
         self.engine_data_dir = str(path)
 
 
+class TestInvalidatedCloses:
+    def test_counts_only_the_invalidated_outcome(self):
+        book = [
+            {"outcome_label": "SL_HIT"},
+            {"outcome_label": "EXPIRED"},
+            {"outcome_label": "INVALIDATED"},
+            {"status": "invalidated"},          # older records use `status`
+            {"outcome_label": "PROFIT_LOCKED"},  # pre-TP: a DIFFERENT per-user
+        ]                                        # feature, never counted here
+        assert _invalidated_closes(book) == 2
+
+    def test_expiries_are_not_counted(self):
+        """`trade_monitor`'s EXPIRED closes do not write to this ledger — only
+        the scanner's `cleanup_expired` fallback does, when it wins the race. So
+        291 expiries imply no rows are owed, and counting them would manufacture
+        a fault out of the normal case."""
+        assert _invalidated_closes([{"outcome_label": "EXPIRED"}] * 291) == 0
+
+    def test_unreadable_record_is_unknown_not_zero(self):
+        assert _invalidated_closes({"error": "missing"}) is None
+        assert _invalidated_closes(None) is None
+
+
 class TestBlankCause:
-    def test_empty_and_freshly_written_is_the_quiet_case(self):
-        out = _blank_cause([], {"exists": True, "age_sec": 120.0,
-                                "modified_at": "2026-08-07 01:00 UTC"})
-        assert out["state"] == "empty"
+    def test_no_kills_means_empty_is_correct_at_any_age(self):
+        """The live 2026-08-07 state: 0 INVALIDATED closes, 22-day-old file."""
+        out = _blank_cause([], {"age_sec": 22 * 86400.0,
+                                "modified_at": "2026-07-15 09:48 UTC"}, 0)
+        assert out["state"] == "none_owed"
+        assert out["invalidated_closes"] == 0
 
-    def test_empty_and_long_unwritten_is_a_stalled_writer_not_a_quiet_market(self):
-        out = _blank_cause([], {"exists": True, "age_sec": 22 * 86400.0,
-                                "modified_at": "2026-07-16 04:00 UTC"})
-        assert out["state"] == "empty_stale"
-        assert round(out["age_days"]) == 22
-        assert out["modified_at"] == "2026-07-16 04:00 UTC"
+    def test_a_fresh_file_with_no_kills_is_the_same_state(self):
+        """Age must not change the verdict in either direction."""
+        assert _blank_cause([], {"age_sec": 60.0}, 0)["state"] == "none_owed"
 
-    def test_the_bound_is_a_day_not_a_scan_cycle(self):
-        """Just inside the bound stays quiet; just outside becomes a fault.
+    def test_rows_owed_and_missing_is_a_fault_even_on_a_fresh_file(self):
+        out = _blank_cause([], {"age_sec": 60.0}, 3)
+        assert out["state"] == "writer_fault"
+        assert out["invalidated_closes"] == 3
 
-        Pinned so a future tightening is a deliberate edit rather than a drift.
-        """
-        assert _blank_cause([], {"age_sec": STALE_WRITER_SEC - 1})["state"] == "empty"
-        assert _blank_cause([], {"age_sec": STALE_WRITER_SEC + 1})["state"] == "empty_stale"
+    def test_unreadable_closed_record_is_unknown_never_a_pass(self):
+        assert _blank_cause([], {"age_sec": 60.0}, None)["state"] == "owed_unknown"
 
-    def test_unstatable_artifact_is_unknown_never_quiet(self):
-        # A missing stamp is not a pass: with no mtime this page cannot claim
-        # the writer is alive, and saying "quiet" would be a guess in the
-        # flattering direction.
-        assert _blank_cause([], None)["state"] == "empty_unknown"
-        assert _blank_cause([], {"exists": False, "age_sec": None})["state"] == "empty_unknown"
-
-    def test_read_errors_still_outrank_age(self):
-        # An unreadable file has a mtime too; the parse failure is the finding.
-        out = _blank_cause({"error": "Expecting value: line 1 column 1"},
-                           {"age_sec": 5.0})
+    def test_read_errors_still_outrank_everything(self):
+        out = _blank_cause({"error": "Expecting value: line 1"}, {"age_sec": 5.0}, 0)
         assert out["state"] == "unreadable"
 
     def test_absent_artifact_matches_its_own_producers_wording(self):
         """`_load` says "missing: <path>" and this branch matched neither of its
         own producer's phrasings, so a file the engine had never written
-        rendered as UNREADABLE — "a fault on our side" — which is both the wrong
-        state and the wrong next move. Driven from the real reader rather than a
-        hand-written error string, because a mock would assert the assumption
-        back at us."""
+        rendered as UNREADABLE — "a fault on our side". Driven from the real
+        reader rather than a hand-written error string."""
         from app.data_sources.data_volume import DataVolumeReader
 
         records = DataVolumeReader(
             _VolSettings("/nonexistent-volume-for-test")
         ).invalidation_records()
-
-        assert _blank_cause(records, {"age_sec": None})["state"] == "missing"
+        assert _blank_cause(records, {"age_sec": None}, 0)["state"] == "missing"
 
 
 class TestBlankCauseRendering:
     """The page, not the reducer — a caption is not an assertion until it is."""
 
-    def _body(self, tmp_path, payload: str, age_sec: float) -> str:
+    def _body(self, tmp_path, payload: str, age_sec: float, book: list):
+        import json
         import os
         import time
         from dataclasses import replace
@@ -159,23 +180,82 @@ class TestBlankCauseRendering:
         f = tmp_path / "invalidation_records.json"
         f.write_text(payload)
         os.utime(f, (time.time() - age_sec, time.time() - age_sec))
+        (tmp_path / "signal_performance.json").write_text(json.dumps(book))
 
         with TestClient(app) as client:
             app.state.data_volume = DataVolumeReader(
                 replace(load_settings(), engine_data_dir=str(tmp_path))
             )
-            client.post("/login", data={"password": "test-token"})
+            client.post("/login", data={"password": "test-token"},
+                        follow_redirects=False)
             return client.get("/invalidations").text
 
-    def test_stale_writer_page_does_not_say_quiet_case(self, tmp_path):
-        body = self._body(tmp_path, "[]", 22 * 86400)
-        assert "WRITER STALE" in body
-        # The exact sentence the live page showed over a 22-day-dead writer.
-        assert "This is the quiet case, not a fault" not in body
-        assert "has stopped recording" in body
-
-    def test_fresh_empty_page_still_reads_as_quiet(self, tmp_path):
-        body = self._body(tmp_path, "[]", 60)
-        assert "QUIET" in body
-        assert "This is the quiet case, not a fault" in body
+    def test_an_old_empty_ledger_with_no_kills_does_not_cry_fault(self, tmp_path):
+        """The live shape. Neither the original benign caption nor the alarming
+        one that replaced it may render."""
+        body = self._body(tmp_path, "[]", 22 * 86400,
+                          [{"outcome_label": "SL_HIT"}] * 400)
+        assert "NOTHING OWED" in body
         assert "WRITER STALE" not in body
+        assert "has stopped recording" not in body
+        # …and it names the per-user reason without claiming the setting's value.
+        assert "per-user setting" in body
+        assert "does not" in body and "claim the feature is off" in body
+
+    def test_kills_with_an_empty_ledger_is_reported_as_a_fault(self, tmp_path):
+        body = self._body(tmp_path, "[]", 60,
+                          [{"outcome_label": "INVALIDATED"}] * 3)
+        assert "ROWS OWED, LEDGER EMPTY" in body
+        assert "NOTHING OWED" not in body
+
+    def test_unreadable_closed_record_says_it_cannot_tell(self, tmp_path):
+        # No signal_performance.json written at all.
+        import os
+        import time
+        from dataclasses import replace
+
+        from fastapi.testclient import TestClient
+
+        from app.config import load_settings
+        from app.data_sources.data_volume import DataVolumeReader
+        from app.main import app
+
+        f = tmp_path / "invalidation_records.json"
+        f.write_text("[]")
+        os.utime(f, (time.time() - 60, time.time() - 60))
+        with TestClient(app) as client:
+            app.state.data_volume = DataVolumeReader(
+                replace(load_settings(), engine_data_dir=str(tmp_path))
+            )
+            client.post("/login", data={"password": "test-token"},
+                        follow_redirects=False)
+            body = client.get("/invalidations").text
+        assert "CANNOT TELL" in body
+
+
+def test_rows_with_no_verdict_render_as_a_table_not_as_a_blank(tmp_path):
+    """Why there is no "present but unclassified" blank state: `_classify`
+    buckets a verdict-less row under UNCLASSIFIED and renders it, so
+    `agg["totals"]` is truthy and `_blank_cause` is never reached."""
+    import json
+    from dataclasses import replace
+
+    from fastapi.testclient import TestClient
+
+    from app.config import load_settings
+    from app.data_sources.data_volume import DataVolumeReader
+    from app.main import app
+
+    (tmp_path / "invalidation_records.json").write_text(
+        json.dumps([{"setup_class": "X"}])
+    )
+    with TestClient(app) as client:
+        app.state.data_volume = DataVolumeReader(
+            replace(load_settings(), engine_data_dir=str(tmp_path))
+        )
+        client.post("/login", data={"password": "test-token"},
+                    follow_redirects=False)
+        body = client.get("/invalidations").text
+    assert "UNCLASSIFIED" in body
+    for badge in ("NOTHING OWED", "ROWS OWED", "CANNOT TELL", "NOT WRITTEN"):
+        assert badge not in body

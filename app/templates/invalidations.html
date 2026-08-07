@@ -22,14 +22,20 @@
       {% endfor %}
     </div>
   {% else %}
-    {#- FOUR states, four different next moves. The old caption was a bare
-        "No invalidation records loaded", which named none of them and read
-        identically whether the audit was broken or nothing had been killed.
-        The first fix gave it three — and then called a 2-byte file last
-        written 22 days ago "the quiet case, not a fault", which is the same
-        defect from the caption's side: an empty file cannot describe itself,
-        because "nothing happened" and "the writer stopped" are byte-identical.
-        Only the mtime separates them. -#}
+    {#- Five states, five next moves — and the discriminator is NOT the file's
+        age. The original caption was "the quiet case, not a fault" for every
+        empty ledger. The first fix replaced it with WRITER STALE on a 22-day
+        mtime, which was wrong in the opposite direction and worse, because an
+        alarming caption sends the owner to debug a working subsystem.
+
+        Invalidation is a PER-USER setting (OWNER_BRIEF B17,
+        `user_invalidation_settings`), not engine-wide. With no user opted in,
+        no kill fires, no row is written, and a 22-day-old empty file is exactly
+        correct. Ops cannot read per-user preferences — so it grades on what it
+        CAN see: whether a row was ever OWED. The closed-signal record stamps
+        `INVALIDATED` on precisely the signals that write here, so zero of those
+        means empty is right at any age, and one or more means the writer is
+        broken regardless of age. -#}
     {% if blank and blank.state == 'missing' %}
       <div class="muted">
         <span class="badge badge-muted">NOT WRITTEN</span>
@@ -43,37 +49,44 @@
         <div class="muted">That is a fault on our side, not a quiet market — the counts
         below are <em>unknown</em>, not zero.</div>
       </div>
-    {% elif blank and blank.state == 'empty_stale' %}
+    {% elif blank and blank.state == 'writer_fault' %}
       <div class="flash flash-err">
-        <span class="badge sev-high">WRITER STALE</span>
-        The audit is readable and empty, and the engine has not written it for
-        <strong>{{ "%.1f"|format(blank.age_days) }} days</strong>
-        {% if blank.modified_at %}(last write {{ blank.modified_at }}){% endif %} —
-        past the {{ blank.bound_hours }}h bound.
-        <div class="muted">That is not a quiet market. The engine rewrites this artifact
-        on its audit cycle, so an empty file this old means <code>invalidation_audit</code>
-        has stopped recording, and every kill classification since that write is
-        <em>lost</em>, not zero. Cross-check <a href="/raw-edge">Entry edge</a>: an
-        invalidation share of 0% in the exit mix is the same fault seen from the other
-        side. Do <strong>not</strong> read the empty table below as "nothing has been
-        killed".</div>
+        <span class="badge sev-high">ROWS OWED, LEDGER EMPTY</span>
+        The closed-signal record carries <strong>{{ blank.invalidated_closes }}</strong>
+        signal(s) the engine closed as <code>INVALIDATED</code>, and this ledger holds
+        none of them
+        {% if blank.modified_at %}(last write {{ blank.modified_at }}){% endif %}.
+        <div class="muted">Every one of those kills should have written a record here,
+        so this is a writer fault, not a quiet market — and it is a fault at any file
+        age. The classifications for those kills are <em>lost</em>, not zero.</div>
       </div>
-    {% elif blank and blank.state == 'empty_unknown' %}
+    {% elif blank and blank.state == 'owed_unknown' %}
       <div class="muted">
-        <span class="badge badge-warn">AGE UNKNOWN</span>
-        The audit is readable and holds no records, and this page could not stat the
-        artifact to tell whether the writer is still running.
-        <div class="muted">An empty file cannot describe itself — a quiet window and a
-        stopped writer produce the same bytes — so this is an unknown, not the quiet
-        case.</div>
+        <span class="badge badge-warn">CANNOT TELL</span>
+        The audit is readable and holds no records, and the closed-signal record could
+        not be read — so this page cannot tell whether any row was ever owed.
+        <div class="muted">An unknown, not a pass. An empty ledger is correct when no
+        kill has fired and a fault when one has, and only the closed-signal record
+        distinguishes them.</div>
       </div>
     {% else %}
       <div class="muted">
-        <span class="badge badge-ok">QUIET</span>
-        The audit is readable, holds no records, and the engine wrote it
-        {% if blank and blank.modified_at %}at {{ blank.modified_at }}{% else %}recently{% endif %} —
-        so the writer is live and no signal has been invalidated in the window.
-        This is the quiet case, not a fault.
+        <span class="badge badge-ok">NOTHING OWED</span>
+        The audit is readable and empty, and <strong>no closed signal</strong> in the
+        record carries the <code>INVALIDATED</code> outcome — so no kill has fired and
+        no row was ever owed. Empty is correct here.
+        {% if blank.age_days is not none and blank.age_days > 1 %}
+        The file was last written {{ "%.1f"|format(blank.age_days) }} days ago, which
+        is expected in this state and is <strong>not</strong> evidence of a stalled
+        writer.
+        {% endif %}
+        <div class="muted">
+          <strong>Invalidation is a per-user setting, not an engine-wide one</strong>
+          (OWNER_BRIEF B17). Ops cannot read per-user preferences, so this page does not
+          claim the feature is off — only that nothing has been killed. If you expect
+          kills and see none, check the per-user invalidation modes; if you do not,
+          this page is working.
+        </div>
       </div>
     {% endif %}
   {% endif %}

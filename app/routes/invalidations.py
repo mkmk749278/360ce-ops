@@ -16,7 +16,7 @@ the SR_FLIP premature-kill research (session 22) actually needs."""
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Request
 
@@ -136,35 +136,79 @@ def _classify(records: Any) -> dict:
     }
 
 
-#: How long an empty audit may sit unwritten before "quiet" stops being a
-#: defensible reading. The engine rewrites this artifact on its audit cycle, so
-#: a day of silence is not a slow market — it is a writer that has stopped.
-STALE_WRITER_SEC = 24 * 3600
+#: Terminal outcome the engine stamps on a signal the invalidation kill-switch
+#: closed. It is the ONLY thing that puts a row in this ledger via the
+#: trade-monitor path, so it is the population that would be harmed by a broken
+#: writer — and therefore the thing to key the fault check on (#815).
+INVALIDATED_OUTCOME = "INVALIDATED"
 
 
-def _blank_cause(records: Any, provenance: Any = None) -> dict:
+def _invalidated_closes(performance: Any) -> Optional[int]:
+    """How many closed signals the engine actually killed on thesis invalidation.
+
+    ``None`` when the closed-signal record could not be read — an unknown, which
+    must not be graded as either state.
+    """
+    if not isinstance(performance, list):
+        return None
+    total = 0
+    for rec in performance:
+        if not isinstance(rec, dict):
+            continue
+        label = str(rec.get("outcome_label") or rec.get("status") or "").upper()
+        if label == INVALIDATED_OUTCOME:
+            total += 1
+    return total
+
+
+def _blank_cause(
+    records: Any,
+    provenance: Any = None,
+    invalidated_closes: Optional[int] = None,
+) -> dict:
     """Why this page is empty — because "blank needs a cause before it gets a
     caption", and the caption here was a bare "No invalidation records loaded".
 
-    Four states with four different next moves. The artifact is **missing** (the
-    engine has not written it — wait, or check the engine is up), it is
-    **unreadable** (a real fault, ours), it is **present, empty and fresh** (no
-    signal has been invalidated recently — the quiet case, and not a fault), or
-    it is **present, empty and stale**.
+    Five states with five different next moves. The artifact is **missing** (the
+    engine has not written it), **unreadable** (a real fault, ours), or present
+    and empty — and that last case splits three ways on whether a row was ever
+    OWED, never on how old the file is.
 
-    That fourth state is the one this function shipped without, and the cost was
-    the exact defect the docstring above was written to prevent, arriving from
-    the caption's side. On 2026-08-07 ``invalidation_records.json`` was **2
-    bytes, last written 22 days earlier**, over a book that had closed 1,043
-    signals and whose ``/raw-edge`` exit mix independently read **0%
-    invalidation**. This page said: *"no signal has been invalidated in the
-    window. This is the quiet case, not a fault."* Both sentences were false,
-    and the second sent the reader away from the writer.
+    **The mtime is not the discriminator, and grading on it shipped a page that
+    was wrong in the opposite direction.** The first cut of this fix saw a 2-byte
+    file last written 22 days earlier over a book of 1,043 closed signals and
+    badged it WRITER STALE — *"``invalidation_audit`` has stopped recording, and
+    every kill classification since that write is lost"*. The owner corrected it
+    the same day: **invalidation and pre-TP are per-user settings, not
+    engine-wide** (OWNER_BRIEF B17; ``user_invalidation_settings``). If no user
+    has invalidation enabled, no kill ever fires, no row is ever written, and an
+    empty 22-day-old file is exactly correct. That is the ``/alerts`` trap from
+    2026-08-06 arriving with the sign flipped — replacing a wrong benign caption
+    with a wrong alarming one is the same defect, and an alarming one sends the
+    owner to debug a subsystem that is working.
 
-    An empty file cannot describe itself — *nothing happened* and *the writer
-    stopped* are byte-identical — so the mtime is not decoration here, it is the
-    only thing that separates the two states. When it is unavailable the state is
-    ``empty_unknown``: an unknown is not a pass.
+    Worse, the fix cited ``/raw-edge``'s 0% invalidation share as independent
+    corroboration. **It is not independent**: that bucket is derived from the
+    same terminal ``outcome_label``, so it was one fact read twice and presented
+    as two.
+
+    What ops *can* observe is whether a row was **owed** — the closed-signal
+    record stamps ``INVALIDATED`` on exactly the signals the trade-monitor path
+    writes a record for. So the fault check keys on the population that would be
+    harmed, not on a clock:
+
+    * ``invalidated_closes == 0`` → nothing was owed. Empty is correct at any
+      age, and the page says it cannot see per-user settings rather than
+      claiming the feature is off.
+    * ``invalidated_closes > 0`` with an empty ledger → rows were owed and are
+      not there. **That** is a writer fault, and it is one regardless of mtime.
+    * ``None`` → the closed-signal record was unreadable; an unknown, graded as
+      neither.
+
+    Note the expiry path (``main.py`` ``cleanup_expired``) also writes here, but
+    only as the fallback when the trade monitor did not win the close race — so
+    291 EXPIRED closes do **not** imply rows are owed, and this check does not
+    count them.
     """
     if isinstance(records, dict) and records.get("error"):
         detail = str(records.get("error"))
@@ -188,20 +232,21 @@ def _blank_cause(records: Any, provenance: Any = None) -> dict:
     # saying out loud rather than adding one on the assumption it is needed.
     prov = provenance if isinstance(provenance, dict) else {}
     age = prov.get("age_sec")
-    if age is None:
-        return {"state": "empty_unknown", "detail": "", "age_sec": None,
-                "modified_at": prov.get("modified_at")}
-    if float(age) > STALE_WRITER_SEC:
-        return {
-            "state": "empty_stale",
-            "detail": "",
-            "age_sec": float(age),
-            "age_days": float(age) / 86400.0,
-            "modified_at": prov.get("modified_at"),
-            "bound_hours": STALE_WRITER_SEC // 3600,
-        }
-    return {"state": "empty", "detail": "", "age_sec": float(age),
-            "modified_at": prov.get("modified_at")}
+    common = {
+        "detail": "",
+        "age_sec": float(age) if age is not None else None,
+        "age_days": (float(age) / 86400.0) if age is not None else None,
+        "modified_at": prov.get("modified_at"),
+        "invalidated_closes": invalidated_closes,
+    }
+    if invalidated_closes is None:
+        # Cannot read the closed-signal record, so cannot tell whether a row was
+        # owed. Neither state is claimed.
+        return {"state": "owed_unknown", **common}
+    if invalidated_closes > 0:
+        # Rows were owed and the ledger is empty. A real fault, at any age.
+        return {"state": "writer_fault", **common}
+    return {"state": "none_owed", **common}
 
 
 @router.get("/invalidations")
@@ -217,7 +262,11 @@ async def invalidations(request: Request):
             "agg": agg,
             "active": "invalidations",
             "blank": (
-                _blank_cause(records, vol.artifact_age("invalidation_records.json"))
+                _blank_cause(
+                    records,
+                    vol.artifact_age("invalidation_records.json"),
+                    _invalidated_closes(vol.signal_performance()),
+                )
                 if not agg.get("totals") else None
             ),
         },

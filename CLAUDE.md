@@ -913,13 +913,42 @@ The two that changed a number the owner reads:
 Three captions that named a cause the page could not observe — the 2026-08-06
 class, recurring three times in one day:
 
-- **`/invalidations` called a dead writer "the quiet case, not a fault"** while
-  `invalidation_records.json` sat at **2 bytes, 22 days unwritten**, over a book
-  that had closed 1,043 signals, with `/raw-edge` independently reading **0%**
-  invalidation in its exit mix. An empty artifact cannot describe itself —
-  *nothing happened* and *the writer stopped* are byte-identical — so the mtime
-  is not decoration, it is the only thing separating them. Four states now, and
-  the fix turned up a **second** bug in the same function: the `missing` branch
+- **`/invalidations`, and the fix for it was wrong in the opposite direction —
+  which is the more useful lesson.** The page called an empty ledger *"the quiet
+  case, not a fault"* while `invalidation_records.json` sat at **2 bytes, 22 days
+  unwritten** over a book of 1,043 closed signals. The fix graded it on the
+  artifact's **mtime** and badged it `WRITER STALE`: *"`invalidation_audit` has
+  stopped recording, and every kill classification since that write is lost."*
+
+  **The owner corrected it within the hour: invalidation and pre-TP are PER-USER
+  settings, not engine-wide** (OWNER_BRIEF B17, `user_invalidation_settings`).
+  With no user opted in, no kill fires, no row is written, and a 22-day-old empty
+  file is exactly correct. That is the `/alerts` trap from 2026-08-06 arriving
+  with **the sign flipped** — and the alarming version is the worse one, because
+  a benign wrong caption makes a reader ignore a page while an alarming wrong
+  caption sends the owner to debug a subsystem that is working.
+
+  Two things to take from it beyond the fix:
+
+  - **"Corroborating evidence" that shares a source is one fact read twice.**
+    The WRITER STALE copy cited `/raw-edge`'s 0% invalidation share as an
+    independent second signal. It is not independent: that bucket is derived
+    from the same terminal `outcome_label`, so both numbers restate *no signal
+    ever reached INVALIDATED* — which is precisely what the per-user
+    explanation predicts. Before calling two figures corroboration, check
+    whether they are computed from the same field.
+  - **Grade on whether the artifact was OWED anything, not on its clock.** Ops
+    cannot read per-user preferences, so it must not claim the feature is off —
+    but it *can* see the population that would be harmed (#815): the
+    closed-signal record stamps `INVALIDATED` on exactly the signals that write
+    here. Zero of those → empty is right at **any** age. One or more with an
+    empty ledger → a writer fault at **any** age. Unreadable → `owed_unknown`,
+    graded as neither. The mtime is now context on screen, never the verdict.
+    Note the expiry path (`main.py` `cleanup_expired`) also writes here but only
+    as a race fallback, so 291 EXPIRED closes imply nothing is owed and are
+    deliberately not counted.
+
+  The same fix turned up a **second** bug in that function: the `missing` branch
   matched neither of its own producer's words (`_load` says `"missing: <path>"`),
   so a file the engine had never written rendered under UNREADABLE, *"a fault on
   our side"* — the wrong state and the wrong next move.
