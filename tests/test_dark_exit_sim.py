@@ -297,7 +297,11 @@ def test_coverage_splits_the_three_undecided_states():
         _row(hold_status=HOLD_INSUFFICIENT),
         raw,
     ])
-    assert out == {
+    # Compared as a whole rather than key by key, so a NEW bucket cannot appear
+    # and go uncounted — that is this test's point and it survives the panels
+    # added 2026-08-07. Those carry structured values (`by_path`,
+    # `representativeness`), so the scalar counts are what is pinned exactly.
+    assert {k: v for k, v in out.items() if isinstance(v, int)} == {
         "decided": 1, SKIP_RUNNING: 1, SKIP_UNMEASURED: 1, SKIP_NO_ARM: 1,
         "total": 4,
     }

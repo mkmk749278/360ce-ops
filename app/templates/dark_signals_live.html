@@ -166,6 +166,90 @@
     counted apart because the reader's next move differs: wait, investigate the lane, or nothing
     at all.
   </p>
+
+  {% if hold_coverage.by_path %}
+  <h3 class="small">Coverage by path <span class="muted">— which paths the arm can speak for</span></h3>
+  <div style="overflow-x:auto">
+  <table class="tbl">
+    <thead>
+      <tr><th>Setup</th><th>Rows</th><th title="the held-to-stop arm reached a verdict">Decided</th>
+          <th>Priced share</th><th>Still running</th>
+          <th title="past the horizon with candles that never arrived">Retired unmeasured</th>
+          <th class="muted">Written before the arm</th></tr>
+    </thead>
+    <tbody>
+      {% for p in hold_coverage.by_path %}
+      <tr>
+        <td>{{ p.setup_class }}</td>
+        <td>{{ p.total }}</td>
+        <td>{{ p.decided }}</td>
+        <td class="{% if p.priced_share < 50 %}neg{% endif %}"><strong>{{ "%.0f"|format(p.priced_share) }}%</strong></td>
+        <td>{{ p.hold_running or "—" }}</td>
+        <td class="{% if p.hold_unmeasured %}neg{% endif %}">{{ p.hold_unmeasured or "—" }}</td>
+        <td class="muted">{{ p.no_hold_arm or "—" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">
+    <strong>Coverage is not uniform, and the exit-method table above is pooled across it.</strong>
+    A path whose arm has decided a quarter of its rows contributes a quarter of its weight to
+    every exit-method average, so “rows priced” at the top of that table is a book weighted
+    differently from the per-path table further down. This says by how much, per path, rather
+    than leaving the reader to assume the shortfall is spread evenly — it is not.
+  </p>
+  {% endif %}
+
+  {% set rep = hold_coverage.representativeness %}
+  {% if rep and rep.decided.n_scored and rep.hold_unmeasured.n_scored %}
+  <h3 class="small">Is the priced subset representative? <span class="muted">— graded on the column every row has</span></h3>
+  <div style="overflow-x:auto">
+  <table class="tbl">
+    <thead>
+      <tr><th>Population</th><th>Rows</th><th>Own-exit avg PnL %</th>
+          <th title="TP1 + SL only; a flat EXPIRED is neither">Win @decided</th>
+          <th class="muted">W / L / flat</th></tr>
+    </thead>
+    <tbody>
+      {% for key, label in [
+           ('decided', 'Priced — the arm decided, and the table above is measured on these'),
+           ('hold_unmeasured', 'Retired unmeasured — excluded from every exit method'),
+           ('hold_running', 'Still running — excluded, and not yet a result'),
+           ('all', 'The whole selection')] %}
+      {% set b = rep[key] %}
+      {% if b.n %}
+      <tr {% if key == 'all' %}class="muted"{% endif %}>
+        <td>{{ label }}</td>
+        <td>{{ b.n }}{% if b.n_scored != b.n %}
+            <span class="muted small" title="rows with no readable pnl_pct — excluded from the average, never scored zero">{{ b.n_scored }} scored</span>{% endif %}</td>
+        <td class="{% if b.avg_pct is not none and b.avg_pct > 0 %}pos{% elif b.avg_pct is not none and b.avg_pct < 0 %}neg{% endif %}">
+          <strong>{% if b.avg_pct is not none %}{{ "%+.4f"|format(b.avg_pct) }}%{% else %}—{% endif %}</strong></td>
+        <td>{% if b.win_rate is not none %}{{ "%.0f"|format(b.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="muted small">{{ b.wins }}W / {{ b.losses }}L / {{ b.flat }} flat</td>
+      </tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">
+    <strong>A coverage count says how many rows are missing; it cannot say which way they lean.</strong>
+    This can, because the row's own SL/TP1 outcome is recorded on
+    <em>every</em> row whether or not the held arm ever reached one — so the column that is
+    always present grades the subset that is not. Read the two averages against each other
+    before reading any exit method: if the priced rows are the worse ones, every method's
+    absolute number is pessimistic; if they are the better ones, every method flatters itself.
+  </p>
+  <p class="muted small">
+    <strong>The edge column survives either way, and the absolute numbers do not.</strong>
+    “vs the row's own exit” is measured on exactly these rows against exactly this baseline, so a
+    lean shared by both cancels out of it. That is the figure to compare methods on; the avg and
+    total belong to the priced subset and are not estimates of what the whole selection would
+    have produced. Nothing here is de-biased — reweighting needs a model of why the candles
+    stopped, and a rotated-out mover is not missing at random.
+  </p>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -443,6 +527,89 @@
     excluded from <em>every</em> rate above rather than folded into the expiries — an expiry is a
     walked window in which nothing happened, and this is the absence of a measurement. Before the
     engine retired them they sat OPEN forever, which is worse: a dead row rendering as a live trade.
+  </p>
+</section>
+{% endif %}
+
+{% if concentration and concentration.campaigns %}
+{% set C = concentration %}
+<section class="card">
+  <h2 class="small">Concentration <span class="muted">— how few symbols the verdict rests on</span></h2>
+  <div style="overflow-x:auto">
+  <table class="tbl">
+    <thead>
+      <tr><th>Grouping</th><th>Groups</th><th>Rows each</th>
+          <th title="share of rows sitting in a group with more than one row">Multi-row share</th>
+          <th>Worst group</th><th>Its net</th>
+          <th title="share of everything this selection lost">Share of loss</th>
+          <th>Selection without it</th></tr>
+    </thead>
+    <tbody>
+      {% for key, label, note in [
+           ('campaigns', 'Campaign', 'one symbol · one side, over the whole window'),
+           ('runs', 'Run', 'the same, re-stamped inside ' ~ ("%.0f"|format(C.gap_minutes)) ~ ' minutes')] %}
+      {% set G = C[key] %}
+      {% if G %}
+      <tr>
+        <td><strong>{{ label }}</strong> <span class="muted small">— {{ note }}</span></td>
+        <td>{{ G.n_groups }}</td>
+        <td>{{ "%.2f"|format(G.rows_per_group) }}</td>
+        <td>{{ "%.0f"|format(G.multi_row_share) }}%</td>
+        {% if G.worst %}
+        <td>{{ G.worst.label }} <span class="muted small">{{ G.worst.n_rows }} row{{ '' if G.worst.n_rows == 1 else 's' }}{% if G.worst.hours %} over {{ "%.1f"|format(G.worst.hours) }}h{% endif %}</span></td>
+        <td class="{% if G.worst.net_pct < 0 %}neg{% else %}pos{% endif %}"><strong>{{ "%+.2f"|format(G.worst.net_pct) }}%</strong></td>
+        <td>{% if G.worst.share_of_book is not none %}{{ "%.0f"|format(G.worst.share_of_book) }}%{% else %}—{% endif %}</td>
+        <td class="{% if G.worst.book_without is not none and G.worst.book_without > 0 %}pos{% elif G.worst.book_without is not none %}neg{% endif %}">
+          {% if G.worst.book_without is not none %}{{ "%+.2f"|format(G.worst.book_without) }}%{% else %}—{% endif %}</td>
+        {% else %}
+        <td colspan="4" class="muted">no group carries a scored row</td>
+        {% endif %}
+      </tr>
+      {% endif %}
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">
+    Selection net <strong class="{% if C.book_net is not none and C.book_net > 0 %}pos{% else %}neg{% endif %}">{% if C.book_net is not none %}{{ "%+.2f"|format(C.book_net) }}%{% else %}—{% endif %}</strong>
+    over {{ C.n_rows }} rows, fee charged per row — the same round trip the exit-method table uses.
+  </p>
+
+  {% if C.campaigns.to_flip or C.runs.to_flip %}
+  <p class="muted small">
+    {% if C.campaigns.to_flip %}
+    <strong>Removing the worst {{ C.campaigns.to_flip.k }} campaign{{ '' if C.campaigns.to_flip.k == 1 else 's' }}
+    — {{ C.campaigns.to_flip.n_rows }} rows, {{ "%.0f"|format(C.campaigns.to_flip.row_share) }}% of the selection —
+    takes it to {{ "%+.2f"|format(C.campaigns.to_flip.book_without) }}%.</strong>
+    {% endif %}
+    {% if C.runs.to_flip %}
+    By run it takes {{ C.runs.to_flip.k }} ({{ C.runs.to_flip.n_rows }} rows,
+    {{ "%.0f"|format(C.runs.to_flip.row_share) }}%).
+    {% endif %}
+    That is a <em>concentration</em> measure and not a filter anyone could have run: the groups are
+    picked by already knowing how they turned out. A small count over a small row share means the
+    sign of this page's verdict is a handful of symbols rather than a property of the paths —
+    which is a reason to widen the window before reading the per-path table above, not a reason
+    to remove anything.
+  </p>
+  {% endif %}
+
+  <p class="muted small">
+    <strong>Two groupings, because they answer different questions — and on this lane they do not
+    agree.</strong> <em>Run</em> is the key `/signals/price-action` shipped, where a trending
+    symbol re-entered every 30 minutes and one 4.5-hour burst carried that page's whole sign.
+    Here the same key finds almost nothing: this lane is diverted at the enqueue site, <em>before</em>
+    the router, so no per-symbol cooldown ever applies to it and its repeats are spread across
+    hours instead of bunched. The {{ "%.0f"|format(C.gap_minutes) }}-minute window is therefore a
+    <strong>chosen</strong> grouping here rather than one derived from a throttle — which is
+    exactly why the campaign view is printed beside it and not instead of it.
+  </p>
+  <p class="muted small">
+    <strong>Nothing here de-duplicates.</strong> Whether repeated entries into one symbol are
+    independent evidence is the reader's judgement, and counting them silently either way is what
+    this panel exists to stop. Note it can cut both ways: on the 2026-08-07 book, averaging one
+    row per campaign read <em>worse</em> than averaging per row, so re-detection was understating
+    the loss rather than exaggerating it.
   </p>
 </section>
 {% endif %}
