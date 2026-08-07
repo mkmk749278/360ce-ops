@@ -136,8 +136,43 @@ class TestClassifyLedger:
         assert out["wasted_pct"] == 0.0
 
     def test_empty_ledger_does_not_divide_by_zero(self):
+        # None, not 0.0: nothing classified is an UNKNOWN share, and a rendered
+        # "0%" would read as the controller behaving perfectly.
         out = classify_ledger([])
-        assert out["promotions"] == 0 and out["wasted_pct"] == 0.0
+        assert out["promotions"] == 0 and out["wasted_pct"] is None
+
+    def test_wasted_share_is_measured_on_classified_rows_not_all_promotions(self):
+        """The denominator is the population the numerator can come from.
+
+        ``unroutable`` is knowable only for a row the engine stamped, so
+        dividing it by every promotion mixes populations — and the unstamped
+        rows can only push the figure DOWN, on the panel whose whole job is to
+        show wasted budget. The live page read **19%** (10 of 52) on 2026-08-07
+        where the measured share was **83%** (10 of 12), understating #806/#807
+        by 4.3x. The right value was already being computed one line below.
+        """
+        rows = (
+            [{"strategy": "RANGE_FADE", "status": "PROMOTED", "routable": True}] * 2
+            + [{"strategy": "QCB@ATR", "status": "PROMOTED", "routable": False}] * 10
+            # 40 rows written before the engine stamped routability.
+            + [{"strategy": "RANGE_FADE", "status": "PROMOTED"}] * 40
+        )
+        out = classify_ledger(rows)
+
+        assert out["promotions"] == 52
+        assert out["classified"] == 12
+        assert out["counts"]["unclassified"] == 40
+        # 10/12, not 10/52.
+        assert round(out["wasted_pct"]) == 83
+
+    def test_all_rows_unclassified_reports_unknown_not_zero(self):
+        """A window entirely predating the stamp says nothing about waste."""
+        out = classify_ledger(
+            [{"strategy": "RANGE_FADE", "status": "PROMOTED"}] * 5
+        )
+        assert out["promotions"] == 5
+        assert out["classified"] == 0
+        assert out["wasted_pct"] is None
 
 
 class TestSplitOverrides:

@@ -22,9 +22,14 @@
       {% endfor %}
     </div>
   {% else %}
-    {#- Three states, three different next moves. The old caption was a bare
+    {#- FOUR states, four different next moves. The old caption was a bare
         "No invalidation records loaded", which named none of them and read
-        identically whether the audit was broken or nothing had been killed. -#}
+        identically whether the audit was broken or nothing had been killed.
+        The first fix gave it three — and then called a 2-byte file last
+        written 22 days ago "the quiet case, not a fault", which is the same
+        defect from the caption's side: an empty file cannot describe itself,
+        because "nothing happened" and "the writer stopped" are byte-identical.
+        Only the mtime separates them. -#}
     {% if blank and blank.state == 'missing' %}
       <div class="muted">
         <span class="badge badge-muted">NOT WRITTEN</span>
@@ -38,11 +43,37 @@
         <div class="muted">That is a fault on our side, not a quiet market — the counts
         below are <em>unknown</em>, not zero.</div>
       </div>
+    {% elif blank and blank.state == 'empty_stale' %}
+      <div class="flash flash-err">
+        <span class="badge sev-high">WRITER STALE</span>
+        The audit is readable and empty, and the engine has not written it for
+        <strong>{{ "%.1f"|format(blank.age_days) }} days</strong>
+        {% if blank.modified_at %}(last write {{ blank.modified_at }}){% endif %} —
+        past the {{ blank.bound_hours }}h bound.
+        <div class="muted">That is not a quiet market. The engine rewrites this artifact
+        on its audit cycle, so an empty file this old means <code>invalidation_audit</code>
+        has stopped recording, and every kill classification since that write is
+        <em>lost</em>, not zero. Cross-check <a href="/raw-edge">Entry edge</a>: an
+        invalidation share of 0% in the exit mix is the same fault seen from the other
+        side. Do <strong>not</strong> read the empty table below as "nothing has been
+        killed".</div>
+      </div>
+    {% elif blank and blank.state == 'empty_unknown' %}
+      <div class="muted">
+        <span class="badge badge-warn">AGE UNKNOWN</span>
+        The audit is readable and holds no records, and this page could not stat the
+        artifact to tell whether the writer is still running.
+        <div class="muted">An empty file cannot describe itself — a quiet window and a
+        stopped writer produce the same bytes — so this is an unknown, not the quiet
+        case.</div>
+      </div>
     {% else %}
       <div class="muted">
         <span class="badge badge-ok">QUIET</span>
-        The audit is readable and holds no records — no signal has been invalidated in
-        the window. This is the quiet case, not a fault.
+        The audit is readable, holds no records, and the engine wrote it
+        {% if blank and blank.modified_at %}at {{ blank.modified_at }}{% else %}recently{% endif %} —
+        so the writer is live and no signal has been invalidated in the window.
+        This is the quiet case, not a fault.
       </div>
     {% endif %}
   {% endif %}

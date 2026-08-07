@@ -99,10 +99,53 @@ def reduce_context_card(mc: Any, now_ts: Optional[float] = None) -> dict:
     }
 
 
+# Reserved top-level key in the persisted edge store holding per-cell eviction
+# counts (engine: ``strategy_edge._EVICTED_KEY``).  Cell keys are
+# ``"STRATEGY|context_key"``, so a key with no ``"|"`` cannot collide with one —
+# which is also exactly why this reducer's own guard used to drop it silently.
+EVICTED_KEY = "__evicted__"
+
+
+def _evicted_map(raw_store: Any) -> Optional[dict[str, int]]:
+    """Per-cell eviction counts, or ``None`` when the engine did not report any.
+
+    ``None`` and ``{}`` are different states and must not be pooled.  The engine
+    writes this key only ``if _ev`` — so an absent key means *either* an engine
+    older than 2026-08-04 *or* a store in which nothing has ever been evicted,
+    and neither the reducer nor the page may guess which.  A missing stamp is
+    not a pass (the ``/signals/sar-live`` ``unverified`` rule): the cell renders
+    as unreported rather than as unsampled.
+    """
+    if not isinstance(raw_store, dict):
+        return None
+    raw = raw_store.get(EVICTED_KEY)
+    if not isinstance(raw, dict):
+        return None
+    out: dict[str, int] = {}
+    for key, count in raw.items():
+        try:
+            out[str(key)] = int(count)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def reduce_edge_matrix(raw_store: Any, affinity: Optional[dict] = None) -> list[dict]:
-    """Cells from the raw edge-store records, engine-parity edge + verdict."""
+    """Cells from the raw edge-store records, engine-parity edge + verdict.
+
+    Every cell carries its **denominator**.  ``n`` is ``len(records)`` and each
+    cell is a ``deque(maxlen=50)`` engine-side, so ``n = 50`` may stand for fifty
+    outcomes or five thousand — and 1,731 of 3,531 verdict-carrying cells sat at
+    that cap on 2026-08-07 with nothing on screen saying so.  The engine has
+    counted and persisted the evictions since 2026-08-04, under a docstring
+    quoting this repo's own rule (*"when a bounded buffer feeds a statistic,
+    persist the eviction count with the data and put the denominator beside the
+    verdict"*).  The reducer above dropped them at ``"|" not in str(key)``: a
+    field one repo writes and no repo reads, #817 with the arrow reversed.
+    """
     if not isinstance(raw_store, dict) or raw_store.get("error"):
         return []
+    evicted_map = _evicted_map(raw_store)
     rows: list[dict] = []
     for key, records in raw_store.items():
         if not isinstance(records, list) or "|" not in str(key):
@@ -118,6 +161,7 @@ def reduce_edge_matrix(raw_store: Any, affinity: Optional[dict] = None) -> list[
         edge = _edge_r(records)
         srcs = [str(r.get("src", "emitted")) for r in records]
         aligned = _alignment(strategy, ctx, affinity)
+        evicted = None if evicted_map is None else int(evicted_map.get(str(key), 0))
         rows.append({
             "strategy": strategy,
             "context_key": ctx,
@@ -131,6 +175,15 @@ def reduce_edge_matrix(raw_store: Any, affinity: Optional[dict] = None) -> list[
             "edge_r": edge,
             "verdict": _verdict(edge),
             "aligned": aligned,
+            # -- the denominator, mirroring engine ``strategy_edge.sampling()`` --
+            "evicted": evicted,
+            "seen": None if evicted is None else n + evicted,
+            # Tri-state on purpose: True = provably a sample, False = provably
+            # the whole population, None = the engine did not say.  A bool here
+            # would make "not reported" read as "nothing evicted", which is the
+            # flattering direction and the one a reader would not question.
+            "sampled": None if evicted is None else evicted > 0,
+            "at_cap": n >= EDGE_WINDOW,
         })
     rows.sort(
         key=lambda r: (r["edge_r"] is not None, r["edge_r"] or 0.0, r["n"]),
@@ -453,6 +506,42 @@ def reduce_allocations(alloc: Any, now_ts: Optional[float] = None) -> dict:
 MATRIX_ROW_CAP = 400
 
 
+def matrix_sampling(rows: list[dict]) -> dict:
+    """How much of the matrix is a rolling sample rather than a population.
+
+    Measured over the WHOLE matrix, never the capped render — a sampling summary
+    computed on "the 400 cells with the most evidence" would describe exactly the
+    cells most likely to be at the cap and would read far worse than the truth.
+
+    ``reported`` is the honest gate on every figure here: when the engine wrote
+    no eviction map, this panel says so and states nothing else.  Reporting
+    "0 evicted" from an absent key is how a missing measurement comes to read as
+    a clean result.
+    """
+    reported = any(r.get("evicted") is not None for r in rows)
+    decidable = [r for r in rows if r.get("verdict") != "INSUFFICIENT_DATA"]
+    at_cap = [r for r in decidable if r.get("at_cap")]
+    sampled = [r for r in decidable if r.get("sampled")]
+    evicted_total = sum(int(r.get("evicted") or 0) for r in rows)
+    held_total = sum(int(r.get("n") or 0) for r in rows)
+    return {
+        "reported": reported,
+        "window": EDGE_WINDOW,
+        "decidable": len(decidable),
+        "at_cap": len(at_cap),
+        "sampled": len(sampled) if reported else None,
+        "evicted_total": evicted_total if reported else None,
+        "held_total": held_total,
+        # The share of observed outcomes the matrix can still see. A cell's
+        # verdict is computed on `held`; everything in `evicted` shaped the
+        # strategy's history and is unreachable to every reader of this page.
+        "visible_frac": (
+            held_total / (held_total + evicted_total)
+            if reported and (held_total + evicted_total) else None
+        ),
+    }
+
+
 def split_matrix(rows: list[dict], *, show_all: bool = False) -> dict:
     """Decision-grade cells first, and say what was withheld.
 
@@ -503,6 +592,7 @@ def _build_view(vol, *, show_all: bool = False) -> dict:
         # rollup measured on the capped rows would silently become a rollup of
         # "the 400 cells with the most evidence".
         "matrix": split_matrix(matrix_rows, show_all=show_all),
+        "matrix_sampling": matrix_sampling(matrix_rows),
         "matrix_rows": matrix_rows,
         "per_strategy": reduce_per_strategy(matrix_rows),
         "geometry": reduce_geometry_ab(matrix_rows),
@@ -537,9 +627,13 @@ async def strategy_lab_partial(request: Request, show: str = ""):
     return templates.TemplateResponse("_strategy_lab_tables.html", ctx)
 
 
+# ``evicted``/``seen``/``sampled`` ride into the CSV for the same reason the
+# structural lanes' stamps do: a spreadsheet is exactly where a rolling 50-row
+# window gets averaged against an all-time one without anybody noticing.
 _MATRIX_COLS = [
     "strategy", "context_key", "n", "n_emitted", "n_suppressed", "n_shadow",
     "win_rate", "avg_r", "avg_pnl_pct", "edge_r", "verdict", "aligned",
+    "evicted", "seen", "sampled",
 ]
 
 

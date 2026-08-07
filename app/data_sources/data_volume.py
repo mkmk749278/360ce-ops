@@ -183,6 +183,34 @@ class DataVolumeReader:
     def invalidation_records(self) -> Any:
         return self._load("invalidation_records.json")
 
+    def artifact_age(self, name: str) -> dict[str, Any]:
+        """``{exists, modified_at, age_sec}`` for one file on the volume.
+
+        An empty artifact is not self-describing: *nothing happened* and *the
+        writer stopped* produce byte-identical files, and only the mtime can
+        separate them. ``/invalidations`` called a 2-byte file last written 22
+        days earlier "the quiet case, not a fault" while the engine had closed
+        1,043 signals in that window (2026-08-07).
+
+        ``age_sec`` is ``None`` when the file is absent or unstat-able — an
+        unknown, never a zero, because a zero here would read as "just written".
+        """
+        info: dict[str, Any] = {"exists": False, "modified_at": None, "age_sec": None}
+        try:
+            path = self._dir / name
+            if path.exists():
+                mtime = path.stat().st_mtime
+                info["exists"] = True
+                info["modified_at"] = datetime.fromtimestamp(
+                    mtime, tz=timezone.utc
+                ).strftime("%Y-%m-%d %H:%M UTC")
+                info["age_sec"] = max(
+                    0.0, datetime.now(timezone.utc).timestamp() - mtime
+                )
+        except OSError:
+            pass
+        return info
+
     def signal_history(self) -> Any:
         return self._load("signal_history.json")
 

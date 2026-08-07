@@ -782,10 +782,20 @@ def reduce_ledger_status(records: Any, pairs: list[dict]) -> dict:
             "stamped": 0, "classified": 0, "pending": 0, "pairs": 0,
         }
     stamped = len(records)
-    classified = sum(
-        1 for r in records
-        if isinstance(r, dict) and r.get("classification") is not None
-    )
+
+    def _arm(rec: Any) -> str:
+        s = str((rec or {}).get("setup_class") or "") if isinstance(rec, dict) else ""
+        if s.endswith(SAREXIT_SUFFIX):
+            return "sar"
+        if s.endswith(SARBASE_SUFFIX):
+            return "base"
+        return "other"
+
+    resolved_by_arm = {"base": 0, "sar": 0, "other": 0}
+    for rec in records:
+        if isinstance(rec, dict) and rec.get("classification") is not None:
+            resolved_by_arm[_arm(rec)] += 1
+    classified = sum(resolved_by_arm.values())
     pending = stamped - classified
     if stamped == 0:
         state, detail = "dark", (
@@ -797,12 +807,29 @@ def reduce_ledger_status(records: Any, pairs: list[dict]) -> dict:
             "Pairs are stamping but none have resolved yet — each needs a "
             "48h forward window of real candles before it classifies."
         )
+    elif not pairs:
+        # Resolutions without a single completed PAIR is its own state, and the
+        # old code called it "live — pairs are stamping and resolving". On
+        # 2026-08-07 that badge sat over 5,522 stamps, 324 resolutions and
+        # **0 pairs**, every rollup row reading `n live = 0` / `ΔR = —`. An A/B
+        # with one arm resolving is not an A/B, and reporting it as a healthy
+        # one is the same defect as the empty-ledger caption below: a benign
+        # sentence over a state that has another cause.
+        state, detail = "one_armed", (
+            "Arms are resolving but no PAIR has completed, so nothing on this "
+            "page can compare the two exits. Both arms of a pair must classify "
+            "before it counts."
+        )
     else:
         state, detail = "live", "Pairs are stamping and resolving."
     return {
         "state": state, "detail": detail,
         "stamped": stamped, "classified": classified,
         "pending": pending, "pairs": len(pairs),
+        # Which arm the resolutions belong to. Published because "324 resolved"
+        # and "324 resolved, all of them the SAR arm" support opposite readings
+        # of the same page, and only the second is true.
+        "resolved_by_arm": resolved_by_arm,
     }
 
 

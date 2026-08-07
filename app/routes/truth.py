@@ -10,6 +10,8 @@ downloads stay for full-fidelity offline analysis.
 """
 from __future__ import annotations
 
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -32,6 +34,60 @@ def _as_int(v: Any) -> int:
         return int(v)
     except (TypeError, ValueError):
         return 0
+
+
+#: Beyond this, the snapshot is describing a window the reader is no longer in.
+#: The engine regenerates the report on its monitor cycle, so an hour is slack,
+#: not a schedule.
+TRUTH_STALE_SEC = 3600
+
+
+def report_provenance(snapshot: Any, now_ts: float | None = None) -> dict:
+    """When the ENGINE generated this report, and how far back it looks.
+
+    This page rendered **no timestamp at all** until 2026-08-07, while serving a
+    TTL-cached snapshot of the ``monitor-logs`` branch. On that day its
+    ``cohort_edge_gate`` row read ``streak 85`` beside a live ``/`` pulse reading
+    ``streak 156`` for the same probe, and nothing on either page told the reader
+    they were on different clocks — so the two surfaces silently disagreed about
+    the state of a live gate.
+
+    The clock is the engine's ``generated_at``, never ops' own: a surface may not
+    grade its own freshness on a clock it supplies (the rule ``/signals/sar-live``
+    already carries, and the one this page was missing entirely). ``lookback_hours``
+    rides along because the counters here are **cumulative over that window** —
+    a just-shipped change is invisible in them however fresh the report is, which
+    is a second, independent reason a number here can disagree with a live panel.
+    """
+    out: dict[str, Any] = {
+        "generated_at": None,
+        "generated_at_iso": None,
+        "age_sec": None,
+        "stale": None,
+        "lookback_hours": None,
+        "bound_sec": TRUTH_STALE_SEC,
+    }
+    if not isinstance(snapshot, dict) or snapshot.get("error"):
+        return out
+    try:
+        lookback = snapshot.get("lookback_hours")
+        out["lookback_hours"] = float(lookback) if lookback is not None else None
+    except (TypeError, ValueError):
+        pass
+    try:
+        generated = float(snapshot.get("generated_at") or 0.0)
+    except (TypeError, ValueError):
+        return out
+    if generated <= 0:
+        return out
+    now = now_ts if now_ts is not None else time.time()
+    out["generated_at"] = generated
+    out["generated_at_iso"] = datetime.fromtimestamp(
+        generated, tz=timezone.utc
+    ).strftime("%Y-%m-%d %H:%M UTC")
+    out["age_sec"] = max(0.0, now - generated)
+    out["stale"] = out["age_sec"] > TRUTH_STALE_SEC
+    return out
 
 
 def _shape(snapshot: Any) -> dict:
@@ -135,6 +191,7 @@ async def truth(request: Request):
             "request": request,
             "snapshot": snapshot,
             "shaped": _shape(snapshot),
+            "provenance": report_provenance(snapshot),
             "comparison": comparison,
             "active": "truth",
         },

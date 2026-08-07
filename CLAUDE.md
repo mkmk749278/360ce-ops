@@ -881,6 +881,123 @@ nothing about whether the page reads correctly, whether its sentences are still
 true, or whether anyone can get through it. Read the rendered output
 periodically — the defects it finds are not the ones CI is shaped to catch.
 
+## The 2026-08-07 panel surf — the second pass, and what a derived check found
+
+A read-only guest session ran the same exercise a day later: fetch all 26 pages
+plus their exports and look at what they *rendered*. Nine defects, and the shape
+is the one this file keeps naming — **a seam**. None crashed, none left an empty
+screen, every one had passing tests.
+
+The two that changed a number the owner reads:
+
+- **The Strategy Lab threw away the matrix's denominator.** Each edge cell is a
+  `deque(maxlen=50)` engine-side, so `n = 50` may stand for fifty outcomes or
+  five thousand — and **1,731 of 3,531 verdict-carrying cells sat at that cap**.
+  The engine has counted and persisted the evictions since 2026-08-04 under
+  `__evicted__`, in a docstring quoting *this file's* rule about bounded buffers.
+  `reduce_edge_matrix` dropped the key on its own `"|" not in str(key)` guard:
+  **a field one repo writes and no repo reads**, #817 with the arrow reversed and
+  the same shape as the price-action lane card the day before. Cells now carry
+  `evicted` / `seen` / `sampled`, tri-state — `None` means *the engine did not
+  say*, never *nothing was evicted*, because a bool there reads as a clean
+  population in the flattering direction. Read alongside it: only **156 of 3,531**
+  verdict cells contain a single delivered row, and 360 read a 100% win rate.
+- **Layer G understated its own headline by 4.3×.** `wasted_pct` divided
+  `unroutable` by *every* promotion while the numerator is only knowable for a
+  row the engine stamped — so the panel built to expose #806/#807 read **19%**
+  (10 of 52) where the measured share was **83%** (10 of 12). The right
+  denominator was being computed one line below, under a comment calling it
+  "honest", and never used. **Mirror the engine's denominators** includes the
+  ones you compute yourself.
+
+Three captions that named a cause the page could not observe — the 2026-08-06
+class, recurring three times in one day:
+
+- **`/invalidations` called a dead writer "the quiet case, not a fault"** while
+  `invalidation_records.json` sat at **2 bytes, 22 days unwritten**, over a book
+  that had closed 1,043 signals, with `/raw-edge` independently reading **0%**
+  invalidation in its exit mix. An empty artifact cannot describe itself —
+  *nothing happened* and *the writer stopped* are byte-identical — so the mtime
+  is not decoration, it is the only thing separating them. Four states now, and
+  the fix turned up a **second** bug in the same function: the `missing` branch
+  matched neither of its own producer's words (`_load` says `"missing: <path>"`),
+  so a file the engine had never written rendered under UNREADABLE, *"a fault on
+  our side"* — the wrong state and the wrong next move.
+- **`/dark-signals` hardcoded a root cause for every future Binance ban.** The
+  banner is correctly conditional on `ban_seconds`, and then asserted *"Root
+  cause is engine-side (a dead key hammering listenKey)"* as fixed copy from the
+  2026-07-24 diagnosis, while nothing on the page observes a cause at all. The
+  breaker now records what Binance actually said and the page quotes it; where
+  it knows nothing it claims nothing, and it says plainly that the ban is on the
+  *box*, which any process sharing the IP can have earned.
+- **`/sar-exit`'s empty-ledger sentence printed beside 800 stamped rows.** The
+  2026-08-06 fix gave `unavailable` its own caption and left `dark`, `measuring`
+  and `live` sharing one `{% else %}` — the caption following *one* state is not
+  the caption following the state. The same panel was badged **LIVE — "pairs are
+  stamping and resolving"** on a `classified > 0` test while **0 pairs** had ever
+  completed out of 5,522 stamps, every rollup row reading `n live = 0` / `ΔR = —`.
+  `one_armed` is now its own state and publishes the per-arm resolution split,
+  because "324 resolved" and "324 resolved, all of them one arm" support
+  opposite readings of the same page.
+
+And three that were simply unreadable or unreachable:
+
+- **`/truth` rendered no timestamp at all**, while serving a TTL-cached snapshot
+  of `monitor-logs`. Its `cohort_edge_gate` row read `streak 85` beside a live
+  pulse reading `streak 156` for the same probe, with nothing on either surface
+  saying they were on different clocks. Graded now on the **engine's**
+  `generated_at` — a surface may not grade its own freshness on a clock it
+  supplies — with the lookback window named, since a figure here can disagree
+  with a live panel for two independent reasons.
+- **The guest tier was shown controls it could only 403 on.** The nav has been
+  filtered from `GUEST_READ_ROUTES` since the tier shipped; **in-page controls
+  were not**, and the filtering stopped exactly one layer short of what matters.
+  `/exit-backtest` rendered a POST run form and the `run-now` job trigger to a
+  read-only session, with the copy *"Button not responding? Use the plain link"*
+  between them, coaching the reader into the refusal. The gate held, so this was
+  never a security defect — it is the nav's own rule unapplied one level down,
+  and **a control that 403s is indistinguishable from a broken page.**
+  `guest_scope.may_use` reads the same table the gate enforces; there is no
+  second list.
+
+  **The derived check is what earned its keep.** Rather than hiding the two
+  controls that had been noticed, `tests/test_guest_access.py` renders **every**
+  guest-readable page, collects every form action, `hx-post` and `href` in it,
+  and drives each one — and it immediately found two more nobody had seen: a
+  destructive `POST /signals/sar/clear` ledger-wipe card rendered in full to a
+  guest (confirm checkbox and danger button included), and a `/control` link on
+  `/signals/entry-features`. Writing a list of controls to hide would have been
+  silent on both, and on the next one.
+- **Raw float repr on three pages** — a PnL column at `-0.47041707080504297`, a
+  feed age at `54.348713397979736` seconds, TP levels at twelve decimals on an
+  instrument quoted to seven, swept levels at `0.044309999999999995`. None is
+  *wrong*, which is why they survived; the noise is the tell, since that last
+  value is a level nobody computed. `app/template_filters.py` splits it in two,
+  because prices and percentages are different problems: `price` keeps the
+  instrument's own precision (this book spans `64328.80` and `0.02062` in one
+  table, and `%g` would flip to scientific notation exactly on the sub-cent
+  movers that dominate the feed), `pct` is fixed. Both render `—` for missing,
+  never `0.00`.
+
+**`test_templates_compile.py` was itself a hand-built mirror**, and its docstring
+was the tell: *"mirrors the default `Jinja2Templates` environment the app builds
+in `app/main.py` … so a template that compiles here compiles in the app"*. That
+parenthesis stopped being true the moment `main.py` registered its first global,
+and a mirror can only ever diverge toward **passing over a template the app
+cannot render**. It imports the real environment now, and a second test pins the
+wiring so a future refactor cannot quietly rebuild a local one.
+
+**One finding was investigated and deliberately not fixed.** `/profit` rendered
+in 27.6s during the surf — 20× every other page. Re-measured: **5.5s cold, 1.2s
+warm, 0.55s on a narrower window**; the outlier coincided with the live Binance
+ban, ~500 rows replaying at `FREE_RUN_CONCURRENCY=5` against 10s timeouts before
+the circuit tripped. The path is already bounded — semaphore, per-signal cache,
+terminal results cached permanently, degraded rows on a short TTL, and the
+breaker short-circuits without a network call. Any change here would mean
+choosing a half-open-probe threshold with no evidence. **A finding and a fix are
+separate deliverables**, and "the number looked bad once" is not evidence about
+what happens when you change it.
+
 ## Data sources (one-line each)
 
 | Source | Module |
@@ -908,6 +1025,16 @@ periodically — the defects it finds are not the ones CI is shaped to catch.
 - HTMX partials are routes prefixed `/_partial/...` returning HTML fragments.
 - Templates extend `base.html`; `login.html` is the one exception (standalone).
 - Owner-only auth — password gate via `OPS_AUTH_TOKEN` + optional TOTP second factor via `OPS_TOTP_SECRET` (enroll with `python scripts/generate_totp_secret.py`; audit F-08).
+- Numbers reach templates as raw floats; render them through `app/template_filters.py`
+  (`price` / `pct` / `secs`), never as a bare `{{ value }}`. `price` keeps the
+  instrument's own precision because this book spans `64328.80` and `0.02062` in one
+  table; `pct` is fixed-place because a percentage has no tick size. Both render `—`
+  for missing — an em-dash is "the engine did not report this", and `0.00` there is
+  how a blank becomes a finding.
+- In-page controls are filtered for a read-only guest with `may_use(request, path,
+  method)`, off the same `guest_scope` table the gate enforces — never a second list.
+  `tests/test_guest_access.py` derives the requirement by rendering every
+  guest-readable page and driving every form action, `hx-post` and link in it.
 - Templates render unknown payload shapes via `tojson(indent=2)` rather than crashing on shape drift — the engine REST surface is the source of truth, this dashboard adapts to it. (The mobile app's screens follow the same rule: pull fields defensively, fall back to a raw-JSON card.)
 - The `/api/v1` JSON surface (for the native app) authenticates with **ops-issued app-tokens** (`app/app_tokens.py`, stored hashed; `revoke-all` is the lost-phone switch). The engine's owner-tier Bearer must **never** ship inside the APK.
 - Push alerts go through `app/fcm.py` (FCM HTTP v1 via `httpx` + `google-auth` — deliberately no `firebase-admin`) to tokens in `app/device_registry.py` (plain-file registry shared across the web and agent containers; read fresh, mutate under a lock). The whole push path is disabled-safe: no `FIREBASE_SERVICE_ACCOUNT`, no-op.

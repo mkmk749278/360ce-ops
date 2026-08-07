@@ -348,3 +348,111 @@ def test_a_path_with_nothing_classified_refuses_rather_than_scoring_zero():
 def test_path_silence_survives_a_bad_payload():
     assert reduce_path_silence(None) == []
     assert reduce_path_silence(["not a dict"]) == []
+
+
+# ---------------------------------------------------------------------------
+# The ring's denominator (2026-08-07).
+#
+# The engine has counted per-cell evictions since 2026-08-04 and persists them
+# under the reserved ``__evicted__`` key, specifically so the matrix's verdicts
+# could carry their denominator — its docstring quotes this repo's own rule.
+# ``reduce_edge_matrix`` dropped the key on its ``"|" not in str(key)`` guard,
+# so the Strategy Lab published 1,731 cells reading ``n = 50`` (the ring cap)
+# with nothing on screen distinguishing fifty outcomes from five thousand.
+# A field one repo writes and no repo reads — #817 with the arrow reversed.
+# ---------------------------------------------------------------------------
+
+
+def test_edge_matrix_carries_the_eviction_count_the_engine_persists():
+    """Pinned against the engine's real key name and payload shape."""
+    store = {
+        f"MOVER_TREND_PULLBACK|{CTX}": _edge_records(50),
+        f"MEAN_REVERT|{CTX}": _edge_records(20),
+        # Engine shape: {"STRATEGY|context_key": count}, top-level, no "|" in
+        # the reserved key itself so it cannot collide with a cell.
+        "__evicted__": {f"MOVER_TREND_PULLBACK|{CTX}": 4_950},
+    }
+    rows = {r["strategy"]: r for r in reduce_edge_matrix(store)}
+
+    capped = rows["MOVER_TREND_PULLBACK"]
+    assert capped["n"] == 50
+    assert capped["evicted"] == 4_950
+    assert capped["seen"] == 5_000       # n=50 stood for five thousand outcomes
+    assert capped["sampled"] is True
+    assert capped["at_cap"] is True
+
+    # A cell the engine reported and that evicted nothing is a POPULATION, and
+    # must be distinguishable from one the engine said nothing about.
+    sparse = rows["MEAN_REVERT"]
+    assert sparse["evicted"] == 0
+    assert sparse["sampled"] is False
+    assert sparse["at_cap"] is False
+
+    # The reserved key must never itself become a row.
+    assert "__evicted__" not in rows
+
+
+def test_absent_eviction_map_is_unknown_and_never_reads_as_zero():
+    """A missing stamp is not a pass.
+
+    The engine writes ``__evicted__`` only ``if _ev``, so an absent key means
+    either an old engine or a store that never evicted — and nothing here may
+    guess which. Rendering 0 would make an unmeasured cell read as a clean
+    population, which is the flattering direction.
+    """
+    store = {f"MOVER_TREND_PULLBACK|{CTX}": _edge_records(50)}
+    row = reduce_edge_matrix(store)[0]
+
+    assert row["evicted"] is None
+    assert row["seen"] is None
+    assert row["sampled"] is None
+    # `at_cap` is derivable from n alone, so it is still answerable.
+    assert row["at_cap"] is True
+
+    from app.routes.strategy_lab import matrix_sampling
+
+    summary = matrix_sampling(reduce_edge_matrix(store))
+    assert summary["reported"] is False
+    assert summary["sampled"] is None
+    assert summary["evicted_total"] is None
+    assert summary["visible_frac"] is None
+    assert summary["at_cap"] == 1        # still countable without the engine
+
+
+def test_matrix_sampling_is_measured_over_the_whole_matrix_not_the_capped_render():
+    """A sampling summary over the capped rows would describe the worst cells.
+
+    ``split_matrix`` sorts most-evidence-first, so the capped render is exactly
+    the population most likely to be at the ring cap. Measuring the summary
+    there would report the matrix as far more sampled than it is.
+    """
+    from app.routes.strategy_lab import matrix_sampling, split_matrix
+
+    store = {f"S{i}|{CTX}": _edge_records(50) for i in range(3)}
+    store.update({f"T{i}|{CTX}": _edge_records(20) for i in range(3)})
+    store["__evicted__"] = {f"S{i}|{CTX}": 100 for i in range(3)}
+
+    rows = reduce_edge_matrix(store)
+    summary = matrix_sampling(rows)
+
+    assert summary["at_cap"] == 3
+    assert summary["sampled"] == 3
+    assert summary["evicted_total"] == 300
+    assert summary["held_total"] == 3 * 50 + 3 * 20
+    # 210 held of 510 seen — the page can see 41% of what was recorded.
+    assert summary["visible_frac"] == pytest.approx(210 / 510)
+
+    # Same reducer over the capped render would have said 3 of 3 at cap (100%).
+    capped = split_matrix(rows)["rows"]
+    assert matrix_sampling(capped)["at_cap"] == 3
+    assert summary["decidable"] == 6
+
+
+def test_matrix_csv_export_carries_the_denominator():
+    """A spreadsheet is exactly where a rolling window gets averaged with an
+    all-time one, so the stamps ride into the export (the structural lanes'
+    rule, applied to the biggest table in the repo)."""
+    from app.routes.strategy_lab import _MATRIX_COLS
+
+    for col in ("evicted", "seen", "sampled"):
+        assert col in _MATRIX_COLS

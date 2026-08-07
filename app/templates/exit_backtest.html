@@ -32,6 +32,12 @@
   {% include "_exit_backtest_status.html" %}
 </div>
 
+{#- The RESULTS of this backtest are data and stay guest-readable; its TRIGGER
+    is not. A read-only session was shown this whole form plus the run-now link
+    below and could only 403 on both — the nav's filtering rule stopping one
+    layer short of the controls (2026-08-07). `may_use` reads the same scope
+    table the gate enforces, never a second list. -#}
+{% if may_use(request, "/exit-backtest/run", "POST") %}
 <form method="post" action="/exit-backtest/run" class="filters"
       hx-post="/exit-backtest/run" hx-target="#bt-status" hx-swap="innerHTML"
       hx-disabled-elt="find button">
@@ -69,13 +75,28 @@
   </details>
   <button type="submit">Run backtest</button>
 </form>
+{% endif %}
 
+{#- `/exit-backtest/run-now` is a GET that starts a `docker exec` job on the
+    production engine — the load-bearing counter-example to "GET is safe", and
+    the reason the scope table classifies routes rather than trusting methods.
+    It is gated here on the route, not on the method, for exactly that reason. -#}
+{% if may_use(request, "/exit-backtest/run-now") %}
 <p class="muted small">
   Button not responding? Use the plain link (a normal navigation that always
   reaches the server):
   <a href="/exit-backtest/run-now"><b>▶ Run now with defaults</b></a>
   — 6mo · 5m→15m · fixed universe.
 </p>
+{% else %}
+<p class="muted small">
+  <span class="badge badge-warn">READ-ONLY</span>
+  This session can read the results above and download them, but
+  <strong>cannot start a run</strong> — the trigger is owner-only. The controls are
+  hidden rather than shown and refused, because a control that 403s is
+  indistinguishable from a broken page.
+</p>
+{% endif %}
 
 <p class="muted small">
   A <strong>first</strong> 6-month run over the default universe takes ~30 min — not

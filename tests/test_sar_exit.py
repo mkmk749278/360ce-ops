@@ -758,3 +758,92 @@ class TestSarSignalRoutes:
             r = client.get("/signals")
             assert r.status_code == 200
             assert "<h1>Signals</h1>" in r.text
+
+
+# ---------------------------------------------------------------------------
+# The caption must follow the state — ALL of the states (2026-08-07).
+#
+# The 2026-08-06 fix gave `unavailable` its own caption and left every other
+# state sharing one `{% else %}`, so "an empty ledger here means off, not
+# broken" printed beside 800 stamped rows under a LIVE badge. And `live` itself
+# was chosen on `classified > 0` while **0 pairs** had ever completed: an A/B
+# with one arm resolving, reported as a healthy one.
+# ---------------------------------------------------------------------------
+
+from app.routes.sar_exit import reduce_ledger_status as _status  # noqa: E402
+
+
+def _rec(arm: str, classified: bool = True) -> dict:
+    return {
+        "setup_class": f"MOVER_TREND_PULLBACK@{arm}",
+        "classification": "WOULD_WIN" if classified else None,
+    }
+
+
+class TestLedgerStatusStates:
+    def test_resolutions_without_a_completed_pair_are_their_own_state(self):
+        # 2026-08-07 live shape: both arms stamped, only the trailing one ever
+        # classifies, so no pair completes and every rollup row reads MEASURING.
+        records = [_rec("SAREXIT") for _ in range(324)]
+        records += [_rec("SARBASE", classified=False) for _ in range(476)]
+        out = _status(records, [])
+
+        assert out["state"] == "one_armed"
+        assert out["pairs"] == 0
+        assert out["resolved_by_arm"] == {"base": 0, "sar": 324, "other": 0}
+        # The old wording is the thing being retired.
+        assert "stamping and resolving" not in out["detail"]
+
+    def test_completed_pairs_are_live(self):
+        records = [_rec("SAREXIT"), _rec("SARBASE")]
+        out = _status(records, [{"strategy": "MOVER_TREND_PULLBACK"}])
+        assert out["state"] == "live"
+        assert out["resolved_by_arm"]["base"] == 1
+
+    def test_empty_ledger_is_still_dark(self):
+        assert _status([], [])["state"] == "dark"
+
+    def test_stamped_but_nothing_resolved_is_measuring(self):
+        records = [_rec("SAREXIT", classified=False)] * 3
+        assert _status(records, [])["state"] == "measuring"
+
+
+class TestLedgerCaption:
+    """Rendered output — the defect was a sentence, and a sentence is not an
+    assertion until a test reads the page.
+
+    Driven through the REAL `DataVolumeReader` against a real ledger file rather
+    than a stub whose keys we invented: a hand-written collaborator shape
+    asserts your own assumption back at you, which is how `zone_distance_atr`
+    passed its tests over a field nothing produces.
+    """
+
+    def _body(self, tmp_path, records):
+        import json
+        from dataclasses import replace
+
+        from fastapi.testclient import TestClient
+
+        from app.config import load_settings
+        from app.data_sources.data_volume import SAR_LEDGER_FILE, DataVolumeReader
+        from app.main import app
+
+        (tmp_path / SAR_LEDGER_FILE).write_text(json.dumps(records))
+        with TestClient(app) as client:
+            app.state.data_volume = DataVolumeReader(
+                replace(load_settings(), engine_data_dir=str(tmp_path))
+            )
+            client.post("/login", data={"password": "test-token"},
+                        follow_redirects=False)
+            return client.get("/sar-exit").text
+
+    def test_empty_ledger_sentence_never_renders_over_a_full_ledger(self, tmp_path):
+        # Only the trailing arm resolves, so no pair completes — the live shape.
+        body = self._body(tmp_path, [_rec("SAREXIT") for _ in range(20)])
+        assert "An empty ledger here means off, not broken" not in body
+        assert "NO PAIRS" in body
+
+    def test_empty_ledger_sentence_still_renders_when_the_ledger_is_empty(self, tmp_path):
+        body = self._body(tmp_path, [])
+        assert "An empty ledger here means off, not broken" in body
+        assert "NO PAIRS" not in body

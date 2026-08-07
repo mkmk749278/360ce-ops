@@ -86,7 +86,12 @@
       <tr><td>Promotions to unroutable keys (measurement arms, shadow units)</td>
           <td class="{% if s.lifetime.counts.unroutable %}neg{% endif %}">
             <strong>{{ s.lifetime.counts.unroutable }}</strong>
-            {% if s.lifetime.promotions %}({{ "%.0f%%" % s.lifetime.wasted_pct }} of all promotions){% endif %}
+            {#- Measured on the CLASSIFIED rows, and the label says so. The
+                unstamped rows cannot be known routable or not, so including
+                them in this denominator can only drag the figure down — on the
+                one panel built to show how much budget is being wasted. -#}
+            {% if s.lifetime.wasted_pct is not none %}({{ "%.0f%%" % s.lifetime.wasted_pct }}
+            of the {{ s.lifetime.classified }} promotion(s) the engine classified){% endif %}
           </td></tr>
       <tr><td>Prunes (dead overrides removed — not promotions)</td>
           <td>{{ s.lifetime.counts.pruned }}</td></tr>

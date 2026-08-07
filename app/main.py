@@ -20,6 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.app_tokens import AppTokenStore
 from app.auth_mw import AuthRedirectMiddleware
 from app import guest_scope
+from app import template_filters
 from app.guest_access import GuestAccessStore
 from app.totp import TotpGate
 from app.device_registry import DeviceRegistry
@@ -82,6 +83,13 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 # nav that mirrored the scope table would drift from it, and the drift is
 # invisible until somebody clicks a link that 403s.
 templates.env.globals["GUEST_READ_ROUTES"] = guest_scope.GUEST_READ_ROUTES
+# …and so does every in-page CONTROL, which the nav filtering had stopped one
+# layer short of: a read-only session was being shown a POST form and a
+# job-trigger link it could only 403 on. Same table, same two rules.
+templates.env.globals["may_use"] = guest_scope.may_use
+# `price` / `pct` / `secs` — a bare {{ value }} renders float repr, and several
+# live pages were doing exactly that (see app/template_filters.py).
+template_filters.register(templates.env)
 
 
 @asynccontextmanager

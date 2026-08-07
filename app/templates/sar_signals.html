@@ -129,6 +129,11 @@
 </section>
 {% endif %}
 
+{#- Irreversible, owner-only, and it was being rendered in full to a read-only
+    guest — confirm checkbox, danger button and all. Found by the derived sweep
+    in tests/test_guest_access.py rather than by reading the page, which is the
+    point of deriving it. -#}
+{% if may_use(request, "/signals/sar/clear", "POST") %}
 <section class="card">
   <h2 class="small">Clear the ledger</h2>
   <p class="muted small">
@@ -151,6 +156,7 @@
     <button type="submit" class="btn btn-danger">Clear SAR ledger</button>
   </form>
 </section>
+{% endif %}
 
 <form method="get" action="/signals/sar" class="filters">
   <label>Source

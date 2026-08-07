@@ -376,6 +376,9 @@ async def dark_signals(
             "params": params,
             "degraded": sum(1 for r in rows if r["degraded"]),
             "ban_seconds": int(ban_seconds),
+            # Binance's own words, or empty. The page reports this and names no
+            # cause of its own — see the template comment.
+            "ban_reason": klines.ban_reason if klines.circuit_open else "",
             "n_closed": len(closed),
             "window": window,
             "view": view,

@@ -15,6 +15,7 @@
   <h2>Measurement state</h2>
   <p class="small">
     {% if status.state == 'live' %}<span class="badge st-done">LIVE</span>
+    {% elif status.state == 'one_armed' %}<span class="badge sev-high">NO PAIRS</span>
     {% elif status.state == 'measuring' %}<span class="badge st-partial">MEASURING</span>
     {% elif status.state == 'dark' %}<span class="badge st-open">DARK</span>
     {% else %}<span class="badge sev-high">UNAVAILABLE</span>{% endif %}
@@ -33,14 +34,43 @@
       caption asserting a benign cause for a state that has a different cause is
       the "blank needs a cause before it gets a caption" rule broken from the
       caption's side. -#}
+  {#- …and the fix only covered ONE of the states it does not describe. The
+      catch-all else branch below took `dark`, `measuring` AND `live` together,
+      so on 2026-08-07 the sentence "an empty ledger here means off, not
+      broken" printed beside 800 stamped rows under a LIVE badge. It belongs to
+      the `dark` state alone; every other state now gets a caption about
+      itself. -#}
   {% if status.state == 'unavailable' %}
   <p class="muted small"><strong>This is not the dark flag being off.</strong> The ledger
   was found and could not be read ({{ status.detail }}), so every count above is
   <em>unknown</em>, not zero — nothing on this page describes the mechanism until it loads.</p>
-  {% else %}
+  {% elif status.state == 'dark' %}
   <p class="muted small">The arm ships <strong>dark</strong>: it stamps nothing until
   <code>sar_exit_shadow_enabled</code> is switched on. An empty ledger here means off, not broken.
   Observe-only either way — no live exit, FSM transition or dispatch reads any of this, and
+  activating a SAR exit is a separate owner-signed change.</p>
+  {% elif status.state == 'one_armed' %}
+  <p class="muted small"><strong>This is not the dark flag being off, and it is not
+  "still warming up".</strong> {{ status.detail }}
+  {% if status.resolved_by_arm %}
+  Of {{ status.classified }} resolution(s),
+  <strong>{{ status.resolved_by_arm.get('sar', 0) }}</strong> are the SAR arm
+  (<code>@SAREXIT</code>) and
+  <strong>{{ status.resolved_by_arm.get('base', 0) }}</strong> are the live-geometry
+  control (<code>@SARBASE</code>).
+  {% if not status.resolved_by_arm.get('base', 0) %}
+  With no control resolutions the ΔR column below can never fill, however long this
+  runs — every row will read <code>MEASURING</code> because one arm has n = 0.
+  The two arms do not resolve on the same clock: a trailing arm may classify as soon
+  as its forward candles cover the exit, while the static control must wait its whole
+  48h window, so anything that ages records out before that window elapses removes the
+  control arm and only the control arm.
+  {% endif %}
+  {% endif %}
+  Observe-only either way — no live exit, FSM transition or dispatch reads any of this.</p>
+  {% else %}
+  <p class="muted small">Both arms are stamping and resolving into complete pairs.
+  Observe-only — no live exit, FSM transition or dispatch reads any of this, and
   activating a SAR exit is a separate owner-signed change.</p>
   {% endif %}
   {% if sampling and sampling.get('sampled') %}
