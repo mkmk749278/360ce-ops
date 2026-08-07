@@ -220,7 +220,27 @@ class DataVolumeReader:
         return self._load("market_context.json")
 
     def suppressed_candidates(self) -> Any:
-        return self._load("suppressed_candidates.json")
+        """Gate-suppression stamps — **unwrapped**, because the engine wraps them.
+
+        `SuppressedCandidateStore._save` writes `{"schema": 2, "records": [...],
+        "evicted_by_gate": {...}, "stamped_total": N}` to *both* the files it
+        owns. On 2026-08-06 `/signals/sar` was found reading the SAR one as a
+        bare list and `_unwrap_records` was written to fix it — and applied to
+        that loader only. This file is written by the **same** store, gained the
+        **same** envelope in the **same** commit, and kept reading raw.
+
+        The cost was not a crash: `reduce_gate_metrics` iterated a dict, got its
+        keys, and the Strategy Lab rendered *"No suppressed candidates stamped
+        yet"* over a store the router had been stamping since 2026-08-02. Five
+        days of `router:<reason>:<setup_class>` rows — the only data that can
+        say whether one path is consuming the shared concurrency caps — read as
+        an empty feature.
+
+        "When a fix is described as structural, name the paths it covers and
+        check each one" (`360-v2 CLAUDE.md`). That day's fix named the store and
+        covered one reader of it.
+        """
+        return _unwrap_records(self._load("suppressed_candidates.json"))
 
     def strategy_edge(self) -> Any:
         return self._load("strategy_edge_store.json")
