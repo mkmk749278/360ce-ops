@@ -88,7 +88,17 @@ def summarize(rows: list[dict], *, fee_pct: float) -> dict:
     closed = [r for r in rows if _f(r.get("pnl_pct")) is not None]
     open_rows = [r for r in rows if _f(r.get("pnl_pct")) is None]
 
+    # Three buckets, never two. An EXPIRED row is scored 0.0% by the engine —
+    # a walked window in which neither level was touched — so it is *flat*, not
+    # a loss. Folding it into the loss count is how 80 trades that lost nothing
+    # got reported as losing trades, and it moves the win rate by 5pp
+    # (115W/462 = 25%, 115W/382 decided = 30%). The rate is published on both
+    # denominators because both are defensible and they describe genuinely
+    # different populations; neither is called "the" win rate.
     wins = sum(1 for r in closed if (_f(r.get("pnl_pct")) or 0.0) > 0)
+    losses = sum(1 for r in closed if (_f(r.get("pnl_pct")) or 0.0) < 0)
+    flats = len(closed) - wins - losses
+    decided = wins + losses
     gross = sum(_f(r.get("pnl_pct")) or 0.0 for r in closed)
     # One round trip per trade, charged to every row — including the winners.
     fees = fee_pct * len(closed)
@@ -108,8 +118,11 @@ def summarize(rows: list[dict], *, fee_pct: float) -> dict:
         "n_closed": len(closed),
         "n_open": len(open_rows),
         "wins": wins,
-        "losses": len(closed) - wins,
+        "losses": losses,
+        "flats": flats,
+        "n_decided": decided,
         "win_rate": (wins / len(closed) * 100.0) if closed else None,
+        "win_rate_decided": (wins / decided * 100.0) if decided else None,
         "gross_pct": gross if closed else None,
         "fees_pct": fees if closed else None,
         "net_pct": net if closed else None,
@@ -165,6 +178,112 @@ def concentration(rows: list[dict]) -> dict:
         "top": top,
         "rows_per_move": len(rows) / len(counts),
         "n_symbols": len(symbols),
+    }
+
+
+#: Three times the engine's 30-minute per-symbol emit throttle. Rows on one
+#: symbol and one side closer together than this are re-entries into the same
+#: directional run, not independent reads of the market.
+EPISODE_GAP_S = 5_400.0
+
+
+def episodes(rows: list[dict], *, fee_pct: float) -> dict:
+    """Concentration the move-dedup key above **cannot** see, by construction.
+
+    `concentration()` keys on ``symbol · side · entry`` to catch the same sweep
+    re-stamped at the same price. That is the right key for its own question and
+    it is the wrong one for this page's verdict, because **a trending symbol
+    hands out a different entry every time**. On the 2026-08-07 book it read
+    1.12 rows/move and "largest single move = 1.0% of all rows" — which a reader
+    takes as *concentration is not a problem here*.
+
+    It was. BEATUSDT whipsawed across a 24% range (1.975–2.450) and the lane
+    bought reclaimed support ten times through it, every 30 minutes, exactly as
+    throttled — ten different entries, so ten distinct "moves", **none of which
+    won**. The worst nine of them form one run contributing **−85.71%** against
+    a whole-book net of −78.25%. One symbol, one side, 4.5 hours: remove that
+    run and the book reads **+7.46%**. The verdict's *sign* was one episode.
+
+    Worth reading beside the regime split further down the page: **eight of
+    those ten longs were stamped `TRENDING_UP`** (mean −10.19%). The program
+    doc's diagnosis is that this lane has no context layer — true, but a context
+    layer keyed on the regime label as stamped would have *confirmed* these
+    entries, not filtered them. That is a fact about the labels on this run, not
+    a verdict on the detector; it is here so the reader checks it before
+    treating "add a context layer" as the fix this page recommends. It
+    recommends nothing.
+
+    This is #816 ("a throttle on rate is not a throttle on evidence") arriving
+    at the display side, and this repo's own rule — *disclose concentration,
+    don't silently average it*. Nothing here de-duplicates: episodes are counted
+    and named beside the row count, because de-duplicating is a judgement call
+    and the reader makes it, not us.
+    """
+    empty = {
+        "n_rows": len(rows), "n_episodes": 0, "rows_per_episode": 0.0,
+        "worst": None, "book_net": None, "multi_row_share": 0.0,
+    }
+    if not rows:
+        return empty
+
+    runs: dict[tuple[str, str], list[dict]] = {}
+    for r in rows:
+        runs.setdefault((str(r.get("symbol") or "?"), str(r.get("side") or "?")), []).append(r)
+
+    grouped: list[tuple[str, str, list[dict]]] = []
+    for (sym, side), v in runs.items():
+        v = sorted(v, key=lambda r: _f(r.get("emitted_at")) or 0.0)
+        run = [v[0]]
+        for prev, cur in zip(v, v[1:]):
+            a, b = _f(prev.get("emitted_at")), _f(cur.get("emitted_at"))
+            if a is not None and b is not None and (b - a) < EPISODE_GAP_S:
+                run.append(cur)
+            else:
+                grouped.append((sym, side, run))
+                run = [cur]
+        grouped.append((sym, side, run))
+
+    if not grouped:
+        return empty
+
+    def _net(rs: list[dict]) -> float | None:
+        c = [x for x in rs if _f(x.get("pnl_pct")) is not None]
+        if not c:
+            return None
+        return sum(_f(x.get("pnl_pct")) or 0.0 for x in c) - fee_pct * len(c)
+
+    book = _net(rows)
+    scored = [(s, d, g, _net(g)) for s, d, g in grouped]
+    losing = [x for x in scored if x[3] is not None]
+    worst = min(losing, key=lambda x: x[3]) if losing else None
+
+    worst_out = None
+    if worst is not None:
+        sym, side, g, n = worst
+        stamps = [_f(r.get("emitted_at")) for r in g]
+        stamps = [s for s in stamps if s is not None]
+        hours = (max(stamps) - min(stamps)) / 3600.0 if len(stamps) >= 2 else 0.0
+        worst_out = {
+            "label": f"{sym} {side}", "n_rows": len(g), "hours": hours, "net_pct": n,
+            # Only meaningful while the book is negative: "this one run accounts
+            # for N% of everything the lane lost". A share over 100% means the
+            # rest of the book is net positive without it.
+            "share_of_book": (n / book * 100.0) if (book is not None and book < 0) else None,
+            # Exactly this episode's rows, not the whole symbol: the reader is
+            # being told what one directional run cost, so removing unrelated
+            # rows that happen to share a ticker would overstate it.
+            "book_without": _net([r for r in rows if id(r) not in {id(x) for x in g}]),
+        }
+
+    multi = sum(len(g) for _, _, g in grouped if len(g) > 1)
+    return {
+        "n_rows": len(rows),
+        "n_episodes": len(grouped),
+        "rows_per_episode": len(rows) / len(grouped),
+        "worst": worst_out,
+        "book_net": book,
+        "multi_row_share": multi / len(rows),
+        "gap_minutes": EPISODE_GAP_S / 60.0,
     }
 
 
@@ -417,6 +536,7 @@ async def price_action_page(
     summary = summarize(rows, fee_pct=fee)
     sources = by_level_source(rows)
     conc = concentration(rows)
+    eps = episodes(rows, fee_pct=fee)
     regimes_entry = by_regime(rows, fee_pct=fee, key="regime")
     regimes_trigger = by_regime(rows, fee_pct=fee, key="regime_15m")
     regime_tfs = regime_timeframes(rows)
@@ -432,6 +552,7 @@ async def price_action_page(
             "summary": summary,
             "sources": sources,
             "concentration": conc,
+            "episodes": eps,
             "regimes_entry": regimes_entry,
             "regimes_trigger": regimes_trigger,
             "regime_tfs": regime_tfs,
