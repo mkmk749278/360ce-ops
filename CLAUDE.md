@@ -108,6 +108,14 @@ sentence that recommends an action, falsify the action, not just the number.
 
 Every change ships via PR. Fresh topic branch off `main`. Design-summary in the PR body before code review. Never push to `main` directly — auto-deploy on `main` push ships in ~60s and bypasses review.
 
+**Wait ~4 minutes before checking CI here.** That is what this repo's `lint +
+tests` job takes; the engine is ~6 min and `lumin-app` ~10 min. Polling a check
+run that cannot have finished yet burns API calls and turns one wait into six —
+sleep the known duration first, *then* read the conclusion. These are expected
+durations, not deadlines: a job still running at the mark gets another wait. If
+the number drifts materially, update it here rather than re-learning it every
+session.
+
 ## What the Strategy Lab is (and what it must not do)
 
 `/strategy-lab` is the owner-facing surface of the engine's **Autonomous Portfolio**
@@ -757,12 +765,77 @@ and a list kept in ops is silent by construction on the next label.
 
 ### Read n first, and say how many cells
 
-The whole closed book is under 100 rows. `round` levels read 55% win over 11
-closed rows while every swing timeframe sits at 0% — interesting because it cuts
-*against* the program doc, and **CI [28%, 79%], best of 16 cells drawn**. It is
-not a finding. `FAILED_AUCTION_RECLAIM` (+0.846R on three rows, CI [−1.00,
-+2.00], promotion requested within the day) is the standing example of what
-reading a thin cell costs.
+`FAILED_AUCTION_RECLAIM` (+0.846R on three rows, CI [−1.00, +2.00], promotion
+requested within the day) is the standing example of what reading a thin cell
+costs. **Nothing on this page asserts a fixed book size** — two sentences here
+did, and both had outlived their data within a day (*"the whole closed book is
+under 50 rows"* printed above 462; *"expected to be almost all unstamped today"*
+above a book 16% unstamped). Every count on the page derives from the rows.
+
+### Layer 1 — Context, the layer the lane did not have (2026-08-07)
+
+Added with engine #897, for the owner's question *"why don't we make them
+meaningful signals first"*. The answer was not a better filter over the stamped
+columns: **§1 of the program doc defines price action as a four-layer read and
+the lane had three.** Location (LevelBook), Trigger (sweep + reclaim) and
+Confirmation (footprint delta) shipped; **Context never did**, while the engine's
+`volume_profile.py` had computed POC and the value area all along.
+
+A sweep + reclaim is a **failed break**, so it is mean reversion: it pays in
+**balance** and traps in **imbalance**, and **those two states have an identical
+layer-2/3/4 signature**. That is why every column on this page read like noise —
+the discriminating variable was not in the data at all.
+
+Rules the two panels carry, each one already in this file arriving from a new
+direction:
+
+- **`unstamped` is its own bucket** and the stamps are **not backfillable** — the
+  value area at entry is knowable only at entry. The table is ~100% unstamped the
+  day it ships and the copy says to expect that, because a blank needs a cause
+  before it gets a caption.
+- **The shadow rule says which half of its cutoff is fitted.** "Inside the value
+  area" is the value area's own 70%-of-volume definition and predates the lane;
+  *which* layer-1 conditions to combine was chosen while looking at this book. So
+  its first number is a hypothesis this window **generated**, not one it tested.
+  The owner asked for it knowing that — the panel says it anyway, because the
+  next reader was not in that conversation, and a route test asserts the word
+  stays on screen.
+- **Three buckets, never two**, with the **abstain fraction printed first**;
+  folding rows whose layer 1 never computed into `keep` is how a rule takes
+  credit for rows it never filtered.
+- **The baseline is the whole book and does not move** with the rule's coverage
+  (a test pins it); the *decided* population is published beside it so a rule
+  that abstained on most of the book cannot read as one tested on it.
+- **`vp_poc_room_pct` is signed toward the trade**, so positive always means
+  "POC is ahead of *this* trade". Raw distance flips for longs — PUMPUSDT's first
+  live row reads `+0.631%` where raw would read negative.
+
+### Concentration: the move key cannot see a trending symbol
+
+`concentration()` keys on `symbol · side · entry`, which is right for one sweep
+re-stamped at one price and **structurally blind to a moving symbol** — a trend
+hands out a new entry every time. On 2026-08-07 it read `1.12 rows/move` and
+*"largest single move = 1.0% of all rows"*, i.e. *concentration is not a problem
+here*, over a book where **BEATUSDT whipsawed 24%, the lane bought reclaimed
+support ten times, none won, and the worst nine formed one 4.5h run worth −85.71%
+against a whole-book net of −78.25%**. Removing that one run read +7.46%: *the
+sign of the verdict was one episode.*
+
+The episode panel sits **beside** the move panel rather than replacing it — they
+answer different questions — and **nothing de-duplicates**, because that
+judgement is the reader's and counting silently is what the panel exists to stop.
+#816 (*a throttle on rate is not a throttle on evidence*) arriving at the display
+side.
+
+### A flat expiry is not a loss
+
+The engine scores `EXPIRED` at **0.00%** — a walked window in which neither level
+was touched. `losses = n_closed - wins` swept every zero into the loss count, so
+the page read `115W / 347L` where the book was `115W / 267L / 80 flat`, and 25%
+where the rows that actually resolved to a level read 30%. Both denominators are
+published and neither is called *the* win rate; a flat row still pays its round
+trip, so it stays in the money figures. "Three buckets, never two", arriving at
+the win-rate line.
 
 ## The read-only door (`/guest`) — a second tier that can never write
 
