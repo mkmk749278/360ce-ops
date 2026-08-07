@@ -635,8 +635,8 @@
         <td>
           {% if r.pnl_pct is not none %}
           <span class="{{ 'good' if r.pnl_pct > 0 else 'bad' }}">{{ '%+.2f'|format(r.pnl_pct) }}%</span>
-          {% elif r.unrealized_pct is not none %}
-          <span class="muted">{{ '%+.2f'|format(r.unrealized_pct) }}%</span>
+          {% elif r.get('unrealized_pct') is not none %}
+          <span class="muted">{{ '%+.2f'|format(r.get('unrealized_pct')) }}%</span>
           <span class="muted small">unrealized</span>
           {% else %}—{% endif %}
         </td>

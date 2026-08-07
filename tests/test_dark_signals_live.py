@@ -256,11 +256,33 @@ def test_a_mark_never_lands_in_a_realized_column():
 
 
 def test_a_closed_row_is_never_marked():
+    """The invariant is that a closed row carries no *mark* — not that it
+    carries no *key*.
+
+    This used to assert `"current_price" not in row`, which pinned the
+    mechanism rather than the rule, and the mechanism was itself the defect: the
+    present-but-None block sat below the status check, so the columns the
+    template is promised on every row existed only on the rows about to be
+    marked. A terminal, deliberately unscored `INSUFFICIENT` row therefore had
+    neither a realized figure nor a defined unrealized one, and Jinja's
+    `Undefined` walks straight through `is not none` — two of them 500'd
+    `/signals/price-action` on 2026-08-07.
+
+    So: every marked column present and **None**, and the realized column
+    untouched.
+    """
     from app.routes.dark_signals_live import mark_live_pnl
 
     row = _row(status="CLOSED_SL", r=-1.0)
     (row,) = mark_live_pnl([row], {"AAAUSDT": 103.0})
-    assert "current_price" not in row and row["r_multiple"] == -1.0
+    for key in (
+        "current_price", "unrealized_pct", "unrealized_r",
+        "room_to_sl_pct", "room_to_tp1_pct",
+    ):
+        assert key in row, f"{key} must be present so the template can test it"
+        assert row[key] is None, f"{key} is a mark on a closed row"
+    assert row["level_crossed"] == ""
+    assert row["r_multiple"] == -1.0
 
 
 def test_a_row_without_the_engines_sl_distance_gets_a_percentage_and_no_R():
