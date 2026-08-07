@@ -68,6 +68,9 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/signals/structural-veto",
         "/signals/price-action",
         "/signals/price-action/export.csv",
+        # Read-only census of what the router dropped. No control, no write —
+        # it renders counters the engine already publishes.
+        "/signals/router-drops",
         # -- performance ----------------------------------------------------
         "/profit",
         "/profit/export.csv",

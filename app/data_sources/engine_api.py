@@ -139,6 +139,22 @@ class EngineApiClient:
         """
         return await self._get("/internal/diag/data-intake")
 
+    async def router_delivery(self) -> Any:
+        """What the router did with what it dequeued — the last hop to a user.
+
+        Enqueue is not delivery. `SignalRouter._process` rejects on twelve
+        conditions and counts each keyed by reason **and** `reason:setup_class`.
+        Until 2026-08-07 the only caller of `delivery_stats()` was a log line
+        that printed the un-keyed half, so the per-setup breakdown — the one
+        that says whether a high-volume path is eating the concurrency caps —
+        existed and was readable by nobody.
+
+        Owner-tier. In isolated mode the router lives in the engine container
+        and its counters are in-process ints, so this is served from the
+        snapshot that container publishes.
+        """
+        return await self._get("/internal/diag/router-delivery")
+
     async def activity(self, setup_class: str | None = None) -> Any:
         params: dict[str, str] = {}
         if setup_class:
