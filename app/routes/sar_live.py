@@ -194,6 +194,87 @@ def reduce_arms(payload: Any) -> tuple[list[dict], list[dict]]:
     return live, done
 
 
+#: How the coverage block reads when the engine has not written one. Its own
+#: state, never a zero: "the engine is older than this panel" and "the lane
+#: covered nothing" have completely different next moves, and rendering the
+#: second for the first is how a blank gets the wrong caption.
+COVERAGE_UNREPORTED = "unreported"
+
+
+def reduce_coverage(payload: Any) -> dict:
+    """What fraction of the delivered book this verdict was able to look at.
+
+    **Every other panel on this page grades arms that EXIST.** The anchor panel
+    excludes replayed arms, the status filter excludes ``INSUFFICIENT`` ones,
+    and both are careful and correct — and none of them can see a delivered
+    signal that never became an arm at all. That was the largest exclusion of
+    the lot and it had no counter anywhere in either repo.
+
+    Guest-session audit 2026-08-08, joining this ledger to the closed-signal
+    record over the arm window: **124 of 152 delivered trades had an arm
+    (81.6%), and the 28 without ran −1.643%/trade at 10.7% win, 67.9% SL_HIT,
+    against +0.753% and 43.5% for the armed ones.** So "+0.588%/arm" was
+    measured on a winner-enriched subset and presented as the mechanism's
+    result on our book. That is #832's own rule — *what fraction of the
+    population resolved, and is the unresolved part random?* — applied
+    rigorously one step too late.
+
+    Three states, never two. ``fully`` / ``partly`` / ``unarmed``: an arm on 5m
+    and none on 15m is neither covered nor missing, and the two timeframes are
+    reported as independent experiments everywhere else on this page.
+    """
+    block = payload.get("coverage") if isinstance(payload, dict) else None
+    if not isinstance(block, dict):
+        return {"state": COVERAGE_UNREPORTED}
+    seen = int(_f(block.get("signals_seen")) or 0)
+    full = int(_f(block.get("fully_armed")) or 0)
+    part = int(_f(block.get("partly_armed")) or 0)
+    none = int(_f(block.get("unarmed")) or 0)
+    reasons = block.get("reasons")
+    misses = block.get("misses")
+    evicted = _f(block.get("evicted"))
+    return {
+        "state": "reported",
+        "signals_seen": seen,
+        "fully_armed": full,
+        "partly_armed": part,
+        "unarmed": none,
+        # The headline. Partly-armed counts as NOT fully covered, because the
+        # timeframe that is missing is the one whose arm would have been in the
+        # verdict — rounding it up to "covered" is the flattering direction.
+        "covered_pct": (100.0 * full / seen) if seen else None,
+        "uncovered": part + none,
+        # Iterate the ENGINE's reasons, never a list kept here. A reason ops has
+        # never heard of renders under its raw name rather than being dropped —
+        # `MEASUREMENT_SUFFIXES` drifted for a week and the fix for a drifting
+        # mirror is not a second mirror.
+        "reasons": dict(reasons) if isinstance(reasons, dict) else {},
+        "misses": [m for m in misses if isinstance(m, dict)] if isinstance(misses, list) else [],
+        # Tri-state, like the edge matrix's eviction count: ``None`` means the
+        # engine did not say, never "nothing was evicted".
+        "evicted": int(evicted) if evicted is not None else None,
+        "cap": int(_f(block.get("cap")) or 0) or None,
+    }
+
+
+#: One sentence per refusal reason. COPY, looked up by the engine's key — the
+#: page iterates the payload and falls back to the raw name badged
+#: `unclassified`, so tomorrow's reason is visible rather than absent.
+COVERAGE_REASON_COPY = {
+    "no_series": (
+        "the candle store held no usable series for that symbol and timeframe "
+        "when the signal appeared, so there was no bar to anchor an arm to. "
+        "Overwhelmingly promoted movers, which carry no WS kline subscription "
+        "and are re-seeded by REST on a throttle."
+    ),
+    "stale_anchor": (
+        "a series existed but its newest closed bar was itself hours old. The "
+        "engine refuses rather than anchoring to it — an arm born on a stale "
+        "bar walks history on its first advance and publishes a replay (#836)."
+    ),
+}
+
+
 def filter_arms(
     rows: list[dict],
     *,
@@ -702,6 +783,14 @@ def _view(request: Request, tab: str, **selectors: str) -> dict:
         "provenance": provenance,
         "live_rows": live_rows,
         "resolved_rows": resolved_rows,
+        # Coverage is a fact about the whole book and is deliberately NOT
+        # filtered with the table: a selector narrows which arms you are
+        # looking at and cannot change how much of the delivered book the lane
+        # was able to arm in the first place. The panel says so on screen, so
+        # it is not read as a summary of the current selection (#90 in the
+        # other direction — the exception, stated, rather than a silent one).
+        "coverage": reduce_coverage(payload),
+        "coverage_copy": COVERAGE_REASON_COPY,
         "tab": tab,
         "selectors": selectors,
     }
@@ -766,6 +855,9 @@ async def sar_live(
             1 for r in scoped_align if r.get("handover_wider_than_sl") is True
         ),
         "anchor": count_anchor_verdicts(selected),
+        # Unfiltered by design — see `reduce_coverage` and the panel's own copy.
+        "coverage": ctx["coverage"],
+        "coverage_copy": ctx["coverage_copy"],
         "timeframes": sorted({r["timeframe"] for r in base if r.get("timeframe")}),
         "governors": sorted({r["governor"] for r in base if r.get("governor")}),
         "statuses": sorted({r["status"] for r in base if r.get("status")}),
