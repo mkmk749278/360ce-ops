@@ -78,6 +78,40 @@ DARK_EMISSION_FILE = f"dark_signals_live_v{DARK_EMISSION_VERSION}.json"
 DARK_SAR_VERSION = 1
 DARK_SAR_FILE = f"dark_sar_arms_v{DARK_SAR_VERSION}.json"
 
+#: ATR-trail (Chandelier) arms — the SECOND exit mechanism, measured forward on
+#: the same signals and the same bars as SAR (engine ``src/atr_trail_live.py``,
+#: added 2026-08-09 on the owner's "exactly implement same for ATR-trail").
+#:
+#: **Four populations, four files, and the split is not cosmetic.** The
+#: delivered ledgers are the evidence for changing what subscribers receive and
+#: every row in them reached a subscriber; a dark row reached nobody. Pooling
+#: either axis — mechanism or delivery — would inflate that evidence silently,
+#: because a reader who has not heard of the second population cannot filter it
+#: out, whereas a reader pointed at a file they do not open cannot see it at
+#: all.
+ATR_TRAIL_VERSION = 1
+ATR_TRAIL_FILE = f"atr_trail_arms_v{ATR_TRAIL_VERSION}.json"
+DARK_ATR_TRAIL_VERSION = 1
+DARK_ATR_TRAIL_FILE = f"dark_atr_trail_arms_v{DARK_ATR_TRAIL_VERSION}.json"
+
+#: Mechanism keys, mirroring the engine's ``trail_mechanisms.MECH_*``. These are
+#: the only mirrored strings in this lane, and they are *keys* rather than
+#: copy — every label, parameter and direction flag is read out of the
+#: ``mechanism`` manifest the engine writes into each file. A mechanism ops has
+#: never heard of therefore renders under its raw key rather than vanishing.
+MECH_SAR = "sar"
+MECH_CHANDELIER = "chandelier"
+
+#: ``(mechanism, dark) -> filename``. One table, so a page cannot reach a lane
+#: by assembling a filename of its own — the drift that would silently point two
+#: surfaces at different populations while both looked healthy.
+TRAIL_ARM_FILES: dict[tuple[str, bool], str] = {
+    (MECH_SAR, False): SAR_LIVE_FILE,
+    (MECH_SAR, True): DARK_SAR_FILE,
+    (MECH_CHANDELIER, False): ATR_TRAIL_FILE,
+    (MECH_CHANDELIER, True): DARK_ATR_TRAIL_FILE,
+}
+
 #: MVRTP entry-feature stamps (engine ``src/entry_features.py``). What CVD,
 #: book depth, funding, the level book and pullback shape said at the moment
 #: each MOVER_TREND_PULLBACK signal was created — inputs that path has never
@@ -97,7 +131,6 @@ STRUCTURAL_SNAP_FILE = f"structural_snap_v{STRUCTURAL_SNAP_VERSION}.json"
 STRUCTURAL_VETO_VERSION = 1
 STRUCTURAL_VETO_FILE = f"structural_veto_v{STRUCTURAL_VETO_VERSION}.json"
 
-_SAR_LIVE_RE = re.compile(r"^sar_live_arms_v(\d+)\.json$")
 
 
 class DataVolumeReader:
@@ -377,7 +410,7 @@ class DataVolumeReader:
         carries the stop the mechanism would have had parked *right now* rather
         than a level reconstructed afterwards.
         """
-        return self._load(SAR_LIVE_FILE)
+        return self.trail_arms(MECH_SAR, dark=False)
 
     # -- Dark emission lane (engine: src/dark_emission.py) --------------- #
 
@@ -410,7 +443,91 @@ class DataVolumeReader:
         produced from the same entry. Neither is "the" outcome — that is the
         whole point of showing both.
         """
-        return self._load(DARK_SAR_FILE)
+        return self.trail_arms(MECH_SAR, dark=True)
+
+    # -- Trailing-exit arms, by (mechanism, delivery) --------------------- #
+    #
+    # Four populations, one accessor.  The named methods above stay because
+    # other pages call them, and they now delegate here rather than repeating a
+    # filename: two spellings of one lookup is how two surfaces end up reading
+    # different files while both look healthy.
+
+    def trail_arms(self, mechanism: str, dark: bool = False) -> Any:
+        """One lane's forward-stepped exit arms (engine ``src/sar_live_shadow.py``).
+
+        Every row was stepped bar by bar while the trade was open, so an open
+        row carries the stop the mechanism *would have parked right now* — the
+        thing no replay can produce.  ``mechanism`` selects SAR or the ATR
+        trail; ``dark`` selects the delivered book or the dark feed.
+
+        Refuses an unknown lane rather than falling back to SAR: a page handed a
+        mechanism this build has never heard of must render "not available",
+        never another mechanism's numbers under its heading.
+        """
+        name = TRAIL_ARM_FILES.get((str(mechanism), bool(dark)))
+        if name is None:
+            return None
+        return self._load(name)
+
+    def trail_arms_provenance(self, mechanism: str, dark: bool = False) -> dict[str, Any]:
+        """Which file this lane reads, and when the engine last wrote it.
+
+        ``age_sec`` is the number the live tab leads with, and it is only
+        meaningful because the engine writes on a **60s heartbeat** rather than
+        only when an arm changes.  That is what separates the three states a
+        reader needs: file missing = the loop is not running the arms; current
+        but empty = running with nothing open (the quiet case); stale = the loop
+        stopped stepping.  The engine's first cut wrote only on change, so an
+        idle engine produced no file at all and this page reported a fault that
+        was not happening (owner-caught 2026-07-30, minutes after deploy).
+
+        The dark lanes sweep on the maintenance loop's slower period, so what
+        counts as stale differs — the caller supplies that bound, this only
+        reports the age.
+        """
+        name = TRAIL_ARM_FILES.get((str(mechanism), bool(dark)))
+        info: dict[str, Any] = {
+            "file": name,
+            "mechanism": str(mechanism),
+            "dark": bool(dark),
+            "exists": False,
+            "modified_at": None,
+            "age_sec": None,
+            "newer_version": None,
+            "newer_file": None,
+        }
+        if name is None:
+            return info
+        # The version scan is derived from the filename rather than from a
+        # hand-written regex per lane: a lane whose scan nobody added would
+        # silently never notice the engine moving to v2, which is precisely the
+        # failure the scan exists to catch.
+        stem = re.sub(r"_v\d+\.json$", "", name)
+        version = int(re.search(r"_v(\d+)\.json$", name).group(1))
+        info["version"] = version
+        pattern = re.compile(rf"^{re.escape(stem)}_v(\d+)\.json$")
+        try:
+            path = self._dir / name
+            if path.exists():
+                info["exists"] = True
+                mtime = path.stat().st_mtime
+                info["modified_at"] = datetime.fromtimestamp(
+                    mtime, tz=timezone.utc
+                ).strftime("%Y-%m-%d %H:%M UTC")
+                info["age_sec"] = max(
+                    0.0, datetime.now(timezone.utc).timestamp() - mtime
+                )
+            newest = version
+            for entry in self._dir.iterdir():
+                m = pattern.match(entry.name)
+                if m and int(m.group(1)) > newest:
+                    newest = int(m.group(1))
+            if newest > version:
+                info["newer_version"] = newest
+                info["newer_file"] = f"{stem}_v{newest}.json"
+        except OSError:
+            pass
+        return info
 
     def dark_signals_provenance(self) -> dict[str, Any]:
         """Which dark-lane file, and when the engine last wrote it.
@@ -465,35 +582,7 @@ class DataVolumeReader:
         So: a file older than a couple of minutes means the loop is not stepping
         the arms — never that the market is quiet.
         """
-        info: dict[str, Any] = {
-            "file": SAR_LIVE_FILE,
-            "version": SAR_LIVE_VERSION,
-            "exists": False,
-            "modified_at": None,
-            "age_sec": None,
-            "newer_version": None,
-            "newer_file": None,
-        }
-        try:
-            path = self._dir / SAR_LIVE_FILE
-            if path.exists():
-                info["exists"] = True
-                mtime = path.stat().st_mtime
-                info["modified_at"] = datetime.fromtimestamp(
-                    mtime, tz=timezone.utc
-                ).strftime("%Y-%m-%d %H:%M UTC")
-                info["age_sec"] = max(0.0, datetime.now(timezone.utc).timestamp() - mtime)
-            newest = SAR_LIVE_VERSION
-            for entry in self._dir.iterdir():
-                m = _SAR_LIVE_RE.match(entry.name)
-                if m and int(m.group(1)) > newest:
-                    newest = int(m.group(1))
-            if newest > SAR_LIVE_VERSION:
-                info["newer_version"] = newest
-                info["newer_file"] = f"sar_live_arms_v{newest}.json"
-        except OSError:
-            pass
-        return info
+        return self.trail_arms_provenance(MECH_SAR, dark=False)
 
     def emission_controller(self) -> Any:
         """Layer G's state, ledger and routability measurement (engine:

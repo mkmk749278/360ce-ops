@@ -167,10 +167,13 @@ def _client(payload):
 
     with TestClient(app) as client:
         vol, klines = app.state.data_volume, app.state.binance_klines
-        vol_arms, vol_prov = vol.sar_live_arms, vol.sar_live_provenance
+        # The LANE accessor, not the SAR-named wrapper: the page is one handler
+        # over four (mechanism, lane) files, so a fixture bound to the old
+        # spelling renders an empty page while every assertion still runs.
+        vol_arms, vol_prov = vol.trail_arms, vol.trail_arms_provenance
         klines_fetch = klines.fetch_all_prices
-        vol.sar_live_arms = lambda: payload
-        vol.sar_live_provenance = lambda: {
+        vol.trail_arms = lambda mechanism, dark=False: payload
+        vol.trail_arms_provenance = lambda mechanism, dark=False: {
             "file": "sar_live_arms_v1.json", "version": 1, "exists": True,
             "modified_at": "2026-08-08 15:00 UTC", "age_sec": 9.0,
             "newer_version": None, "newer_file": None,
@@ -180,8 +183,8 @@ def _client(payload):
             client.post("/login", data={"password": "test-token"})
             yield client
         finally:
-            vol.sar_live_arms = vol_arms
-            vol.sar_live_provenance = vol_prov
+            vol.trail_arms = vol_arms
+            vol.trail_arms_provenance = vol_prov
             klines.fetch_all_prices = klines_fetch
 
 

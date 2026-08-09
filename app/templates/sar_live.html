@@ -1,7 +1,49 @@
 {% extends "base.html" %}
-{% block title %}SAR live — 360 CE Ops{% endblock %}
+{% block title %}{{ mech.label }} live — 360 CE Ops{% endblock %}
 {% block content %}
-<h1>SAR live <span class="muted">— the exit mechanism as it runs, stepped bar by bar while the trade is open</span></h1>
+<h1>{{ mech.label }} <span class="muted">— the exit mechanism as it runs, stepped bar by bar while the trade is open</span></h1>
+
+<section class="card">
+  <p class="small">
+    <strong>Mechanism:</strong>
+    <a class="btn{% if mech.key == 'sar' %} sel{% endif %}" href="/signals/sar-live?tab={{ tab }}&lane={{ lane }}">Parabolic SAR</a>
+    <a class="btn{% if mech.key != 'sar' %} sel{% endif %}" href="/signals/atr-live?tab={{ tab }}&lane={{ lane }}">ATR-trail (Chandelier)</a>
+    &nbsp;&nbsp;<strong>Population:</strong>
+    <a class="btn{% if lane == 'delivered' %} sel{% endif %}" href="{{ page_path }}?tab={{ tab }}&lane=delivered">Delivered signals</a>
+    <a class="btn{% if lane == 'dark' %} sel{% endif %}" href="{{ page_path }}?tab={{ tab }}&lane=dark">Dark feed</a>
+  </p>
+  <p class="small">
+    {% if lane == 'dark' %}<span class="badge sev-high">DARK FEED</span>
+    Every row below belongs to a signal that <strong>reached nobody</strong> — the scanner was
+    willing to send it on a path the gates normally silence, and it was diverted before the queue.
+    Nothing here may be read as evidence about what subscribers received.
+    {% else %}<span class="badge st-done">DELIVERED</span>
+    Every row below belongs to a signal a subscriber actually received. This is the only population
+    on this page that may justify changing what subscribers get.
+    {% endif %}
+  </p>
+  <p class="muted small">
+    Four populations, four files, and <strong>none of them is ever pooled with another</strong>.
+    <strong>Delivered</strong> rows belong to signals a subscriber received — they are the only
+    evidence allowed to justify changing what subscribers get. <strong>Dark feed</strong> rows
+    belong to signals the scanner was willing to send on a path the gates normally silence, and
+    which were diverted before the queue: nobody received them. The dark lane exists because the
+    delivered book is dominated by <code>MOVER_TREND_PULLBACK</code>, so a delivered-only verdict on
+    an exit mechanism is close to a verdict on one path's geometry; the dark feed is where “does this
+    exit suit <em>this</em> setup” is answerable per path. Read <em>n</em> before any average — it
+    will be thin per cell for a while.
+    {% if mech.source != 'engine' %}
+    <br><span class="badge sev-high">FALLBACK LABELS</span>
+    This ledger carries no <code>mechanism</code> block, so the name and parameters above come from
+    this build rather than from the engine. Every other page reading a mechanism reads it out of the
+    file; a silent fallback is a mirror nobody knows is a mirror.
+    {% elif mech.params %}
+    <br>Parameters, from the engine's own manifest:
+    {% for k, v in mech.params.items() %}<code>{{ k }}={{ "%g"|format(v) }}</code> {% endfor %}
+    {% endif %}
+    <br>Comparing? The same window under <a href="{{ other_path }}?tab={{ tab }}&lane={{ lane }}">{{ other_label }}</a>.
+  </p>
+</section>
 
 <section class="card">
   <p class="small">
@@ -40,6 +82,7 @@
     <a href="/dark-signals">Dark signals</a> (a kline replay after the engine already closed the
     trade) can show, and it is what a rollout decision actually needs.
   </p>
+  {% if mech.key == 'sar' %}
   <p class="muted small">
     <strong>The mechanism.</strong> At generation, if SAR already agrees with the signal it governs
     from bar one and the original SL and TP1 are never used — the trade exits when SAR flips. If SAR
@@ -48,6 +91,24 @@
     or in full at TP1. Measured on <strong>5m and 15m as independent arms</strong> on the same
     signals, so the timeframe question and the mechanism question share one window.
   </p>
+  {% else %}
+  <p class="muted small">
+    <strong>The mechanism.</strong> The stop sits <code>{{ "%g"|format(mech.params.get('mult', 3.0)) }}</code>
+    ATRs (Wilder, {{ "%g"|format(mech.params.get('period', 22)) }}-period) behind the running
+    favourable extreme <em>since this arm opened</em>, and <strong>ratchets toward price only</strong>
+    — it never widens. It governs from bar one unless the level it would park is already past the
+    close, in which case the original SL and TP1 stay live until the trail comes onside, exactly as
+    SAR's handover works. Measured on <strong>5m and 15m as independent arms</strong> on the same
+    signals.
+  </p>
+  <p class="muted small">
+    <strong>Read the risk column before the PnL.</strong> Unlike SAR — whose direction genuinely
+    opposes the trade about a fifth of the time — this trail is nearly always onside at entry, so it
+    <em>cancels the evaluator's stop from bar one</em> and replaces it with one that is frequently
+    <strong>wider</strong> than the trade was sized for. That is what <strong>R @risk</strong> below
+    is for, and it is why a chandelier verdict must never be read in R alone.
+  </p>
+  {% endif %}
   <p class="muted small">
     <strong>These arms place no orders and change no exit.</strong> Live exits still run on the
     signal's SL/TP and the FSM. Nothing on this page has touched anyone's capital.
@@ -57,9 +118,9 @@
 <section class="card">
   <h2 class="small">Two fills, and why neither is called “the” result</h2>
   <p class="muted small">
-    “Close at market when SAR flips” leaves no resting stop between bars, which would breach the
-    never-a-naked-position rule the moment it went live — so the arm models a stop <strong>parked at
-    the SAR level and amended each bar</strong>, and records both prices:
+    “Close at market when the indicator turns” leaves no resting stop between bars, which would
+    breach the never-a-naked-position rule the moment it went live — so the arm models a stop
+    <strong>parked at the {{ mech.short }} level and amended each bar</strong>, and records both prices:
     <strong>Fill&nbsp;@level</strong> is that stop being touched intrabar (a gap through it fills at
     the bar's open — worse, never better); <strong>Fill&nbsp;@confirm</strong> is waiting for the bar
     to close and exiting at market. <strong>Confirm cost</strong> is the difference. That number has
@@ -69,9 +130,9 @@
   <p class="muted small">
     <strong>R is reported against two denominators, and neither is called “the” R.</strong>
     <strong>R</strong> divides by the <strong>SL distance at entry</strong>, which keeps it
-    comparable with the edge matrix and <a href="/track-record">Track record</a> — but when SAR
-    governs, that stop is <em>cancelled</em>, and SAR's own has been wider than it on more than half
-    of all handovers. <strong>R @risk</strong> divides by the risk the arm actually parked. A loss
+    comparable with the edge matrix and <a href="/track-record">Track record</a> — but when the
+    {{ mech.short }} governs, that stop is <em>cancelled</em>, and the mechanism's own has been wider
+    than it on more than half of all SAR handovers measured so far. <strong>R @risk</strong> divides by the risk the arm actually parked. A loss
     taken at 2.7× the designed risk reads −1.90R against the design and −0.71R against the exposure;
     both are true and quoting one silently picks the answer. Figures are <strong>gross</strong> — no
     fees, no funding — so a row reading flat is a real cost live.
@@ -83,7 +144,7 @@
   <p class="muted small">
     An arm anchors to the newest closed bar the store holds when it opens. If that bar is
     <em>itself</em> hours old — a promoted mover on REST re-seed with no WS klines — the arm reads
-    SAR-at-entry off a stale bar and its first advance walks the whole gap in one pass, stamping a
+    its level-at-entry off a stale bar and its first advance walks the whole gap in one pass, stamping a
     fresh <em>Last advance</em> on every bar of it. ACHUSDT 15m did exactly that on 2026-07-31:
     <strong>158 bars consumed in ten bars of life</strong>, published as a live fill under the
     sentence “this is not a replay”. The engine now refuses to open an arm on a stale anchor; this
@@ -224,7 +285,7 @@
     <p class="muted small">
       <strong>Unarmed is not random, and it is not imputable either.</strong> A signal is unarmed
       almost entirely because its candle series was missing or stale — which is the same condition
-      under which SAR could not have been computed or parked in real time. So on those trades the
+      under which the {{ mech.short }} could not have been computed or parked in real time. So on those trades the
       mechanism was <em>not operable</em>, and a deployment would leave them on their current exit.
       That is a fact about deployability, not a gap to fill with a guess: nothing here reweights
       anything.
@@ -234,13 +295,14 @@
 
 <nav class="card">
   <a class="btn {% if tab != 'resolved' %}btn-primary{% endif %}"
-     href="/signals/sar-live?tab=live">Live ({{ n_live }})</a>
+     href="{{ page_path }}?tab=live&lane={{ lane }}">Live ({{ n_live }})</a>
   <a class="btn {% if tab == 'resolved' %}btn-primary{% endif %}"
-     href="/signals/sar-live?tab=resolved">Resolved ({{ n_resolved }})</a>
-  <a class="btn" href="/signals/sar-live/export.csv?tab={{ tab }}&timeframe={{ filter_timeframe }}&governor={{ filter_governor }}&alignment={{ filter_alignment }}&status={{ filter_status }}">Export CSV</a>
+     href="{{ page_path }}?tab=resolved&lane={{ lane }}">Resolved ({{ n_resolved }})</a>
+  <a class="btn" href="{{ page_path }}/export.csv?tab={{ tab }}&lane={{ lane }}&timeframe={{ filter_timeframe }}&governor={{ filter_governor }}&alignment={{ filter_alignment }}&status={{ filter_status }}">Export CSV</a>
 </nav>
 
-<form class="card" method="get" action="/signals/sar-live">
+<form class="card" method="get" action="{{ page_path }}">
+  <input type="hidden" name="lane" value="{{ lane }}">
   <input type="hidden" name="tab" value="{{ tab }}">
   <label class="small">Timeframe
     <select name="timeframe" onchange="this.form.submit()">
@@ -258,7 +320,7 @@
       {% endfor %}
     </select>
   </label>
-  <label class="small">SAR at entry
+  <label class="small">{{ mech.short }} at entry
     <select name="alignment" onchange="this.form.submit()">
       <option value="">All</option>
       <option value="agreed" {% if filter_alignment == 'agreed' %}selected{% endif %}>Agreed ({{ n_agreed }})</option>
@@ -347,9 +409,9 @@
     <strong class="{% if summary.avg_confirm_slippage_pct is not none and summary.avg_confirm_slippage_pct < 0 %}neg{% endif %}">
       {% if summary.avg_confirm_slippage_pct is not none %}{{ "%+.3f"|format(summary.avg_confirm_slippage_pct) }}%{% else %}—{% endif %}</strong>
     per trade — what waiting for the bar to close costs against filling at the parked stop.
-    Exits: {{ summary.by_exit.sar_flip }} on a SAR flip, {{ summary.by_exit.static_sl }} on the
+    Exits: {% if mech.key == 'sar' %}{{ summary.by_exit.sar_flip }} on a SAR flip{% else %}{{ summary.by_exit.trail_stop }} on the trail stop{% endif %}, {{ summary.by_exit.static_sl }} on the
     original stop, {{ summary.by_exit.static_tp1 }} on TP1.
-    {{ summary.handovers }} of {{ summary.measurable }} handed over to SAR at some point — an arm
+    {{ summary.handovers }} of {{ summary.measurable }} handed over to the {{ mech.short }} at some point — an arm
     that never handed over contributes nothing to the exit comparison, however large the total looks.
     {% if summary.no_r %}<br><strong>{{ summary.no_r }}</strong> resolved rows carry no usable R (no
     SL distance at entry): counted in the trade count, excluded from every R figure above rather than
@@ -373,9 +435,9 @@
 </section>
 
 <section class="card">
-  <h2 class="small">Was the SAR stop inside the risk the trade was sized for?</h2>
+  <h2 class="small">Was the {{ mech.short }} stop inside the risk the trade was sized for?</h2>
   <p class="muted small">
-    When SAR agrees at entry it governs and the signal's own SL is <strong>never used</strong>, so an
+    When the {{ mech.short }} is onside at entry it governs and the signal's own SL is <strong>never used</strong>, so an
     arm can end up carrying more risk than the evaluator sized the trade for. The first two live arms
     did exactly that on one signal — MUUUSDT SHORT, designed SL 3.00%, 5m SAR at 1.60% and 15m SAR at
     <strong>3.77%</strong>. R divides by the SL distance at entry, so a wider-stop arm mechanically
@@ -383,7 +445,7 @@
     risked more"</em> would arrive as one number wearing the other's name. Split here so they don't.
   </p>
   <table class="tbl">
-    <thead><tr><th>SAR stop at handover</th><th>Resolved</th><th>Avg risk taken</th><th>Win @level</th><th>Avg PnL @level</th><th class="muted">Avg R @level</th></tr></thead>
+    <thead><tr><th>{{ mech.short }} stop at handover</th><th>Resolved</th><th>Avg risk taken</th><th>Win @level</th><th>Avg PnL @level</th><th class="muted">Avg R @level</th></tr></thead>
     <tbody>
       {% for key, label in [('inside', 'Inside the designed SL'), ('wider', 'Wider than the designed SL'), ('unknown', 'Never handed over')] %}
       {% set b = by_risk[key] %}
@@ -403,8 +465,8 @@
   </table>
   <p class="muted small">
     <strong>Never handed over</strong> is its own row, not folded into either: an arm that ran to its
-    original stop has no SAR risk to compare, which is a different state from having had a narrow one.
-    Nothing here caps anything — the mechanism is unchanged and these are stamps. Capping the SAR stop
+    original stop has no {{ mech.short }} risk to compare, which is a different state from having had a narrow one.
+    Nothing here caps anything — the mechanism is unchanged and these are stamps. Capping the {{ mech.short }} stop
     at the signal's SL stays available as a decision, now with data behind it.
   </p>
 </section>
@@ -412,13 +474,13 @@
 <section class="card">
   <h2 class="small">Max profit before the original stop — and why it is not the MFE column</h2>
   <p class="muted small">
-    Every other excursion figure on this page is <strong>bounded by the SAR arm's own
-    exit</strong>. The loop stops advancing <code>mfe_pct</code> the moment SAR flips out, so on a
-    row that flipped early it says how far the trade ran <em>before SAR closed it</em> and is
+    Every other excursion figure on this page is <strong>bounded by the {{ mech.short }} arm's own
+    exit</strong>. The loop stops advancing <code>mfe_pct</code> the moment the mechanism exits, so on a
+    row that exited early it says how far the trade ran <em>before the {{ mech.short }} closed it</em> and is
     structurally silent on everything after. Rendering that under the words "max profit" would be a
     number that is always about right and never means what it says — worse than a blank, because a
     blank prompts a question.
-    So the engine walks a <strong>second arm over the same bars</strong> with the SAR exit removed:
+    So the engine walks a <strong>second arm over the same bars</strong> with the {{ mech.short }} exit removed:
     it holds to the trade's <strong>original</strong> stop and records the peak on the way. The two
     are different measurements over different windows and are never blended.
   </p>
@@ -471,7 +533,7 @@
     <strong>{{ peak.n_pre_arm }}</strong> written before this arm shipped, which is owed nothing and
     ages out on its own.
     {% if peak.coverage.n_excluded %}
-    Those excluded rows are not merely counted — graded on the SAR arm's own PnL, which every row
+    Those excluded rows are not merely counted — graded on the {{ mech.short }} arm's own PnL, which every row
     carries, the scored rows average
     <strong>{{ peak.coverage.scored_sar_pnl | pct }}</strong> against
     <strong>{{ peak.coverage.excluded_sar_pnl | pct }}</strong> for the rest. A coverage count says
@@ -492,7 +554,7 @@
   <table class="tbl">
     <thead><tr>
       <th>Rule</th><th>Priced</th><th>Armed</th><th>Win</th>
-      <th>Avg PnL (net)</th><th>Total</th><th>vs the row's own SAR exit</th><th>Still open</th>
+      <th>Avg PnL (net)</th><th>Total</th><th>vs the row's own {{ mech.short }} exit</th><th>Still open</th>
     </tr></thead>
     <tbody>
       {% set base = strategies.baseline %}
@@ -530,7 +592,7 @@
     <strong>Read "Armed" before any PnL column.</strong> A rule whose trigger the trade never
     reached is an ordinary trade on the original stop — it scores exactly the baseline, so a rule
     armed on 5% of the book has not been tested whatever its average says.
-    <strong>vs the row's own SAR exit</strong> is measured only on rows where the rule and the
+    <strong>vs the row's own {{ mech.short }} exit</strong> is measured only on rows where the rule and the
     baseline both priced, so it is a paired comparison rather than two populations differenced.
   </p>
   <p class="muted small">
@@ -601,11 +663,11 @@
     <thead>
       <tr>
         <th>Symbol</th><th>Side</th><th>TF</th><th>Setup</th>
-        <th>SAR@entry</th><th>Governor</th><th>Entry</th>
+        <th>{{ mech.short }}@entry</th><th>Governor</th><th>Entry</th>
         {% if tab == 'resolved' %}
         <th>Anchor</th><th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th title="the money this arm returned — sizing is a fixed notional, so a percent is proportional to money and R is not">PnL @level</th><th>PnL @confirm</th><th class="muted">R @level</th><th class="muted">R @confirm</th><th class="muted">R @level, risk</th><th>Confirm cost</th><th>Bars</th>
         {% else %}
-        <th>Last advance</th><th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>SAR risk</th><th title="maximum favourable excursion">MFE</th><th title="maximum adverse excursion — how far this arm went against us first">MAE</th><th>Bars</th>
+        <th>Last advance</th><th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>{{ mech.short }} risk</th><th title="maximum favourable excursion">MFE</th><th title="maximum adverse excursion — how far this arm went against us first">MAE</th><th>Bars</th>
         {% endif %}
       </tr>
     </thead>
@@ -619,7 +681,7 @@
         <td>{% if r.aligned_at_entry is true %}<span class="badge st-done">agreed</span>
             {% elif r.aligned_at_entry is false %}<span class="badge st-open">opposed</span>
             {% else %}<span class="muted">—</span>{% endif %}</td>
-        <td>{% if r.governor == 'SAR' %}<span class="badge st-done">SAR</span>
+        <td>{% if r.governor == 'SAR' %}<span class="badge st-done">{{ mech.short }}</span>
             {% elif r.governor == 'GEOMETRY' %}<span class="badge st-partial">SL/TP</span>
             {% else %}<span class="muted">—</span>{% endif %}
             {% if r.ambiguous_bar %}<span class="badge sev-high" title="SL and TP1 both touched in one bar; resolved pessimistically">ambig</span>{% endif %}</td>
@@ -650,7 +712,7 @@
         <td class="muted small">{% if r.r_confirm is not none %}{{ "%+.2f"|format(r.r_confirm) }}R{% else %}—{% endif %}</td>
         <td class="{% if r.get('r_level_risk') is not none and r.get('r_level_risk') > 0 %}pos{% elif r.get('r_level_risk') is not none and r.get('r_level_risk') < 0 %}neg{% endif %}">
           {% if r.get('r_level_risk') is not none %}{{ "%+.2f"|format(r.get('r_level_risk')) }}
-            <span class="muted small" title="the risk this arm actually parked — the SAR stop at handover, or the original SL when it never handed over">/ {{ "%.2f"|format(r.get('risk_denominator_pct')) }}%</span>
+            <span class="muted small" title="the risk this arm actually parked — the mechanism's stop at handover, or the original SL when it never handed over">/ {{ "%.2f"|format(r.get('risk_denominator_pct')) }}%</span>
           {% else %}—{% endif %}</td>
         <td class="{% if r.confirm_slippage_pct is not none and r.confirm_slippage_pct < 0 %}neg{% endif %}">
           {% if r.confirm_slippage_pct is not none %}{{ "%+.3f"|format(r.confirm_slippage_pct) }}%{% else %}—{% endif %}</td>
@@ -670,7 +732,7 @@
         <td class="{% if r.get('unrealized_pct') is not none and r.get('unrealized_pct') > 0 %}pos{% elif r.get('unrealized_pct') is not none and r.get('unrealized_pct') < 0 %}neg{% endif %}">
           {% if r.get('unrealized_pct') is not none %}{{ "%+.2f"|format(r.get('unrealized_pct')) }}%{% else %}—{% endif %}</td>
         <td>{% if r.governor == 'SAR' and r.sar_stop is not none %}{{ "%.6g"|format(r.sar_stop) }}
-            {% elif r.governor == 'GEOMETRY' %}<span class="muted" title="SAR has not taken over; the original stop is still live">{{ r.stop_loss }}</span>
+            {% elif r.governor == 'GEOMETRY' %}<span class="muted" title="the mechanism has not taken over; the original stop is still live">{{ r.stop_loss }}</span>
             {% else %}—{% endif %}</td>
         <td>{% if r.get('stop_distance_pct') is not none %}
               <span class="{% if r.get('stop_crossed') %}neg{% endif %}">{{ "%.2f"|format(r.get('stop_distance_pct')) }}%</span>
@@ -681,7 +743,7 @@
            A direct dereference would 500 the tab on exactly those rows. #}
         <td>{% if r.get('sar_risk_pct') is not none %}<span class="{% if r.get('handover_wider_than_sl') %}neg{% endif %}">{{ "%+.2f"|format(r.get('sar_risk_pct')) }}%</span>
             <span class="muted small">/ {{ "%.2f"|format(r.sl_distance_pct) }}%</span>
-            {% if r.get('handover_wider_than_sl') %}<span class="badge sev-high" title="SAR took over at a stop wider than the signal's own SL — this arm carries more risk than the trade was sized for">wider</span>{% endif %}
+            {% if r.get('handover_wider_than_sl') %}<span class="badge sev-high" title="the mechanism took over at a stop wider than the signal's own SL — this arm carries more risk than the trade was sized for">wider</span>{% endif %}
             {% else %}<span class="muted">—</span>{% endif %}</td>
         <td>{% if r.mfe_pct is not none %}{{ "%.2f"|format(r.mfe_pct) }}%{% else %}—{% endif %}</td>
         <td class="{% if r.get('mae_pct') %}neg{% endif %}"
@@ -696,9 +758,9 @@
   </div>
   {% if tab != 'resolved' %}
   <p class="muted small">
-    <strong>Dist. to stop</strong> is how far price sits from the parked SAR level — the only
-    column on any SAR surface that says “this mechanism is about to act”. It is blank while the
-    original SL/TP is still governing, because distance-to-SAR means nothing before the handover.
+    <strong>Dist. to stop</strong> is how far price sits from the parked {{ mech.short }} level — the only
+    column on any exit-mechanism surface that says “this mechanism is about to act”. It is blank while
+    the original SL/TP is still governing, because that distance means nothing before the handover.
     Realized columns stay empty on this tab by construction: an unrealized number in a realized
     column is how a still-open trade gets read as a finished one.
   </p>

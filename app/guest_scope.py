@@ -58,6 +58,8 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/signals/sar/export.csv",
         "/signals/sar-live",
         "/signals/sar-live/export.csv",
+        "/signals/atr-live",
+        "/signals/atr-live/export.csv",
         "/signals/dark-live",
         "/signals/dark-live/export.csv",
         "/signals/entry-features",
