@@ -109,7 +109,7 @@ sentence that recommends an action, falsify the action, not just the number.
 Every change ships via PR. Fresh topic branch off `main`. Design-summary in the PR body before code review. Never push to `main` directly — auto-deploy on `main` push ships in ~60s and bypasses review.
 
 **Wait ~4 minutes before checking CI here.** That is what this repo's `lint +
-tests` job takes; the engine is ~6 min and `lumin-app` ~10 min. Polling a check
+tests` job takes; the engine is ~8 min and `lumin-app` ~16 min. Polling a check
 run that cannot have finished yet burns API calls and turns one wait into six —
 sleep the known duration first, *then* read the conclusion. These are expected
 durations, not deadlines: a job still running at the mark gets another wait. If
@@ -1145,7 +1145,7 @@ what happens when you change it.
 | Monitoring agent's active-alert Redis state | `app/data_sources/agent_alerts.py` |
 | Binance Futures public 1m klines (no key, read-only) | `app/data_sources/binance_klines.py` |
 | Closed-signal record — `signal_performance.json` (`/track-record`, `/performance`) | `app/data_sources/data_volume.py` |
-| Live SAR mechanism arms — `sar_live_arms_v1.json` (`/signals/sar-live`) | `app/data_sources/data_volume.py` |
+| Trailing-exit arms, four lanes — `sar_live_arms_v1` · `dark_sar_arms_v1` · `atr_trail_arms_v1` · `dark_atr_trail_arms_v1` (`/signals/sar-live`, `/signals/atr-live`) | `app/data_sources/data_volume.py` (`trail_arms`) |
 | Dark emission lane — `dark_signals_live_v1.json` (`/signals/dark-live`) | `app/data_sources/data_volume.py` |
 | Live marks for open rows (whole futures book, one request, TTL-cached) | `binance_klines.BinanceKlinesClient.fetch_all_prices` |
 | Live-arm freshness test fixture — real engine output, regenerate with 360-v2 `scripts/gen_ops_sar_live_fixture.py` | `tests/fixtures_sar_live_freshness.json` |
@@ -1255,3 +1255,90 @@ And the cross-repo tests **drive the real engine module** (`_engine_rows()` step
 actual arms through `sar_live_shadow`) rather than a fixture, because a fixture
 chooses a shape and then agrees with you about it — `zone_distance_atr` and the
 price-action lane card both cost a session to that.
+
+## `/signals/atr-live` and the lane selector — four populations, never pooled
+
+Added 2026-08-09 (engine `src/trail_mechanisms.py`, `src/atr_trail_live.py`) for
+the owner: *"exactly implement same for ATR-trail (Chandelier), and also
+implement ATR-trail (Chandelier) and SAR on the dark feed too, then we can see
+which actually makes a good setup, then we decide the exit mechanism. Live feed
+is mostly MVRTP only; in the dark feed we at least have some other paths."*
+
+**"Exactly the same" is an argument for one handler and one template.** The
+engine runs one arm engine with a mechanism parameter, so `/signals/sar-live`
+and `/signals/atr-live` are the same page with a different level function behind
+it. Two route modules would be two places for the next panel to be added to,
+which is how one surface silently stops showing what the other does — and both
+pages carry six sessions' worth of hard-won columns that must not fork.
+
+Both pages take `?lane=delivered|dark`, so there are **four populations and four
+files**, and the split is not cosmetic:
+
+| | Parabolic SAR | ATR-trail (Chandelier) |
+|---|---|---|
+| Delivered signals | `sar_live_arms_v1.json` | `atr_trail_arms_v1.json` |
+| Dark feed | `dark_sar_arms_v1.json` | `dark_atr_trail_arms_v1.json` |
+
+Rules the pages carry:
+
+- **The delivered lane is the only evidence allowed to justify changing what
+  subscribers receive**, and the page badges which one you are on before any
+  number. A dark row reached nobody; pooling would inflate that evidence
+  silently, because a reader who has not heard of the second population cannot
+  filter it out. `TRAIL_ARM_FILES` is the single lookup — a page never assembles
+  a filename of its own, and an unknown mechanism reads **nothing** rather than
+  falling back to SAR's file under its own heading.
+- **The dark lanes are on a different clock.** They ride the maintenance loop's
+  ~5-minute resolve cycle, not the monitor loop's 60s heartbeat, so
+  `LANE_STALE_SEC` is per lane. One bound for both would print FROZEN over a
+  perfectly healthy dark lane — the caption naming a cause the page cannot
+  observe, which this repo has paid for three times.
+- **The mechanism block comes out of the LEDGER.** Label, parameters and whether
+  the mechanism carries a direction are written by the engine into every file
+  (`reduce_mechanism`), exactly as `strategy_catalog` and `spec` are.
+  `MECHANISM_FALLBACK` exists only so a pre-manifest ledger renders, and the page
+  **badges FALLBACK LABELS on screen** when it is used — a silent fallback is a
+  mirror nobody knows is a mirror, which is how `MEASUREMENT_SUFFIXES` drifted
+  for a week. A mechanism ops has never heard of keeps the engine's own label
+  rather than borrowing another's short name.
+- **A chandelier has no direction of its own**, so `sar_up` is `None` on those
+  rows and renders as an em-dash. Not `False`: "does not answer that" and "says
+  down" are different facts.
+- **Read the risk columns before the PnL on the ATR page.** Unlike SAR — whose
+  direction genuinely opposes the trade about a fifth of the time — the trail is
+  nearly always onside at entry, so it cancels the evaluator's stop from bar one
+  and replaces it with one that is frequently **wider**. That is what
+  `r_level_risk` is for, and it is why a chandelier verdict must never be read in
+  R alone. PnL % still leads.
+- **The export stamps `mechanism` and `lane` on every row.** A spreadsheet is
+  exactly where two populations get averaged into one, and a download that cannot
+  say which mechanism or which delivery it describes is the artifact the whole
+  file split exists to prevent.
+- **The label is one string across surfaces.** `dark_signals.METHOD_LABELS["atr"]`
+  and the ATR page's label are asserted equal, and
+  `tests/test_atr_trail_contract.py` drives ops' **real** bake-off simulator and
+  asserts it fills at the engine's chandelier level (agreement to 1e-9 on a
+  shared vector). Two surfaces under one label computing two different levels
+  already cost a session on 2026-07-31, and the agreement on the easy majority is
+  what made it invisible.
+
+## Copying a one-shot secret is part of the hand-off, not a nicety
+
+`/control/access` displays a minted read-only code **exactly once** — only its
+SHA-256 hash is stored, so a partial hand-selection costs a whole grant. The card
+now carries copy buttons for the code, the `/guest` URL, and both together.
+
+Two things it does deliberately:
+
+- **The button copies the value the SERVER rendered**, and the test asserts the
+  button's payload against that value rather than against the button existing. A
+  copy control wired to the wrong string is the failure being guarded.
+- **`navigator.clipboard` is undefined over plain HTTP and in some embedded
+  browsers**, so the failure path *selects* the text and says so. A button that
+  appears to work and does nothing is worse than no button when the thing it
+  copies cannot be shown again — the same class as a control that 403s being
+  indistinguishable from a broken page.
+
+The URL is derived from the request rather than hardcoded, because the page is
+reachable on the deployed host and on a local dev server and a copy button that
+hands over the wrong host is worse than none.

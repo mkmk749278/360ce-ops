@@ -103,16 +103,66 @@ GOV_GEOMETRY = "GEOMETRY"
 
 STATUS_RUNNING = "RUNNING"
 STATUS_CLOSED_SAR_FLIP = "CLOSED_SAR_FLIP"
+#: The ATR trail's own terminal state.  A separate name engine-side rather than
+#: reuse of ``CLOSED_SAR_FLIP``, and the distinction is real: SAR *reverses* —
+#: the level it breaches is a direction change — while a chandelier stop is
+#: simply touched.  One word for two events is how a page stops being able to
+#: say what happened.
+STATUS_CLOSED_TRAIL_STOP = "CLOSED_TRAIL_STOP"
 STATUS_CLOSED_SL = "CLOSED_SL"
 STATUS_CLOSED_TP1 = "CLOSED_TP1"
 STATUS_INSUFFICIENT = "INSUFFICIENT"
 
 RESOLVED_STATUSES = (
     STATUS_CLOSED_SAR_FLIP,
+    STATUS_CLOSED_TRAIL_STOP,
     STATUS_CLOSED_SL,
     STATUS_CLOSED_TP1,
     STATUS_INSUFFICIENT,
 )
+
+#: Exit reasons, in render order.  Both mechanisms' own exits are listed
+#: because a lane only ever produces one of them — showing the other's row as a
+#: zero would read as "the mechanism never fired" rather than "this mechanism
+#: does not have that exit".  The template renders the ones the lane's rows
+#: actually carry.
+EXIT_REASONS = ("sar_flip", "trail_stop", "static_sl", "static_tp1")
+
+#: **The mechanism block is READ OUT OF THE LEDGER, never mirrored here.**
+#: The engine writes ``mechanism`` into every file (label, parameters, whether
+#: the mechanism has a direction of its own), for exactly the reason
+#: ``strategy_catalog`` is written there: one writer, one reader.  This fallback
+#: exists only so a pre-manifest ledger still renders, and the page **says on
+#: screen** when it is used — a silent fallback is a mirror nobody knows is a
+#: mirror, which is how ``MEASUREMENT_SUFFIXES`` drifted for a week.
+MECHANISM_FALLBACK = {
+    "sar": {"key": "sar", "label": "Parabolic SAR", "short": "SAR",
+            "has_direction": True, "params": {}},
+    "chandelier": {"key": "chandelier", "label": "ATR-trail (Chandelier)",
+                   "short": "ATR trail", "has_direction": False, "params": {}},
+}
+
+#: Short forms for the table headings.  Not a second label list: the engine's
+#: manifest carries the full label and this carries the abbreviation a column
+#: header needs, keyed off the same ``key``.  A mechanism absent from here
+#: renders under its full label rather than under another mechanism's short
+#: name — badged, never renamed.
+MECHANISM_SHORT = {"sar": "SAR", "chandelier": "ATR trail"}
+
+#: The two lanes each page can show.  ``delivered`` rows reached a subscriber;
+#: ``dark`` rows reached nobody.  Never pooled, and never defaulted into one
+#: another — the delivered lane is the evidence for changing what subscribers
+#: receive, and inflating it with signals that were never sent is the exact
+#: mistake #816 cost a session over.
+LANE_DELIVERED = "delivered"
+LANE_DARK = "dark"
+
+#: How stale a lane's file may be before its live tab stops claiming to be live.
+#: The delivered lanes are stepped inside the monitor loop (a 60s heartbeat);
+#: the dark lanes ride the maintenance loop's ~5-minute resolve cycle, so the
+#: same age means different things and one constant for both would report a
+#: fault on a perfectly healthy dark lane.
+LANE_STALE_SEC = {LANE_DELIVERED: 120.0, LANE_DARK: 900.0}
 
 #: How stale the arm file may be before the live tab stops claiming to be live.
 #:
@@ -652,7 +702,7 @@ def summarize_resolved(rows: list[dict]) -> dict:
         "avg_confirm_slippage_pct": _avg(slip),
         "by_exit": {
             reason: sum(1 for r in measurable if r.get("exit_reason") == reason)
-            for reason in ("sar_flip", "static_sl", "static_tp1")
+            for reason in EXIT_REASONS
         },
         "handovers": sum(1 for r in measurable if r.get("handover_at")),
         "ambiguous": sum(1 for r in measurable if r.get("ambiguous_bar")),
@@ -706,7 +756,37 @@ def summarize_by_timeframe(rows: list[dict]) -> list[dict]:
     return out
 
 
-def reduce_live_state(provenance: dict, live_rows: list[dict]) -> dict:
+def reduce_mechanism(payload: Any, mechanism: str) -> dict:
+    """The mechanism block, from the LEDGER, with the fallback named on screen.
+
+    The engine writes ``mechanism`` into every file — label, parameters, and
+    whether the mechanism carries a direction of its own — so this page never
+    keeps a second copy of what a mechanism is.  ``source`` is the honest half:
+    a reader has to be able to tell "the engine told me this" from "this build
+    guessed", because a silent fallback is a mirror nobody knows is a mirror.
+    """
+    fallback = dict(MECHANISM_FALLBACK.get(str(mechanism), {}))
+    block = payload.get("mechanism") if isinstance(payload, dict) else None
+    if isinstance(block, dict) and block.get("key"):
+        out = dict(block)
+        out["source"] = "engine"
+    else:
+        out = fallback or {"key": str(mechanism), "label": str(mechanism),
+                           "has_direction": False, "params": {}}
+        out = dict(out)
+        out["source"] = "fallback"
+    # The short form a column heading needs.  A mechanism this build has never
+    # heard of keeps its full label rather than borrowing another's short name —
+    # badged, never renamed.
+    out.setdefault("short", MECHANISM_SHORT.get(str(out.get("key")), out.get("label")))
+    if not out.get("short"):
+        out["short"] = out.get("label") or str(mechanism)
+    return out
+
+
+def reduce_live_state(
+    provenance: dict, live_rows: list[dict], lane: str = LANE_DELIVERED
+) -> dict:
     """Is this tab actually live? — read before any number on it.
 
     A frozen arm file renders as a page full of open trades with plausible
@@ -717,6 +797,10 @@ def reduce_live_state(provenance: dict, live_rows: list[dict]) -> dict:
     # Age comes from the file's mtime (data_volume), not a clock read here: the
     # question is how long ago the engine wrote, and only the file knows that.
     age = provenance.get("age_sec")
+    # The dark lanes ride the maintenance loop's ~5-minute resolve cycle rather
+    # than the monitor loop's 60s heartbeat, so one staleness bound for both
+    # would report a fault on a perfectly healthy dark lane.
+    stale_sec = LANE_STALE_SEC.get(str(lane), LIVE_STALE_SEC)
     if not provenance.get("exists"):
         return {
             "state": "unavailable",
@@ -724,7 +808,8 @@ def reduce_live_state(provenance: dict, live_rows: list[dict]) -> dict:
                 f"{provenance.get('file')} is not on the data volume. The engine "
                 "writes it on a 60s heartbeat from the monitor loop — even with "
                 "no signals open — so it should appear within a minute of an "
-                "engine start. Past that, check SAR_LIVE_SHADOW_ENABLED and the "
+                "engine start. Past that, check the lane's enable flag "
+                "(SAR_LIVE_SHADOW_ENABLED / ATR_TRAIL_LIVE_ENABLED) and the "
                 "engine container, not this page."
             ),
         }
@@ -734,16 +819,17 @@ def reduce_live_state(provenance: dict, live_rows: list[dict]) -> dict:
             "detail": (
                 f"The engine has moved to {provenance.get('newer_file')}. Every "
                 "number here describes a population it has discarded — bump "
-                "SAR_LIVE_VERSION in data_volume.py."
+                "the lane's version constant in data_volume.py."
             ),
         }
-    if age is not None and age > LIVE_STALE_SEC:
+    if age is not None and age > stale_sec:
         return {
             "state": "frozen",
             "detail": (
-                f"The arm file has not been written for {age / 60.0:.1f} minutes. "
-                "The engine writes it every 60s from the monitor loop whether or "
-                "not an arm changed, so this means the loop is not running — not "
+                f"The arm file has not been written for {age / 60.0:.1f} minutes, "
+                f"against a {stale_sec / 60.0:.0f}-minute bound for this lane. "
+                "The engine writes it on a heartbeat whether or not an arm "
+                "changed, so this means the loop is not running — not "
                 "that the market is quiet. Live prices below are still real: a "
                 "working price feed is not evidence the measurement is running."
             ),
@@ -796,14 +882,23 @@ def reduce_live_state(provenance: dict, live_rows: list[dict]) -> dict:
     }
 
 
-def _view(request: Request, tab: str, **selectors: str) -> dict:
+def _view(
+    request: Request,
+    tab: str,
+    mechanism: str = "sar",
+    lane: str = LANE_DELIVERED,
+    **selectors: str,
+) -> dict:
     vol = request.app.state.data_volume
-    payload = vol.sar_live_arms()
-    provenance = vol.sar_live_provenance()
+    dark = str(lane) == LANE_DARK
+    payload = vol.trail_arms(mechanism, dark=dark)
+    provenance = vol.trail_arms_provenance(mechanism, dark=dark)
     live_rows, resolved_rows = reduce_arms(payload)
     return {
         "payload": payload,
         "provenance": provenance,
+        "mechanism": reduce_mechanism(payload, mechanism),
+        "lane": LANE_DARK if dark else LANE_DELIVERED,
         "strategy_catalog": (
             payload.get("strategy_catalog") if isinstance(payload, dict) else None
         ),
@@ -822,18 +917,28 @@ def _view(request: Request, tab: str, **selectors: str) -> dict:
     }
 
 
-@router.get("/signals/sar-live")
-async def sar_live(
+#: URL per mechanism.  Two paths and ONE handler: the page is the same
+#: measurement with a different level function, and two handlers would be two
+#: places for a panel to be added to — which is how one surface silently stops
+#: showing what the other does.
+MECHANISM_PATHS = {"sar": "/signals/sar-live", "chandelier": "/signals/atr-live"}
+
+
+async def _render(
     request: Request,
-    tab: str = Query("live"),
-    timeframe: str = Query(""),
-    governor: str = Query(""),
-    alignment: str = Query(""),
-    status: str = Query(""),
-    fee: float = Query(sar_hold.DEFAULT_FEE_PCT),
+    *,
+    mechanism: str,
+    tab: str,
+    lane: str,
+    timeframe: str,
+    governor: str,
+    alignment: str,
+    status: str,
+    fee: float,
 ):
     templates = request.app.state.templates
-    ctx = _view(request, tab)
+    lane = LANE_DARK if str(lane) == LANE_DARK else LANE_DELIVERED
+    ctx = _view(request, tab, mechanism=mechanism, lane=lane)
     live_rows, resolved_rows = ctx["live_rows"], ctx["resolved_rows"]
     base = live_rows if tab != "resolved" else resolved_rows
 
@@ -866,7 +971,23 @@ async def sar_live(
 
     return templates.TemplateResponse("sar_live.html", {
         "request": request,
-        "active": "sar_live",
+        # The nav pill must match the page.  `/signals/price-action` and
+        # `/signals/structural-veto` both shipped setting the *Feed* tab's key,
+        # so the Feed pill lit up on a page that was not the feed — that is what
+        # looked wrong on screen before anyone read a label.
+        "active": "sar_live" if mechanism == "sar" else "atr_live",
+        "mech": ctx["mechanism"],
+        "lane": lane,
+        "page_path": MECHANISM_PATHS.get(mechanism, "/signals/sar-live"),
+        # The OTHER mechanism, so the comparison is one click away rather than a
+        # URL the reader has to know.  The whole point of the second lane is
+        # "which one actually suits this setup".
+        "other_path": MECHANISM_PATHS.get(
+            "chandelier" if mechanism == "sar" else "sar"
+        ),
+        "other_label": MECHANISM_FALLBACK[
+            "chandelier" if mechanism == "sar" else "sar"
+        ]["label"],
         "tab": tab,
         "rows": rows,
         "matched": len(selected),
@@ -911,8 +1032,49 @@ async def sar_live(
         "filter_alignment": alignment,
         "filter_status": status,
         "provenance": ctx["provenance"],
-        "live_state": reduce_live_state(ctx["provenance"], live_rows),
+        "live_state": reduce_live_state(ctx["provenance"], live_rows, lane),
     })
+
+
+@router.get("/signals/sar-live")
+async def sar_live(
+    request: Request,
+    tab: str = Query("live"),
+    lane: str = Query(LANE_DELIVERED),
+    timeframe: str = Query(""),
+    governor: str = Query(""),
+    alignment: str = Query(""),
+    status: str = Query(""),
+    fee: float = Query(sar_hold.DEFAULT_FEE_PCT),
+):
+    return await _render(
+        request, mechanism="sar", tab=tab, lane=lane, timeframe=timeframe,
+        governor=governor, alignment=alignment, status=status, fee=fee,
+    )
+
+
+@router.get("/signals/atr-live")
+async def atr_live(
+    request: Request,
+    tab: str = Query("live"),
+    lane: str = Query(LANE_DELIVERED),
+    timeframe: str = Query(""),
+    governor: str = Query(""),
+    alignment: str = Query(""),
+    status: str = Query(""),
+    fee: float = Query(sar_hold.DEFAULT_FEE_PCT),
+):
+    """The ATR trail, measured exactly as SAR is — same arms, same guards.
+
+    Owner, 2026-08-09: *"exactly implement same for ATR-trail (Chandelier)"*.
+    The engine runs one arm engine with a mechanism parameter, so this page is
+    the SAR page with a different level function behind it; a second template
+    would be a second place for a panel to be added to.
+    """
+    return await _render(
+        request, mechanism="chandelier", tab=tab, lane=lane, timeframe=timeframe,
+        governor=governor, alignment=alignment, status=status, fee=fee,
+    )
 
 
 _ARM_COLS = [
@@ -944,19 +1106,28 @@ _ARM_COLS = [
 ]
 
 
-@router.get("/signals/sar-live/export.csv")
-async def sar_live_export_csv(
+async def _export(
     request: Request,
-    tab: str = Query("live"),
-    timeframe: str = Query(""),
-    governor: str = Query(""),
-    alignment: str = Query(""),
-    status: str = Query(""),
+    *,
+    mechanism: str,
+    tab: str,
+    lane: str,
+    timeframe: str,
+    governor: str,
+    alignment: str,
+    status: str,
 ):
-    """The current selection as CSV — uncapped, unlike the rendered table."""
+    """The current selection as CSV — uncapped, unlike the rendered table.
+
+    ``mechanism`` and ``lane`` ride on every row.  A spreadsheet is exactly
+    where two populations get averaged into one, and a download that cannot say
+    which mechanism or which delivery it describes is the one artifact this
+    lane's whole file split exists to prevent.
+    """
     from app.reports import csv_response
 
-    ctx = _view(request, tab)
+    lane = LANE_DARK if str(lane) == LANE_DARK else LANE_DELIVERED
+    ctx = _view(request, tab, mechanism=mechanism, lane=lane)
     base = ctx["live_rows"] if tab != "resolved" else ctx["resolved_rows"]
     rows = filter_arms(
         base, timeframe=timeframe, governor=governor, alignment=alignment, status=status
@@ -970,5 +1141,42 @@ async def sar_live_export_csv(
     mark_risk_adjusted_r(rows)
     mark_freshness(rows, now=now)
     mark_distance_to_stop(rows, prices)
-    data = [[r.get(c) for c in _ARM_COLS] for r in rows]
-    return csv_response("sar_live_arms", _ARM_COLS, data)
+    for r in rows:
+        r.setdefault("mechanism", ctx["mechanism"].get("key"))
+        r["lane"] = lane
+    cols = _ARM_COLS + ["mechanism", "lane"]
+    data = [[r.get(c) for c in cols] for r in rows]
+    name = f"{ctx['mechanism'].get('key', mechanism)}_{lane}_arms"
+    return csv_response(name, cols, data)
+
+
+@router.get("/signals/sar-live/export.csv")
+async def sar_live_export_csv(
+    request: Request,
+    tab: str = Query("live"),
+    lane: str = Query(LANE_DELIVERED),
+    timeframe: str = Query(""),
+    governor: str = Query(""),
+    alignment: str = Query(""),
+    status: str = Query(""),
+):
+    return await _export(
+        request, mechanism="sar", tab=tab, lane=lane, timeframe=timeframe,
+        governor=governor, alignment=alignment, status=status,
+    )
+
+
+@router.get("/signals/atr-live/export.csv")
+async def atr_live_export_csv(
+    request: Request,
+    tab: str = Query("live"),
+    lane: str = Query(LANE_DELIVERED),
+    timeframe: str = Query(""),
+    governor: str = Query(""),
+    alignment: str = Query(""),
+    status: str = Query(""),
+):
+    return await _export(
+        request, mechanism="chandelier", tab=tab, lane=lane, timeframe=timeframe,
+        governor=governor, alignment=alignment, status=status,
+    )

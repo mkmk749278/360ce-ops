@@ -42,6 +42,20 @@ GUEST_TTL_CHOICES: list[tuple[str, str, int]] = [
 _GUEST_TTLS = {key: sec for key, _label, sec in GUEST_TTL_CHOICES}
 
 
+def _has_route(request: Request, name: str) -> bool:
+    """Is ``name`` a registered route on this app?
+
+    ``url_for`` raises when it is not, and this page must not 500 because a
+    route was renamed — the whole card exists so a one-shot code can be handed
+    over reliably.
+    """
+    try:
+        request.url_for(name)
+        return True
+    except Exception:
+        return False
+
+
 @router.get("/control/access")
 async def access_page(request: Request):
     templates = request.app.state.templates
@@ -74,6 +88,14 @@ async def access_page(request: Request):
             "grants": store.list_grants(),
             "ttl_choices": GUEST_TTL_CHOICES,
             "new_code": new_code,
+            # The URL the holder actually opens, derived from the request rather
+            # than hardcoded: the page is reachable on the deployed host and on
+            # a local dev server, and a copy button that hands over the wrong
+            # host is worse than no copy button — the code is shown once and
+            # cannot be re-displayed if the hand-off fails.
+            "guest_url": str(request.url_for("guest_get"))
+            if _has_route(request, "guest_get")
+            else str(request.base_url).rstrip("/") + "/guest",
             "audit": rows,
             "flash": flash,
         },

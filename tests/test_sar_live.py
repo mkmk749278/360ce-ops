@@ -306,7 +306,7 @@ def test_a_frozen_arm_file_is_reported_as_frozen_not_live():
     assert state["state"] == "frozen"
     # The copy must name the heartbeat, because that is what makes a stale file
     # mean "the loop stopped" rather than "no bar closed recently".
-    assert "every 60s" in state["detail"]
+    assert "on a heartbeat" in state["detail"]
     assert "not that the market is quiet" in state["detail"]
 
 
@@ -415,18 +415,25 @@ def _client(payload=None, provenance=None, prices=None, raise_prices=False):
 
     with TestClient(app) as client:
         vol, klines = app.state.data_volume, app.state.binance_klines
-        vol_arms = vol.sar_live_arms
-        vol_prov = vol.sar_live_provenance
+        # Swap the LANE accessor, not the SAR-named convenience wrapper.
+        # ``/signals/sar-live`` and ``/signals/atr-live`` are one handler over
+        # four (mechanism, lane) files, so a fixture bound to the old spelling
+        # would render an empty page while every assertion below still ran —
+        # exactly the seam this repo keeps paying for.
+        vol_arms = vol.trail_arms
+        vol_prov = vol.trail_arms_provenance
         klines_fetch = klines.fetch_all_prices
-        vol.sar_live_arms = lambda: (payload if payload is not None else FIXTURE)
-        vol.sar_live_provenance = lambda: _prov
+        vol.trail_arms = lambda mechanism, dark=False: (
+            payload if payload is not None else FIXTURE
+        )
+        vol.trail_arms_provenance = lambda mechanism, dark=False: _prov
         klines.fetch_all_prices = _fetch_all_prices
         try:
             client.post("/login", data={"password": "test-token"})
             yield client
         finally:
-            vol.sar_live_arms = vol_arms
-            vol.sar_live_provenance = vol_prov
+            vol.trail_arms = vol_arms
+            vol.trail_arms_provenance = vol_prov
             klines.fetch_all_prices = klines_fetch
 
 

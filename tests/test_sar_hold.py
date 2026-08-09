@@ -32,13 +32,11 @@ def _engine():
     if ENGINE not in sys.path:
         sys.path.insert(0, ENGINE)
     try:
-        from src import sar_exit_strategies, sar_live_shadow  # noqa: F401
-        from src.sar_exit_shadow import parabolic_sar_live  # noqa: F401
+        from src import sar_exit_strategies, sar_live_shadow, trail_mechanisms  # noqa: F401
     except Exception:
         return None
-    from src import sar_exit_strategies, sar_live_shadow
-    from src.sar_exit_shadow import parabolic_sar_live
-    return sar_live_shadow, sar_exit_strategies, parabolic_sar_live
+    from src import sar_exit_strategies, sar_live_shadow, trail_mechanisms
+    return sar_live_shadow, sar_exit_strategies, trail_mechanisms
 
 
 BAR_MS = 900_000.0
@@ -53,7 +51,7 @@ def _engine_rows():
     mods = _engine()
     if mods is None:
         return None
-    live, _strat, sar_live = mods
+    live, _strat, mech = mods
 
     def rising(n, start=100.0, s=1.0):
         return [(start + i * s, start + i * s + 0.5, start + i * s - 0.5, start + i * s)
@@ -82,11 +80,15 @@ def _engine_rows():
             signal_id=sid, symbol="TESTUSDT", side="LONG",
             setup_class="MOVER_TREND_PULLBACK", timeframe="15m",
             entry=160.0, stop_loss=sl, tp1=999.0,
-            sar=sar_live(s0["high"], s0["low"], 0.02, 0.2),
+            point=mech.point(
+                mech.MECH_SAR, None, s0["high"], s0["low"], s0["close"],
+                len(s0["high"]) - 1, side="LONG", state={},
+                params={"step": 0.02, "max_step": 0.2},
+            ),
             opened_ms=s0["open_time"][-1], now_ts=1_700_000_000.0,
         )
         allb = base + tail
-        live.step_arm(arm, series(allb), step=0.02, max_step=0.2, now_ts=now_at(len(allb)))
+        live.step_arm(arm, series(allb), now_ts=now_at(len(allb)))
         return arm
 
     return [

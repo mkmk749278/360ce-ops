@@ -385,12 +385,52 @@ def test_minted_code_is_shown_once_and_not_again(client):
     assert r.status_code == 200
     import re
 
-    m = re.search(r"<code>([0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5})</code>", r.text)
+    m = re.search(
+        r'<code id="new-code">([0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5}-[0-9A-Z]{5})</code>',
+        r.text,
+    )
     assert m, "the new code was not rendered"
     code = m.group(1)
     assert code not in client.get("/control/access").text
     # It still works — shown once is not issued once.
     assert app.state.guest_access.redeem(code) is not None
+
+
+def test_the_minted_code_can_be_copied_in_one_click(client):
+    """The code is displayed exactly once and only its hash is stored, so a
+    partial hand-selection costs a whole grant. The button copies the value the
+    server rendered — asserted against that value, not against the button's
+    existence, because a copy control wired to the wrong string is the failure
+    this is guarding."""
+    _owner(client)
+    import re
+
+    r = client.post(
+        "/control/access/issue", data={"label": "agent", "ttl": "1h"},
+        follow_redirects=True,
+    )
+    code = re.search(
+        r'<code id="new-code">([0-9A-Z-]+)</code>', r.text
+    ).group(1)
+    assert f'id="copy-code"' in r.text
+    assert f'data-code="{code}"' in r.text
+    # …and the link the holder actually opens, so the hand-off is one paste.
+    assert 'id="copy-url"' in r.text
+    assert "/guest" in r.text
+
+
+def test_the_copy_control_has_a_fallback_when_the_clipboard_is_unavailable(client):
+    """``navigator.clipboard`` is undefined over plain HTTP and in some embedded
+    browsers. A button that appears to work and does nothing is worse than no
+    button when the thing it copies cannot be shown again, so the failure path
+    selects the text and says so."""
+    _owner(client)
+    r = client.post(
+        "/control/access/issue", data={"label": "agent", "ttl": "1h"},
+        follow_redirects=True,
+    )
+    assert "Clipboard unavailable" in r.text
+    assert "getSelection" in r.text
 
 
 def test_access_actions_flash_on_their_own_page(client):

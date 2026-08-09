@@ -25,9 +25,82 @@
 {% if new_code %}
 <div class="flash flash-ok">
   <strong>New code — copy it now, it is not shown again:</strong>
-  <div style="font-size:1.6em;letter-spacing:.08em;margin:.4em 0"><code>{{ new_code }}</code></div>
-  <div class="small">Hand it over with the login URL: <code>https://ops.luminapp.org/guest</code></div>
+  {# The code is displayed exactly once and is never recoverable — only its
+     SHA-256 hash is stored.  So "select it by hand and hope" is not an
+     acceptable hand-off path: a partial selection here costs a whole grant.
+     The button copies the value the server rendered, not a re-typed copy of
+     it, and the code stays visible beside it so the button is a convenience
+     rather than the only way out if the clipboard API is unavailable. #}
+  <div style="font-size:1.6em;letter-spacing:.08em;margin:.4em 0">
+    <code id="new-code">{{ new_code }}</code>
+    <button type="button" class="btn" id="copy-code"
+            data-code="{{ new_code }}"
+            style="font-size:.55em;vertical-align:middle;margin-left:.6em">Copy</button>
+    <span id="copy-code-said" class="small muted" role="status" aria-live="polite"></span>
+  </div>
+  <div class="small">Hand it over with the login URL:
+    <code id="guest-url">{{ guest_url }}</code>
+    <button type="button" class="btn" id="copy-url"
+            data-code="{{ guest_url }}"
+            style="font-size:.85em;margin-left:.4em">Copy link</button>
+  </div>
+  <div class="small">
+    <button type="button" class="btn" id="copy-both"
+            data-code="{{ guest_url }} — code {{ new_code }}">Copy link + code</button>
+  </div>
 </div>
+<script>
+// Deliberately inline and tiny: this page is rendered once per mint, and the
+// value being copied is already in the DOM.  `navigator.clipboard` is
+// unavailable over plain HTTP and in some embedded browsers, so the failure
+// path SELECTS the text instead of silently doing nothing — a button that
+// appears to work and does not is worse than no button when the thing it
+// copies cannot be shown again.
+(function () {
+  function say(el, msg) {
+    var out = document.getElementById("copy-code-said");
+    if (out) { out.textContent = msg; }
+    var was = el.textContent;
+    el.textContent = "Copied";
+    setTimeout(function () { el.textContent = was; }, 1500);
+  }
+  function selectFallback(el) {
+    var target = document.getElementById(
+      el.id === "copy-url" ? "guest-url" : "new-code"
+    );
+    if (!target || !window.getSelection) { return false; }
+    var range = document.createRange();
+    range.selectNodeContents(target);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return true;
+  }
+  ["copy-code", "copy-url", "copy-both"].forEach(function (id) {
+    var btn = document.getElementById(id);
+    if (!btn) { return; }
+    btn.addEventListener("click", function () {
+      var value = btn.getAttribute("data-code") || "";
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(
+          function () { say(btn, "Copied to the clipboard."); },
+          function () {
+            var ok = selectFallback(btn);
+            say(btn, ok
+              ? "Clipboard refused — the code is selected, press Ctrl/Cmd+C."
+              : "Clipboard unavailable — copy the code by hand.");
+          }
+        );
+        return;
+      }
+      var ok = selectFallback(btn);
+      say(btn, ok
+        ? "Clipboard unavailable — the code is selected, press Ctrl/Cmd+C."
+        : "Clipboard unavailable — copy the code by hand.");
+    });
+  });
+})();
+</script>
 {% endif %}
 
 <div class="ctl-grid">
