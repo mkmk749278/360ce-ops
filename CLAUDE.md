@@ -1203,3 +1203,55 @@ cd mobile && flutter pub get && flutter test
 flutter run                                                  # against ops.luminapp.org
 flutter run --dart-define=OPS_BASE_URL=http://10.0.2.2:8000  # against local ops
 ```
+
+## `/signals/sar-live` — the second arm (2026-08-09)
+
+Two panels added for the owner's questions: *"add max profit hit before hitting
+SL like live feed"* and *"add strategies to check what if you move SL after
+moving 3% etc"* (engine `sar_live_shadow._step_hold`, `src/sar_exit_strategies.py`).
+
+**The MFE column on this page is not "max profit", and never was.** The engine's
+SAR loop stops advancing `mfe_pct` at the arm's own exit, so on a row that
+flipped out early it records how far the trade ran *before SAR closed it* — a
+figure that is always about right and never means what a reader assumes. This is
+#869's defect arriving on a second page: the shape is fine, the definition is
+not, and it is worse than a blank because a blank prompts a question. The engine
+now walks a second arm to the **original** stop; the two peaks render in separate
+columns and are never blended.
+
+Rules the panels carry:
+
+- **The horizon bucket is a FLOOR, not an answer**, and is never pooled with the
+  rows that reached their stop. Pooled, a growing horizon bucket moves the
+  headline without one trade behaving differently.
+- **Read "Armed" before any PnL column.** A rule whose trigger the trade never
+  reached is an ordinary trade on the original stop and scores exactly the
+  baseline — so a rule armed on 5% of the book has not been tested whatever its
+  average says. A test pins the never-armed-equals-baseline property.
+- **The edge column is PAIRED** — measured only on rows where the rule and the
+  baseline both priced, never two populations differenced. And the fee is
+  charged to the baseline too, or the cost of trading becomes an edge.
+- **The engine's `open` set stopped meaning "running SAR arms".** It now holds
+  rows whose SAR arm exited hours ago while the held arm walks on, so
+  `reduce_arms` splits on the row's own `status`, not on which list the engine
+  filed it under. Reading `open` as live would put a resolved fill in the Running
+  table under a live mark and a "Dist. to stop" column — a finished trade
+  rendered as an open one, on the page whose whole identity is that difference.
+- **`pre_arm` rows are their own bucket.** A row written before the arm shipped
+  carries no `hold_status`; it is owed nothing and ages out on its own, and
+  counting it as unresolved reports a fault that is not happening.
+- **Coverage is graded, not merely counted** — on `pnl_level_pct`, which every
+  row carries whichever bucket it lands in (the 2026-08-07 dark-feed rule).
+
+**The label seam, caught by rendering rather than by a test.** The per-arm state
+carries a rule *key*, not a label, so the first cut rendered `be_3` / `lock1_3` /
+`trail2_3` at the reader: right numbers, unreadable headings, sixteen passing
+tests. The catalog now ships **in the ledger** (`strategy_catalog`, written once
+per file) and ops looks each key up — one writer, one reader, and a rule the
+manifest does not describe renders badged rather than renamed. `MEASUREMENT_SUFFIXES`
+wearing a sixth hat. **Render the page once before calling a panel done.**
+
+And the cross-repo tests **drive the real engine module** (`_engine_rows()` steps
+actual arms through `sar_live_shadow`) rather than a fixture, because a fixture
+chooses a shape and then agrees with you about it — `zone_distance_atr` and the
+price-action lane card both cost a session to that.

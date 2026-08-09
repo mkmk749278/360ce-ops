@@ -409,6 +409,148 @@
   </p>
 </section>
 
+<section class="card">
+  <h2 class="small">Max profit before the original stop — and why it is not the MFE column</h2>
+  <p class="muted small">
+    Every other excursion figure on this page is <strong>bounded by the SAR arm's own
+    exit</strong>. The loop stops advancing <code>mfe_pct</code> the moment SAR flips out, so on a
+    row that flipped early it says how far the trade ran <em>before SAR closed it</em> and is
+    structurally silent on everything after. Rendering that under the words "max profit" would be a
+    number that is always about right and never means what it says — worse than a blank, because a
+    blank prompts a question.
+    So the engine walks a <strong>second arm over the same bars</strong> with the SAR exit removed:
+    it holds to the trade's <strong>original</strong> stop and records the peak on the way. The two
+    are different measurements over different windows and are never blended.
+  </p>
+  <table class="tbl">
+    <thead><tr>
+      <th>Held arm</th><th>Rows</th><th>Avg peak</th><th>Median</th><th>Best</th>
+      <th>Avg MAE</th><th>Drawdown before the peak</th>
+      <th>≥1%</th><th>≥3%</th><th>≥5%</th>
+    </tr></thead>
+    <tbody>
+      {% for key, label in [('resolved', 'Reached the original stop'), ('horizon', 'Still open at the horizon')] %}
+      {% set b = peak[key] %}
+      <tr>
+        <td>{% if key == 'resolved' %}<span class="badge st-done">complete</span>
+            {% else %}<span class="badge">floor</span>{% endif %} {{ label }}</td>
+        <td>{{ b.n }}</td>
+        <td class="pos"><strong>{{ b.avg_peak | pct }}</strong></td>
+        <td>{{ b.median_peak | pct }}</td>
+        <td>{{ b.max_peak | pct }}</td>
+        <td class="neg">{{ b.avg_mae | pct }}</td>
+        <td class="neg">{{ b.avg_mae_pre_peak | pct }}</td>
+        <td>{% if b.pct_reached_1 is not none %}{{ "%.0f"|format(b.pct_reached_1) }}%{% else %}—{% endif %}</td>
+        <td>{% if b.pct_reached_3 is not none %}{{ "%.0f"|format(b.pct_reached_3) }}%{% else %}—{% endif %}</td>
+        <td>{% if b.pct_reached_5 is not none %}{{ "%.0f"|format(b.pct_reached_5) }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    <strong>Reached the original stop</strong> is a complete walk — the trade ran, gave it back, and
+    the stop caught it, so its peak is final. <strong>Still open at the horizon</strong> walked to
+    the arm's 48h bound without being stopped, so its peak is a <em>floor</em> on what the trade
+    offered, not an answer. They are never pooled: a growing horizon bucket would otherwise move the
+    headline without a single trade behaving differently.
+  </p>
+  <p class="muted small">
+    <strong>Drawdown before the peak</strong> is the one column a "could a tighter stop have held
+    this" question actually needs — MFE and MAE carry no ordering between them, so without it the
+    optimistic and pessimistic readings of the same book differ by more than the edge under
+    discussion.
+    {% if peak.n_ambiguous %}
+    On <strong>{{ peak.n_ambiguous }}</strong> row(s) the peak printed on the stop bar itself; OHLC
+    cannot order the two, so it is <em>excluded</em> from the peak above and counted here instead.
+    {% endif %}
+  </p>
+  <p class="muted small">
+    Not scored: <strong>{{ peak.n_open }}</strong> still walking ·
+    <strong>{{ peak.n_insufficient }}</strong> unscored (the walk broke — the absence of a
+    measurement, not a flat one) ·
+    <strong>{{ peak.n_pre_arm }}</strong> written before this arm shipped, which is owed nothing and
+    ages out on its own.
+    {% if peak.coverage.n_excluded %}
+    Those excluded rows are not merely counted — graded on the SAR arm's own PnL, which every row
+    carries, the scored rows average
+    <strong>{{ peak.coverage.scored_sar_pnl | pct }}</strong> against
+    <strong>{{ peak.coverage.excluded_sar_pnl | pct }}</strong> for the rest. A coverage count says
+    how many rows are missing and cannot say which way they lean.
+    {% endif %}
+  </p>
+</section>
+
+<section class="card">
+  <h2 class="small">What if the stop had moved? — stop-management rules on the same bars</h2>
+  <p class="muted small">
+    The owner's question, 2026-08-09: <em>"what if you move SL after moving 3%"</em>. Every exit
+    catalog in this system ladders <strong>targets</strong> and leaves the stop where the evaluator
+    put it; nothing had ever priced moving the stop. Each rule below is stepped forward bar by bar
+    inside the engine's monitor loop over the same bars as the held arm — not replayed afterwards,
+    which is the one thing this page exists not to be.
+  </p>
+  <table class="tbl">
+    <thead><tr>
+      <th>Rule</th><th>Priced</th><th>Armed</th><th>Win</th>
+      <th>Avg PnL (net)</th><th>Total</th><th>vs the row's own SAR exit</th><th>Still open</th>
+    </tr></thead>
+    <tbody>
+      {% set base = strategies.baseline %}
+      <tr>
+        <td><strong>{{ base.label }}</strong></td>
+        <td>{{ base.n }}</td>
+        <td class="muted">—</td>
+        <td>{% if base.win_rate is not none %}{{ "%.0f"|format(base.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="{% if base.avg_pnl is not none and base.avg_pnl > 0 %}pos{% elif base.avg_pnl is not none and base.avg_pnl < 0 %}neg{% endif %}">
+          <strong>{{ base.avg_pnl | pct }}</strong></td>
+        <td>{{ base.total_pnl | pct }}</td>
+        <td class="muted">baseline</td>
+        <td class="muted">—</td>
+      </tr>
+      {% for r in strategies.rules %}
+      <tr>
+        <td>{{ r.label }}{% if not r.described %}
+            <span class="badge" title="the ledger's catalog does not describe this rule">undescribed</span>{% endif %}</td>
+        <td>{{ r.n }}</td>
+        <td>{% if r.armed_pct is not none %}{{ "%.0f"|format(r.armed_pct) }}%{% else %}—{% endif %}
+            <span class="muted small">({{ r.armed }})</span></td>
+        <td>{% if r.win_rate is not none %}{{ "%.0f"|format(r.win_rate) }}%{% else %}—{% endif %}</td>
+        <td class="{% if r.avg_pnl is not none and r.avg_pnl > 0 %}pos{% elif r.avg_pnl is not none and r.avg_pnl < 0 %}neg{% endif %}">
+          <strong>{{ r.avg_pnl | pct }}</strong></td>
+        <td>{{ r.total_pnl | pct }}</td>
+        <td class="{% if r.edge is not none and r.edge > 0 %}pos{% elif r.edge is not none and r.edge < 0 %}neg{% endif %}">
+          {{ r.edge | pct }}
+          {% if r.n_paired and r.n_paired != r.n %}<span class="muted small">on {{ r.n_paired }}</span>{% endif %}</td>
+        <td class="muted small">{{ r.still_open or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    <strong>Read "Armed" before any PnL column.</strong> A rule whose trigger the trade never
+    reached is an ordinary trade on the original stop — it scores exactly the baseline, so a rule
+    armed on 5% of the book has not been tested whatever its average says.
+    <strong>vs the row's own SAR exit</strong> is measured only on rows where the rule and the
+    baseline both priced, so it is a paired comparison rather than two populations differenced.
+  </p>
+  <p class="muted small">
+    <strong>A rule is armed by a bar and only protects the NEXT one.</strong> OHLC cannot order two
+    touches inside one bar, so a bar that both reaches the trigger and collapses through the stop is
+    resolved as a stop-out — the single biggest way a stop-management study reads better than the
+    mechanism could ever have performed live. A gap through any stop fills at the bar's open, worse
+    and never better; a trailing stop ratchets toward price and never away from it.
+  </p>
+  <p class="muted small">
+    Figures are <strong>net of a {{ "%.2f"|format(strategies.fee_pct) }}% round trip</strong>, and
+    the fee is charged to the baseline too — charging it to the rules alone manufactures an edge out
+    of the cost of trading. <strong>{{ strategies.n_cells }}</strong> rules were drawn over
+    <strong>{{ strategies.n_rows }}</strong> rows in this selection: "best of N" is not a fact about
+    the winner until N is on screen, and the top row of a long table beats a coin flip by
+    construction. Nothing here is applied — the live exits still run on the signal's SL/TP and the
+    FSM.
+  </p>
+</section>
+
 {% if by_timeframe|length > 1 %}
 <section class="card">
   <h2 class="small">5m vs 15m — same signals, different arms</h2>

@@ -978,3 +978,51 @@ def test_a_replayed_arm_is_badged_in_the_resolved_table():
     assert r.status_code == 200
     assert ">replayed" in r.text
     assert "walked\n    history at open" in r.text or "walked" in r.text
+
+
+# --------------------------------------------------------------------------- #
+# The engine's `open` set stopped meaning "running SAR arms" (engine schema 2)
+# --------------------------------------------------------------------------- #
+
+
+class TestOpenSetIsNotTheRunningSet:
+    """A row can sit in the engine's ``open`` list with its SAR arm long closed.
+
+    The held-to-stop arm exits at the ORIGINAL stop, normally later than the SAR
+    flip, so the engine keeps the row open while *either* arm is owed a verdict.
+    Reading ``open`` as "running SAR arms" would put a resolved fill in the
+    Running table under a live mark and a "Dist. to stop" column — a finished
+    trade rendered as an open one, on the page whose entire identity is knowing
+    the difference.
+    """
+
+    def _payload(self):
+        return {
+            "open": [
+                {"arm_id": "a:15m", "status": "RUNNING", "opened_at": 200.0},
+                # SAR is done; only the held arm is still walking.
+                {"arm_id": "b:15m", "status": "CLOSED_SAR_FLIP", "opened_at": 100.0,
+                 "closed_at": 150.0, "hold_status": "OPEN"},
+            ],
+            "resolved": [
+                {"arm_id": "c:15m", "status": "CLOSED_SL", "closed_at": 50.0},
+            ],
+        }
+
+    def test_a_hold_only_row_is_not_rendered_as_a_running_arm(self):
+        live, done = reduce_arms(self._payload())
+        assert [r["arm_id"] for r in live] == ["a:15m"]
+        assert "b:15m" in {r["arm_id"] for r in done}
+
+    def test_its_sar_verdict_still_counts_in_the_resolved_population(self):
+        """The SAR figures must not lose a row just because its sibling walks on."""
+        _, done = reduce_arms(self._payload())
+        assert len(done) == 2, "the SAR verdict belongs with the resolved rows"
+
+    def test_a_running_row_with_no_hold_status_is_unaffected(self):
+        """Schema-1 rows partition exactly as they always did."""
+        live, done = reduce_arms(
+            {"open": [{"arm_id": "x", "status": "RUNNING"}], "resolved": []}
+        )
+        assert [r["arm_id"] for r in live] == ["x"]
+        assert done == []
