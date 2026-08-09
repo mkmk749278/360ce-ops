@@ -729,6 +729,19 @@ _EXPORT_COLS = [
 ]
 
 _TRADE_COLS = [
+    # ``signal_id`` leads because it is the JOIN KEY, and its absence turned a
+    # one-line check into a session. Every measurement lane in the engine stamps
+    # its rows by `signal_id` — the SAR arms, the dark feed, the entry-feature
+    # lane — and this export, the only place the *delivered outcome* leaves ops,
+    # dropped it. So the 2026-08-08 audit asking "what fraction of the delivered
+    # book did the SAR lane actually arm?" had to join on
+    # ``(symbol, direction, entry)`` rounded to six significant figures: 366 rows
+    # collapsed to 365 distinct keys, so at least one collision, and the coverage
+    # answer moved between 81.6% and 90.8% purely with the matching tolerance.
+    # The finding survived that (the unarmed slice ran −1.643%/trade at every
+    # tolerance) but it should never have rested on a price match. The row has
+    # carried the field all along; only the column list did not.
+    "signal_id",
     "closed_iso", "symbol", "direction", "setup", "regime", "outcome",
     "entry", "pnl_pct", "net_pct", "gross_usd", "fee_usd", "net_usd",
 ]

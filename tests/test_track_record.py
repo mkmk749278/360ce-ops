@@ -912,6 +912,29 @@ class TestRoute:
             assert len(lines) == PER_TRADE_LIMIT + 11, "header + every row"
             assert "net_usd" in lines[0]
 
+    def test_the_per_trade_csv_carries_the_join_key(self, monkeypatch):
+        """``signal_id`` is how every measurement lane keys its rows.
+
+        Without it the only export of *delivered outcomes* cannot be joined to
+        the SAR arms, the dark feed or the entry-feature lane except on
+        ``(symbol, direction, entry)`` — a price match that produced a key
+        collision in 366 rows on 2026-08-08 and moved a coverage answer between
+        81.6% and 90.8% purely with the matching tolerance. The row has always
+        carried the field; only the column list did not.
+        """
+        self._stub(monkeypatch, [
+            _rec(signal_id="SIG-JOIN-1", pnl=2.0, closed=NOW - timedelta(minutes=1)),
+        ])
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/track-record/trades.csv?window=all")
+            assert r.status_code == 200
+            lines = [ln for ln in r.text.splitlines() if ln.strip()]
+            assert lines[0].split(",")[0] == "signal_id", (
+                "the join key leads the export"
+            )
+            assert "SIG-JOIN-1" in lines[1]
+
     def test_the_per_trade_table_caps_and_says_so(self, monkeypatch):
         self._stub(monkeypatch, [
             _rec(signal_id=f"s{i}", pnl=2.0, closed=NOW - timedelta(minutes=i))

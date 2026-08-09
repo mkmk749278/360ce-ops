@@ -125,6 +125,113 @@
   </p>
 </section>
 
+<section class="card">
+  <h2 class="small">…and how much of the delivered book did it get to look at?</h2>
+  <p class="muted small">
+    Every panel above grades arms that <em>exist</em>. None of them can see a delivered signal
+    that never became an arm at all — and that was the largest exclusion of the lot, with no
+    counter anywhere in either repo until now. A guest-session audit on <strong>2026-08-08</strong>
+    joined this ledger to the closed-signal record over the arm window and found
+    <strong>124 of 152 delivered trades armed (81.6%)</strong>, while the 28 without ran
+    <strong>−1.643%/trade at 10.7% win</strong> (67.9% SL_HIT) against
+    <strong>+0.753% and 43.5%</strong> for the armed ones. The verdict below was therefore
+    measured on a <em>winner-enriched subset</em> and read as the mechanism's result on our book.
+    That is this page's own rule — <em>what fraction of the population resolved, and is the
+    unresolved part random?</em> — applied one step too late.
+  </p>
+
+  {% if coverage.state != 'reported' %}
+    <p class="small">
+      <span class="badge st-partial">NOT REPORTED</span>
+      This engine build does not write a coverage block, so the fraction of the book these arms
+      cover is <em>unknown</em> — which is not the same as complete. Every figure below the
+      filters describes only the signals that got an arm.
+    </p>
+  {% else %}
+    <div class="kpis">
+      <div class="kpi">
+        <div class="kpi-label">Signals seen</div>
+        <div class="kpi-value">{{ coverage.signals_seen }}</div>
+        <div class="muted small">delivered signals the lane was offered</div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Fully armed</div>
+        <div class="kpi-value">
+          {% if coverage.covered_pct is not none %}{{ coverage.covered_pct | pct }}%{% else %}—{% endif %}
+        </div>
+        <div class="muted small">
+          {{ coverage.fully_armed }} with an arm on every timeframe —
+          <strong>this is what the verdict below covers</strong>
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Partly armed</div>
+        <div class="kpi-value">{{ coverage.partly_armed }}</div>
+        <div class="muted small">
+          one timeframe armed and not the other — neither covered nor missing, so it is
+          <em>not</em> rounded up
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Unarmed</div>
+        <div class="kpi-value">{{ coverage.unarmed }}</div>
+        <div class="muted small">no arm at all — invisible to every number on this page</div>
+      </div>
+    </div>
+
+    {% if coverage.reasons %}
+      <table class="tbl small">
+        <thead>
+          <tr><th>Why no arm</th><th>Signals</th><th>What that means</th></tr>
+        </thead>
+        <tbody>
+          {# Iterate the ENGINE's reasons, never a list kept here: a reason ops
+             has never heard of must render under its raw name rather than
+             vanish. The fix for a drifting mirror is not a second mirror. #}
+          {% for reason, count in coverage.reasons | dictsort(by='value', reverse=true) %}
+            <tr>
+              <td>
+                <code>{{ reason }}</code>
+                {% if reason not in coverage_copy %}
+                  <span class="badge st-partial">unclassified</span>
+                {% endif %}
+              </td>
+              <td>{{ count }}</td>
+              <td class="muted small">
+                {{ coverage_copy.get(reason, "ops has no note for this reason — the engine added it after this panel was written. The count is the engine's; only the sentence is missing.") }}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <p class="muted small">
+      <strong>This panel is deliberately not filtered with the table.</strong> A selector narrows
+      which arms you are looking at; it cannot change how much of the delivered book the lane was
+      able to arm in the first place. Everywhere else on this page a summary is measured on the
+      current selection (#90) — this is the stated exception rather than a silent one.
+      {% if coverage.evicted is not none and coverage.evicted > 0 %}
+        The census is bounded at {{ coverage.cap }} signals and has dropped
+        <strong>{{ coverage.evicted }}</strong> older ones, so these counts are a sample of the
+        whole run — a capped ring makes every verdict on it a sample, and a cap nobody printed is
+        how a gate read <code>n=396</code> with no way to tell 396 from 396 of 24,000.
+      {% elif coverage.evicted is none %}
+        The engine did not report an eviction count, so whether this census is complete is
+        <em>unknown</em> — not confirmed complete.
+      {% endif %}
+    </p>
+    <p class="muted small">
+      <strong>Unarmed is not random, and it is not imputable either.</strong> A signal is unarmed
+      almost entirely because its candle series was missing or stale — which is the same condition
+      under which SAR could not have been computed or parked in real time. So on those trades the
+      mechanism was <em>not operable</em>, and a deployment would leave them on their current exit.
+      That is a fact about deployability, not a gap to fill with a guess: nothing here reweights
+      anything.
+    </p>
+  {% endif %}
+</section>
+
 <nav class="card">
   <a class="btn {% if tab != 'resolved' %}btn-primary{% endif %}"
      href="/signals/sar-live?tab=live">Live ({{ n_live }})</a>
