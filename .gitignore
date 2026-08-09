@@ -17,3 +17,9 @@ dist/
 build/
 *.egg-info/
 .DS_Store
+
+# Engine log pulls written by the diag runner (and by any test that
+# exercises it). Untracked and unignored, this directory lands in `git add -A`
+# on whichever branch happened to run the suite — the `.tmp` ledger artifact
+# that conflicted on every merge from #839 to #845, one directory over.
+logs/

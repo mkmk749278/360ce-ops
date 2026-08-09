@@ -91,6 +91,8 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
 
+from app.data_sources import sar_hold
+
 router = APIRouter()
 
 #: Render bound. Applied in the route AFTER filtering — never inside a reducer.
@@ -178,17 +180,38 @@ def reduce_arms(payload: Any) -> tuple[list[dict], list[dict]]:
     empty lists rather than raising — the page then says the file is unavailable,
     which is a different statement from "no arms", and the template distinguishes
     them.
+
+    **The split is on the SAR arm's own status, NOT on which list the engine
+    filed the row under**, and that distinction arrived with the held-to-stop
+    arm (engine schema 2). The engine's ``open`` set now means *some arm is
+    still owed a verdict* — it holds rows whose SAR arm exited hours ago while
+    the held arm walks on to the original stop. Reading ``open`` as "running
+    SAR arms" would put a resolved fill in the Running table under a live mark
+    and a "Dist. to stop" column, i.e. render a finished trade as an open one on
+    the page whose entire identity is knowing the difference.
+
+    Every panel on this page is a statement about the SAR mechanism's verdicts,
+    so every one of them keeps measuring exactly the population it did before.
+    The held arm's own state is a separate column, never a reason to move a row.
     """
     if not isinstance(payload, dict):
         return [], []
     open_rows = payload.get("open")
     resolved_rows = payload.get("resolved")
-    live = [r for r in open_rows if isinstance(r, dict)] if isinstance(open_rows, list) else []
+    filed_open = [r for r in open_rows if isinstance(r, dict)] if isinstance(open_rows, list) else []
     done = (
         [r for r in resolved_rows if isinstance(r, dict)]
         if isinstance(resolved_rows, list)
         else []
     )
+    live: list[dict] = []
+    for row in filed_open:
+        if str(row.get("status") or "") == "RUNNING":
+            live.append(row)
+        else:
+            # SAR has its verdict; only the held arm is still walking. It belongs
+            # with the resolved population for every SAR figure on this page.
+            done.append(row)
     live.sort(key=lambda r: _f(r.get("opened_at")) or 0.0, reverse=True)
     done.sort(key=lambda r: _f(r.get("closed_at")) or 0.0, reverse=True)
     return live, done
@@ -781,6 +804,9 @@ def _view(request: Request, tab: str, **selectors: str) -> dict:
     return {
         "payload": payload,
         "provenance": provenance,
+        "strategy_catalog": (
+            payload.get("strategy_catalog") if isinstance(payload, dict) else None
+        ),
         "live_rows": live_rows,
         "resolved_rows": resolved_rows,
         # Coverage is a fact about the whole book and is deliberately NOT
@@ -804,6 +830,7 @@ async def sar_live(
     governor: str = Query(""),
     alignment: str = Query(""),
     status: str = Query(""),
+    fee: float = Query(sar_hold.DEFAULT_FEE_PCT),
 ):
     templates = request.app.state.templates
     ctx = _view(request, tab)
@@ -851,6 +878,14 @@ async def sar_live(
         "summary": summarize_resolved(selected),
         "by_timeframe": summarize_by_timeframe(selected),
         "by_risk": summarize_by_risk(selected),
+        # Both new panels are measured on `selected` like everything else on
+        # this page (#90) — a summary computed over the whole ledger above a
+        # filtered table is not a summary of anything the reader is looking at.
+        "peak": sar_hold.reduce_peak(selected),
+        "strategies": sar_hold.reduce_strategies(
+            selected, fee_pct=fee, catalog=ctx.get("strategy_catalog")
+        ),
+        "fee_pct": fee,
         "n_wider": sum(
             1 for r in scoped_align if r.get("handover_wider_than_sl") is True
         ),
