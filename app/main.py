@@ -71,6 +71,7 @@ from app.routes import (
     price_action,
     router_drops,
     structural_veto,
+    trail_governor,
 )
 
 settings = load_settings()
@@ -158,6 +159,8 @@ app.include_router(structural_snap.router)
 app.include_router(structural_veto.router)
 # Before signal_detail, same reason: /signals/{signal_id} swallows any literal.
 app.include_router(price_action.router)
+# Before signal_detail, same reason: /signals/{signal_id} swallows any literal.
+app.include_router(trail_governor.router)
 # Literal pages under /signals/ MUST be included BEFORE signal_detail, which
 # owns /signals/{signal_id} and matches any literal that follows it.
 app.include_router(router_drops.router)

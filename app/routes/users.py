@@ -33,6 +33,12 @@ router = APIRouter()
 
 _VALID_TIERS = {"free", "assist", "auto"}
 
+#: Exit mechanisms a user may be opted into. Mirrors the engine's
+#: ``user_overrides.EXIT_MECHANISMS``; the engine validates independently and
+#: reads the stored value back, so a drift here is caught by the response
+#: rather than silently written.
+_VALID_EXIT_MECHANISMS = {"default", "sar", "chandelier"}
+
 # (dial code without "+", display name) — subset of lumin-app's
 # lib/data/country_codes.dart kept in sync by hand; India first since it's
 # the default and the bulk of the current tester base.
@@ -182,5 +188,69 @@ async def control_users_grant(
     else:
         detail = result.get("error") if isinstance(result, dict) else result
         text = f"Grant failed: {detail}"
+    request.session["_control_flash"] = {"ok": ok, "text": text}
+    return _users_redirect(phone)
+
+
+@router.post("/control/users/exit-mechanism")
+async def control_users_exit_mechanism(
+    request: Request,
+    phone: str = Form(...),
+    exit_mechanism: str = Form(...),
+    reason: str = Form(""),
+):
+    """Opt one account into the live trail governor.
+
+    The one control on this page that changes how a real position EXITS.
+    Everything else here is entitlement; this hands the stop to a mechanism.
+
+    The flash names **both** switches, because the per-user value alone
+    changes nothing and an operator who sets one without the other would
+    otherwise read a bare "ok" as "it is running" — a control that reports
+    success for a state that does nothing is the same class as one that 403s.
+    """
+    api = request.app.state.engine_api
+    settings = request.app.state.settings
+    phone = phone.strip()
+    mech = exit_mechanism.strip().lower()
+
+    if mech not in _VALID_EXIT_MECHANISMS:
+        request.session["_control_flash"] = {
+            "ok": False,
+            "text": f"Rejected — unknown exit mechanism {exit_mechanism!r}.",
+        }
+        return _users_redirect(phone)
+
+    result = await api.set_exit_mechanism(
+        phone, mech, reason=reason.strip() or None
+    )
+    ok = not _is_error(result)
+    audit.record(
+        settings.audit_log_path,
+        action="set_exit_mechanism",
+        params={"phone": phone, "exit_mechanism": mech, "reason": reason.strip()},
+        result=result if isinstance(result, dict) else {},
+        ok=ok,
+    )
+    if ok and isinstance(result, dict):
+        stored = result.get("exit_mechanism")
+        governor_on = result.get("governor_enabled")
+        if stored == "default":
+            text = f"{phone}: exit returned to the SL/TP FSM."
+        elif governor_on:
+            text = (
+                f"{phone}: exit handed to {str(stored).upper()} — "
+                "the master switch is ON, so this is live on the next signal."
+            )
+        else:
+            # Not a failure, and not running either. Naming it is the point.
+            text = (
+                f"{phone}: exit set to {str(stored).upper()}, but the engine-wide "
+                "trail governor is OFF — nothing changes until you enable "
+                "'Live trail governor' on Control → Engine."
+            )
+    else:
+        detail = result.get("error") if isinstance(result, dict) else result
+        text = f"Exit-mechanism change failed: {detail}"
     request.session["_control_flash"] = {"ok": ok, "text": text}
     return _users_redirect(phone)

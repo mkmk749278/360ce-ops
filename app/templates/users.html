@@ -70,6 +70,45 @@
     </form>
     <p class="muted">Duration is ignored when tier is <code>free</code>.</p>
   </section>
+
+  <section class="card">
+    <h2 class="small">Exit mechanism <span class="muted">— money path</span></h2>
+    <p class="muted small">
+      Every other control on this page changes what this account is
+      <em>entitled</em> to. This one changes how its live positions
+      <strong>exit</strong>: on anything but <code>default</code>, once the
+      mechanism comes onside the engine cancels the evaluator's SL and TP
+      ladder and re-parks a stop at the mechanism's level on every closed bar.
+    </p>
+    <p class="muted small">
+      <strong>Two switches are required.</strong> This one, and the engine-wide
+      <em>Live trail governor</em> on <a href="/control">Control → Engine</a>.
+      Set here with the master switch off and nothing happens — the flash will
+      say so rather than reporting a bare success. Watch it run on
+      <a href="/signals/trail-governor">Signals → Trail governor</a>.
+    </p>
+    <p class="muted small">
+      The mechanism's stop is frequently <strong>wider</strong> than the stop
+      the trade was sized for (54% of measured SAR handovers), so a position
+      can carry more risk than its designed SL implies. The measured edge over
+      the current exit did <strong>not</strong> exclude zero.
+    </p>
+    {% if may_use('/control/users/exit-mechanism', 'POST') %}
+    <form method="post" action="/control/users/exit-mechanism"
+          onsubmit="return confirm('Hand {{ lookup.phone }} exits to ' + this.exit_mechanism.value.toUpperCase() + '? This changes how REAL positions close.');">
+      <input type="hidden" name="phone" value="{{ lookup.phone }}">
+      <label>Mechanism
+        <select name="exit_mechanism">
+          <option value="default">default (SL/TP FSM — unchanged)</option>
+          <option value="sar">sar (Parabolic SAR)</option>
+          <option value="chandelier">chandelier (ATR trail)</option>
+        </select>
+      </label>
+      <input type="text" name="reason" maxlength="200" placeholder="Reason (optional, recorded)">
+      <button type="submit" class="btn btn-go">Set exit</button>
+    </form>
+    {% endif %}
+  </section>
   {% endif %}
 {% endif %}
 {% endblock %}

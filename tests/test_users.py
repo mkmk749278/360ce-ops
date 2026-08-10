@@ -259,3 +259,156 @@ def test_grant_engine_error_surfaces_failure_flash(monkeypatch):
         assert r.status_code == 200
         assert recorded[0]["ok"] is False
         assert "Grant failed" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Exit mechanism — the one control on this page that changes how a REAL
+# position closes, rather than what an account is entitled to.
+# ---------------------------------------------------------------------------
+
+
+def _lookup(monkeypatch, **over):
+    row = {
+        "user_id": 7, "phone": "+15551230000", "tier": "auto",
+        "paid_until": None, "onboarded": True, "name": "Test User",
+    }
+    row.update(over)
+
+    async def fake_lookup(self, phone):
+        return dict(row, phone=phone)
+
+    monkeypatch.setattr(EngineApiClient, "user_lookup", fake_lookup)
+
+
+def _capture_set(monkeypatch, response):
+    seen = {}
+
+    async def fake_set(self, phone, exit_mechanism, reason=None):
+        seen.update(phone=phone, exit_mechanism=exit_mechanism, reason=reason)
+        return response
+
+    monkeypatch.setattr(EngineApiClient, "set_exit_mechanism", fake_set)
+    return seen
+
+
+def test_exit_mechanism_form_renders_on_a_found_user(monkeypatch):
+    _lookup(monkeypatch)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/control/users", params={"phone": "+15551230000"})
+        assert "/control/users/exit-mechanism" in r.text
+        assert "chandelier" in r.text
+        # The page must say the per-user value is not sufficient on its own.
+        assert "Two switches are required" in r.text
+
+
+def test_setting_a_mechanism_with_the_master_switch_off_is_not_reported_as_running(
+    monkeypatch,
+):
+    """A control that reports success for a state that does nothing is the
+    same class as one that 403s — the flash has to name the missing half."""
+    _lookup(monkeypatch)
+    _capture_set(monkeypatch, {
+        "ok": True, "user_id": 7, "phone": "+15551230000",
+        "exit_mechanism": "sar", "governor_enabled": False,
+    })
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/exit-mechanism",
+            data={"phone": "+15551230000", "exit_mechanism": "sar"},
+            follow_redirects=True,
+        )
+        assert r.status_code == 200
+        assert "trail governor is OFF" in r.text
+        assert "nothing changes until" in r.text
+
+
+def test_setting_a_mechanism_with_the_master_switch_on_says_it_is_live(monkeypatch):
+    _lookup(monkeypatch)
+    _capture_set(monkeypatch, {
+        "ok": True, "user_id": 7, "phone": "+15551230000",
+        "exit_mechanism": "sar", "governor_enabled": True,
+    })
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/exit-mechanism",
+            data={"phone": "+15551230000", "exit_mechanism": "sar"},
+            follow_redirects=True,
+        )
+        assert "master switch is ON" in r.text
+
+
+def test_returning_to_default_is_phrased_as_the_unchanged_exit(monkeypatch):
+    _lookup(monkeypatch)
+    _capture_set(monkeypatch, {
+        "ok": True, "user_id": 7, "phone": "+15551230000",
+        "exit_mechanism": "default", "governor_enabled": True,
+    })
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/exit-mechanism",
+            data={"phone": "+15551230000", "exit_mechanism": "default"},
+            follow_redirects=True,
+        )
+        assert "SL/TP FSM" in r.text
+
+
+def test_an_unknown_mechanism_never_reaches_the_engine(monkeypatch):
+    _lookup(monkeypatch)
+    seen = _capture_set(monkeypatch, {"ok": True})
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/exit-mechanism",
+            data={"phone": "+15551230000", "exit_mechanism": "parabolic"},
+            follow_redirects=True,
+        )
+        assert "unknown exit mechanism" in r.text.lower()
+    assert seen == {}, "ops forwarded a mechanism the engine never defined"
+
+
+def test_the_engine_is_the_source_of_truth_for_what_was_stored(monkeypatch):
+    """The flash reports what the ENGINE read back, not what was submitted —
+    an echo would report success for a write the coercion layer dropped."""
+    _lookup(monkeypatch)
+    _capture_set(monkeypatch, {
+        "ok": False, "user_id": 7, "phone": "+15551230000",
+        "exit_mechanism": "default", "governor_enabled": True,
+    })
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/users/exit-mechanism",
+            data={"phone": "+15551230000", "exit_mechanism": "chandelier"},
+            follow_redirects=True,
+        )
+        assert "CHANDELIER" not in r.text.replace("chandelier", "")
+
+
+def test_the_change_is_audited(monkeypatch):
+    _lookup(monkeypatch)
+    _capture_set(monkeypatch, {
+        "ok": True, "user_id": 7, "phone": "+15551230000",
+        "exit_mechanism": "sar", "governor_enabled": True,
+    })
+    recorded: list = []
+    monkeypatch.setattr(
+        users_route.audit, "record", lambda *a, **k: recorded.append(k)
+    )
+    with TestClient(app) as client:
+        _login(client)
+        client.post(
+            "/control/users/exit-mechanism",
+            data={"phone": "+15551230000", "exit_mechanism": "sar",
+                  "reason": "owner canary"},
+            follow_redirects=True,
+        )
+    assert recorded, "money-path write was not audited"
+    entry = recorded[0]
+    assert entry["action"] == "set_exit_mechanism"
+    assert entry["params"]["exit_mechanism"] == "sar"
+    assert entry["params"]["reason"] == "owner canary"
+    assert entry["ok"] is True

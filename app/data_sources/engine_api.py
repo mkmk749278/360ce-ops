@@ -128,6 +128,20 @@ class EngineApiClient:
         """
         return await self._get("/internal/diag/positions")
 
+    async def trail_governor(self) -> Any:
+        """The live trailing-exit governor — the mechanism placing real orders.
+
+        Every other trail surface in this repo reads a ledger of what a stop
+        *would* have been. This one reads the positions whose stop the engine
+        is actually amending, bar by bar, on a real account.
+
+        Read the refusal mix before the rows: a governor with nothing to
+        govern is indistinguishable from one that is switched off, opted into
+        by nobody, or refusing a stale series — and those have four different
+        fixes.
+        """
+        return await self._get("/internal/diag/trail-governor")
+
     async def data_intake(self) -> Any:
         """What the engine is actually reading from Binance.
 
@@ -306,3 +320,26 @@ class EngineApiClient:
         if reason:
             payload["reason"] = reason
         return await self._post("/api/admin/grant-tier", payload)
+
+    async def set_exit_mechanism(
+        self,
+        phone: str,
+        exit_mechanism: str,
+        reason: str | None = None,
+    ) -> Any:
+        """Opt one account into (or out of) the live trail governor.
+
+        A **money-path** write: anything but ``default`` means the engine
+        cancels that user's evaluator SL and TP ladder at handover and manages
+        the exit itself. It still does nothing unless the engine-wide
+        ``trail_governor_enabled`` tunable is ON — the response carries
+        ``governor_enabled`` so the caller can say which half is missing
+        rather than reporting a bare success.
+        """
+        payload: dict[str, Any] = {
+            "phone": phone,
+            "exit_mechanism": exit_mechanism,
+        }
+        if reason:
+            payload["reason"] = reason
+        return await self._post("/api/admin/users/exit-mechanism", payload)
