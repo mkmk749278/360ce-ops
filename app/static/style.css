@@ -402,3 +402,53 @@ details.raw-section pre { margin: 0; border: none; border-radius: 0; background:
   .kv-grid { grid-template-columns: 1fr; }
   .ctl-grid { grid-template-columns: 1fr; }
 }
+
+/* ---- Control: jump nav, collapsible tunables, changed badges (2026-08-10) ----
+   77 tunables in 4 categories used to sit between the safety switches and the
+   auto-execution mode, so the mode toggle and the live positions table were
+   several phone-screens below a wall of knobs.  The section order is the real
+   fix; these are what make it navigable. */
+.ctl-jump { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.6rem 0 1rem; }
+.ctl-jump a {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 999px; padding: 0.35rem 0.8rem; font-size: 0.8rem;
+  text-decoration: none; color: var(--fg-dim); white-space: nowrap;
+}
+.ctl-jump a:hover { color: var(--fg); border-color: var(--fg-dim); }
+h2.sec-head { margin: 1.4rem 0 0.6rem; font-size: 0.95rem; }
+
+.pill-chg {
+  display: inline-block; background: #e4a40022; color: #e4a400;
+  border: 1px solid #e4a40055; border-radius: 999px;
+  padding: 0 0.45rem; font-size: 0.68rem; font-weight: 700;
+  vertical-align: middle; margin-left: 0.35rem;
+}
+
+.tun-toolbar { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.7rem 0 0.4rem; }
+.tun-filter {
+  flex: 1 1 18rem; min-width: 0; padding: 0.45rem 0.7rem;
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--r-md); color: var(--fg);
+}
+.tun-only-changed { font-size: 0.8rem; color: var(--fg-dim); white-space: nowrap; }
+
+details.tun-cat { border: 1px solid var(--border); border-radius: var(--r-md); margin-bottom: 0.7rem; }
+details.tun-cat > summary {
+  cursor: pointer; padding: 0.6rem 0.8rem; display: flex;
+  align-items: center; gap: 0.5rem; flex-wrap: wrap; list-style: none;
+}
+details.tun-cat > summary::-webkit-details-marker { display: none; }
+details.tun-cat > summary::before { content: '▸'; color: var(--fg-dim); }
+details.tun-cat[open] > summary::before { content: '▾'; }
+details.tun-cat[open] > summary { border-bottom: 1px solid var(--border-soft); }
+.tun-cat-name { font-weight: 700; font-size: 0.86rem; }
+details.tun-cat .tunable-group { margin: 0; padding: 0.4rem 0.8rem 0.8rem; }
+tr.tun-row-chg .tunable-label { border-left: 2px solid #e4a400; padding-left: 0.5rem; }
+
+/* Phone: the two-column knob table stacks, or the input column is unusable. */
+@media (max-width: 640px) {
+  table.tunables td { display: block; width: auto; }
+  .tunable-label { width: auto !important; padding-bottom: 0.2rem !important; }
+  .tunable-input { padding-top: 0 !important; }
+  .tun-filter { flex-basis: 100%; }
+}

@@ -310,3 +310,188 @@ def test_billing_flip_calls_engine_and_audits(monkeypatch):
         assert calls["enabled"] is False
         assert recorded[0]["action"] == "play_billing"
         assert "DISABLED" in r.text
+
+
+# ---------------------------------------------------------------------------
+# Layout — the owner asked for the control panel to be arranged "for easy
+# access". These pin the arrangement, because a page's readability is not
+# something any other test in this repo can see (the 2026-08-06 surf's lesson).
+# ---------------------------------------------------------------------------
+
+
+def _flat(html: str) -> str:
+    """Whitespace-collapsed text, for asserting on copy that wraps in the
+    template. A reflow is not a behaviour change and must not fail a test."""
+    import re
+
+    return re.sub(r"\s+", " ", html)
+
+
+def _tunables(*entries):
+    async def fake(self):
+        return {"initialised": True, "tunables": list(entries)}
+    return fake
+
+
+def _knob(key, category, value, default, **over):
+    row = {
+        "key": key, "label": key.replace("_", " ").title(), "description": "d",
+        "type": "bool" if isinstance(default, bool) else "float",
+        "value": value, "default": default, "category": category,
+        "min": None, "max": None, "unit": "",
+    }
+    row.update(over)
+    return row
+
+
+def test_operational_controls_render_above_the_wall_of_tunables(monkeypatch):
+    """GUARD — this is the whole complaint.
+
+    77 knobs across 4 categories used to sit between the safety switches and
+    the auto-execution mode, so on a phone the mode toggle and the live
+    positions table were several screens below them. Asserted on ORDER in the
+    rendered HTML: a test that merely checked both exist passed before and
+    after, which is why the arrangement went unnoticed for as long as it did.
+    """
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(_knob("a", "Signal gating", True, True)),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert html.index('id="sec-safety"') < html.index('id="sec-mode"')
+    assert html.index('id="sec-mode"') < html.index('id="sec-tunables"')
+    assert html.index('id="sec-positions"') < html.index('id="sec-tunables"')
+    # Destructive and historical stay at the bottom, out of thumb's way.
+    assert html.index('id="sec-tunables"') < html.index('id="sec-danger"')
+    assert html.index('id="sec-danger"') < html.index('id="sec-audit"')
+
+
+def test_every_jump_target_exists(monkeypatch):
+    """A nav link to an anchor nobody rendered scrolls nowhere and reads as a
+    broken page — the nav rule one level down."""
+    import re
+
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(_knob("a", "Signal gating", True, True)),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    nav = html[html.index('class="ctl-jump"'):html.index("</nav>")]
+    for target in re.findall(r'href="#([^"]+)"', nav):
+        assert f'id="{target}"' in html, f"jump target #{target} renders nowhere"
+
+
+def test_changed_knobs_are_badged_and_counted(monkeypatch):
+    """"What did I change?" was unanswerable — 77 knobs rendered identically
+    whether or not anyone had touched them."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(
+            _knob("untouched", "Signal gating", True, True),
+            _knob("moved", "Signal gating", 0.9, 0.4),
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert "1 changed" in html
+    assert "1</strong> of 2 are off their boot default" in _flat(html)
+
+
+def test_no_changed_knobs_says_so_rather_than_rendering_nothing(monkeypatch):
+    """A blank needs a cause before it gets a caption."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(_knob("a", "Signal gating", True, True)),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert "Every tunable is currently at its boot default" in _flat(html)
+
+
+def test_categories_render_in_consequence_order(monkeypatch):
+    """Stops & exits before Measurement — the money path leads."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(
+            _knob("m", "Measurement", True, True),
+            _knob("s", "Stops & exits", True, True),
+            _knob("g", "Signal gating", True, True),
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert html.index("Stops &amp; exits") < html.index(">Signal gating<")
+    assert html.index(">Signal gating<") < html.index(">Measurement<")
+
+
+def test_an_unknown_category_still_renders(monkeypatch):
+    """The order list is a preference, not a filter. A category the engine
+    adds tomorrow sorts to the end rather than disappearing — a hand-kept list
+    that silently drops a member is the defect this repo keeps paying for."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(
+            _knob("x", "Brand New Concern", True, True),
+            _knob("s", "Stops & exits", True, True),
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert "Brand New Concern" in html
+    assert html.index("Stops &amp; exits") < html.index("Brand New Concern")
+
+
+def test_filtering_never_removes_a_knob_from_its_form(monkeypatch):
+    """The filter hides rows with CSS and must not disable or drop inputs.
+
+    If it did, what you APPLY would depend on what you typed — the one
+    behaviour a money-path form must not have. Every knob's input is present
+    in the posted form regardless of the filter.
+    """
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(
+            _knob("alpha", "Signal gating", True, True),
+            _knob("beta", "Signal gating", True, True),
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert 'name="alpha"' in html and 'name="beta"' in html
+    assert "_bool_keys" in html
+    assert "disabled" not in html[html.index('name="alpha"') - 200:
+                                  html.index('name="alpha"') + 200]
+
+
+def test_is_changed_tolerates_json_numeric_drift():
+    """An int knob can arrive as 3 or 3.0 depending on the store; a badge that
+    cries wolf is worse than no badge, because the reader stops reading it."""
+    assert control_route.is_changed({"value": 3, "default": 3.0}) is False
+    assert control_route.is_changed({"value": "900", "default": 900}) is False
+    assert control_route.is_changed({"value": True, "default": True}) is False
+    assert control_route.is_changed({"value": False, "default": True}) is True
+    assert control_route.is_changed({"value": 0.9, "default": 0.4}) is True
+    assert control_route.is_changed({"value": "", "default": ""}) is False
+    assert control_route.is_changed({"value": "SR_FLIP", "default": ""}) is True
+
+
+def test_anchor_for_is_stable_and_dom_safe():
+    assert control_route.anchor_for("Stops & exits") == "tun-stops-exits"
+    assert control_route.anchor_for("Signal gating") == "tun-signal-gating"
+    assert control_route.anchor_for("") == "tun-other"
