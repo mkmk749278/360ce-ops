@@ -1342,3 +1342,48 @@ Two things it does deliberately:
 The URL is derived from the request rather than hardcoded, because the page is
 reachable on the deployed host and on a local dev server and a copy button that
 hands over the wrong host is worse than none.
+
+## A control must show the state it is about to change (2026-08-10)
+
+The owner set his own account's exit mechanism to SAR from `/control/users`, got
+the flash confirming it, and the card still read **default (SL/TP FSM —
+unchanged)** on every reload. Nothing was broken: the write landed (the trail
+governor page showed both his open positions carrying `mechanism: sar`), and the
+select was simply three hardcoded `<option>`s with no `selected` — over a lookup
+payload that had never carried the field. A write with no read-back, on the one
+control in this repo that changes how a real position closes.
+
+Rules, and the first is the control doctrine's own sentence arriving at a `<select>`:
+
+- **The engine is the source of truth, so read it back and render it** — the
+  engine's lookup now returns `exit_mechanism` + `governor_enabled`, and the card
+  states the live state *above* the control rather than only inside it.
+- **Three states, never two.** `LIVE` (mechanism set **and** master switch on) ·
+  `SET, NOT RUNNING` (set, switch off — a real state, and the one where a page
+  showing only the per-user half would call an inert setting live) · *not
+  reported* (an engine that predates the field). The last is not `default`, and
+  merging them is "blank needs a cause before it gets a caption" at a control.
+- **Use `.get`, not attribute access, for a field an older engine may not send.**
+  Jinja yields `Undefined` for a missing key, which is neither `none` nor a
+  value — the first cut fell past both branches and printed the "set" wording
+  with a blank mechanism name.
+- **Assert the tag, not the word.** The pre-fix page contained `sar` too, in an
+  option nobody had chosen; the guard checks `selected` inside the option tag and
+  fails against the old template.
+
+## `/signals/trail-governor` — `place_failed` needed the exchange's words
+
+Same session. Once the governing timeframe was corrected the governor reached the
+placement step and Binance refused **every** stop: `place_failed` climbing 2 per
+sweep with `handovers` stuck at 0. The page could show the integer and nothing
+else — and -2021 (the level is already through the mark), -1111 (rounding),
+-4015 (duplicate id) and a disconnected key are that same integer with four
+different next moves.
+
+The copy made it worse rather than merely incomplete: it called `place_failed`
+*"the safe failure: nothing was given up"*, which is true about protection and
+silent about a mechanism that will never hand over. **A caption that is true
+about the wrong axis reads as reassurance.** The engine now publishes the last
+few rejections; the page renders them, says `—` where the rejection did not come
+from Binance at all, and prints the ring's size against the unbounded count so
+the newest few cannot read as the whole population.

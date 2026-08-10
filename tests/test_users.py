@@ -412,3 +412,100 @@ def test_the_change_is_audited(monkeypatch):
     assert entry["params"]["exit_mechanism"] == "sar"
     assert entry["params"]["reason"] == "owner canary"
     assert entry["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# The exit-mechanism card is a control over a money-path setting, so it has to
+# show the state it is about to change.
+#
+# Owner screenshot 2026-08-10: he had handed his account to SAR, the flash
+# confirmed it, and this card still rendered "default (SL/TP FSM — unchanged)"
+# on every reload — a static three-option select with nothing selected, over a
+# lookup payload that carried no such field. A write with no read-back, on the
+# one control that decides how a real position closes.
+# ---------------------------------------------------------------------------
+
+
+def _lookup_returning(**extra):
+    async def fake_lookup(self, phone):
+        body = {
+            "user_id": 1,
+            "phone": phone,
+            "tier": "auto",
+            "paid_until": None,
+            "display_name": "Kishore",
+            "onboarded": True,
+        }
+        body.update(extra)
+        return body
+
+    return fake_lookup
+
+
+def _card(monkeypatch, **extra) -> str:
+    monkeypatch.setattr(EngineApiClient, "user_lookup", _lookup_returning(**extra))
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/control/users", params={"phone": "+919618579123"})
+        assert r.status_code == 200
+        return r.text
+
+
+def _option_tag(html: str, value: str) -> str:
+    """The whole `<option …>` tag for one value, attributes included.
+
+    Asserting on the tag rather than on the word: the pre-fix page contained
+    "sar" too — in an option nobody had chosen.
+    """
+    import re
+
+    m = re.search(r"<option[^>]*value=\"%s\"[^>]*>" % re.escape(value), html)
+    assert m, f"no option for {value!r}"
+    return m.group(0)
+
+
+def test_the_stored_mechanism_is_preselected_not_the_first_option(monkeypatch):
+    """GUARD — the select must open on what is stored."""
+    html = _card(monkeypatch, exit_mechanism="sar", governor_enabled=True)
+    assert "selected" in _option_tag(html, "sar")
+    assert "selected" not in _option_tag(html, "default")
+    assert "selected" not in _option_tag(html, "chandelier")
+
+
+def test_default_is_preselected_for_an_account_that_never_opted_in(monkeypatch):
+    html = _card(monkeypatch, exit_mechanism="default", governor_enabled=True)
+    assert "selected" in _option_tag(html, "default")
+    assert "selected" not in _option_tag(html, "sar")
+
+
+def test_a_mechanism_with_the_master_switch_on_reads_live(monkeypatch):
+    html = _card(monkeypatch, exit_mechanism="sar", governor_enabled=True)
+    assert "Exit mechanism now:" in html
+    assert "SAR" in html and "LIVE" in html
+
+
+def test_a_mechanism_with_the_master_switch_off_is_not_called_live(monkeypatch):
+    """Set-but-inert and running are different states. Both switches are
+    required, so a card showing only the per-user half would report a live
+    mechanism over an account still exiting on the FSM."""
+    html = _card(monkeypatch, exit_mechanism="sar", governor_enabled=False)
+    assert "SET, NOT RUNNING" in html
+    assert ">LIVE<" not in html
+
+
+def test_default_says_the_fsm_owns_the_exit(monkeypatch):
+    html = _card(monkeypatch, exit_mechanism="default", governor_enabled=True)
+    assert "SET, NOT RUNNING" not in html
+    assert ">LIVE<" not in html
+
+
+def test_an_engine_that_does_not_report_the_field_says_so(monkeypatch):
+    """An older engine must render "not reported", never "default".
+
+    Jinja's attribute access yields Undefined for a missing key, which is
+    neither none nor a mechanism — the pre-`.get` version of this template fell
+    past both branches and printed the "set" wording with a blank name.
+    """
+    html = _card(monkeypatch)  # no exit_mechanism key at all
+    assert "not reported" in html
+    assert "SET, NOT RUNNING" not in html
