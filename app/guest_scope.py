@@ -149,6 +149,10 @@ OWNER_ONLY: dict[str, str] = {
     "/control/users": "subscriber PII",
     "/control/users/lookup": "subscriber PII",
     "/control/users/grant": "write — entitlements",
+    "/control/users/exit-mechanism": (
+        "write — money path: hands a user's live positions to the trail "
+        "governor, which cancels the evaluator's SL/TP and manages the exit"
+    ),
     "/control/referrals": "subscriber PII",
     "/control/referrals/mark-paid": "write — payouts",
     "/control/access": "the read-only access panel — a guest must not see or mint grants",

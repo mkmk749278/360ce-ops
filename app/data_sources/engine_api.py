@@ -320,3 +320,26 @@ class EngineApiClient:
         if reason:
             payload["reason"] = reason
         return await self._post("/api/admin/grant-tier", payload)
+
+    async def set_exit_mechanism(
+        self,
+        phone: str,
+        exit_mechanism: str,
+        reason: str | None = None,
+    ) -> Any:
+        """Opt one account into (or out of) the live trail governor.
+
+        A **money-path** write: anything but ``default`` means the engine
+        cancels that user's evaluator SL and TP ladder at handover and manages
+        the exit itself. It still does nothing unless the engine-wide
+        ``trail_governor_enabled`` tunable is ON — the response carries
+        ``governor_enabled`` so the caller can say which half is missing
+        rather than reporting a bare success.
+        """
+        payload: dict[str, Any] = {
+            "phone": phone,
+            "exit_mechanism": exit_mechanism,
+        }
+        if reason:
+            payload["reason"] = reason
+        return await self._post("/api/admin/users/exit-mechanism", payload)
