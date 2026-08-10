@@ -452,3 +452,26 @@ tr.tun-row-chg .tunable-label { border-left: 2px solid #e4a400; padding-left: 0.
   .tunable-input { padding-top: 0 !important; }
   .tun-filter { flex-basis: 100%; }
 }
+
+/* ---- Jump-target offset (2026-08-10, owner-reported) ----------------------
+   This app stacks TWO sticky bars — `header` (top:0) and `.subnav` (top:51px)
+   — and nothing in this stylesheet had ever set `scroll-margin`. So a
+   fragment link scrolled its target to viewport-top, i.e. BEHIND the chrome:
+   the heading you asked for was hidden and what you saw was the middle of its
+   section, which reads as "the page did not move". On a phone it is worse,
+   because `header nav` wraps to its own row at the mobile breakpoint and the
+   stack is taller still.
+
+   `--sticky-h` is measured at runtime rather than hardcoded, since that
+   height differs between desktop and a wrapped mobile header — a fixed guess
+   would be wrong on exactly the device the owner reported this from. */
+:root { --sticky-h: 92px; }
+[id^="sec-"], details.tun-cat[id] { scroll-margin-top: calc(var(--sticky-h) + 12px); }
+
+/* The pill for the section you are actually in. Without it the nav gives no
+   feedback at all, which is half of why a jump that landed behind the chrome
+   was indistinguishable from a jump that never happened. */
+.ctl-jump a.on {
+  color: var(--fg); background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--border);
+}

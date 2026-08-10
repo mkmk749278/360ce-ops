@@ -338,7 +338,7 @@ def _knob(key, category, value, default, **over):
         "key": key, "label": key.replace("_", " ").title(), "description": "d",
         "type": "bool" if isinstance(default, bool) else "float",
         "value": value, "default": default, "category": category,
-        "min": None, "max": None, "unit": "",
+        "min": None, "max": None, "unit": "", "choices": None,
     }
     row.update(over)
     return row
@@ -495,3 +495,100 @@ def test_anchor_for_is_stable_and_dom_safe():
     assert control_route.anchor_for("Stops & exits") == "tun-stops-exits"
     assert control_route.anchor_for("Signal gating") == "tun-signal-gating"
     assert control_route.anchor_for("") == "tun-other"
+
+
+def test_jump_targets_clear_the_sticky_chrome(monkeypatch):
+    """GUARD — owner-reported: every pill "looked the same".
+
+    The anchors were all present and correct. This app stacks TWO sticky bars
+    (`header` at top:0 and `.subnav` at top:51px) and the stylesheet had no
+    `scroll-margin` anywhere, so a fragment link scrolled its target to
+    viewport-top — behind the chrome. The heading was hidden and the view
+    barely changed, which is indistinguishable from a jump that never fired.
+
+    Asserted on the stylesheet because that is where the defect lived: the
+    HTML was already right, and every previous test passed over it.
+    """
+    import pathlib
+
+    css = (pathlib.Path(__file__).resolve().parents[1]
+           / "app" / "static" / "style.css").read_text()
+    assert "scroll-margin-top" in css, (
+        "jump targets scroll behind the sticky header/subnav"
+    )
+    assert '[id^="sec-"]' in css
+    # Measured at runtime, not hardcoded — `header nav` wraps on mobile, which
+    # is the device this was reported from.
+    assert "--sticky-h" in css
+
+
+def test_the_jump_handler_never_swallows_a_click_it_cannot_serve(monkeypatch):
+    """A preventDefault() with no scroll is a dead link — strictly worse than
+    the native behaviour it replaced."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(_knob("a", "Signal gating", True, True)),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    handler = html[html.index("Jump-nav scroll offset"):]
+    handler = handler[: handler.index("</script>")]
+    # The guard must come BEFORE preventDefault, or a missing target kills
+    # the link instead of falling back to the browser.
+    assert handler.index("if (!el) return;") < handler.index("preventDefault")
+
+
+def test_a_tunable_with_choices_renders_a_select_not_a_text_box(monkeypatch):
+    """GUARD — owner-reported 2026-08-10.
+
+    `trail_governor_timeframe` has exactly two valid values and shipped as a
+    free text box. It was stored as "5"; the candle store is keyed "5m"/"15m",
+    so the live trail governor refused every position forever while the ops
+    panel blamed the candle feed. A closed set of values must not be typeable.
+    """
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(_knob("trail_governor_timeframe", "Stops & exits", "15m",
+                        "15m", type="str", choices=["5m", "15m"])),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert '<select id="tun-trail_governor_timeframe"' in html
+    assert 'value="5m"' in html and 'value="15m"' in html
+    assert 'type="text" id="tun-trail_governor_timeframe"' not in html
+
+
+def test_a_stored_value_outside_its_choices_is_badged(monkeypatch):
+    """The exact production state. It must be visible on the page, not a
+    silently-unselected dropdown that looks fine."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(_knob("trail_governor_timeframe", "Stops & exits", "5",
+                        "15m", type="str", choices=["5m", "15m"])),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert "not a valid option" in html
+    assert "stored 5" in html
+
+
+def test_a_str_tunable_without_choices_is_still_free_text(monkeypatch):
+    """The structural-snap allow-list is genuinely free text and must not
+    become a dropdown of values nobody enumerated."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(_knob("structural_snap_apply_paths", "Stops & exits",
+                        "SR_FLIP", "", type="str")),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert 'type="text" id="tun-structural_snap_apply_paths"' in html
+    assert "<select id=\"tun-structural_snap_apply_paths\"" not in html
