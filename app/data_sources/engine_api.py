@@ -128,6 +128,20 @@ class EngineApiClient:
         """
         return await self._get("/internal/diag/positions")
 
+    async def trail_governor(self) -> Any:
+        """The live trailing-exit governor — the mechanism placing real orders.
+
+        Every other trail surface in this repo reads a ledger of what a stop
+        *would* have been. This one reads the positions whose stop the engine
+        is actually amending, bar by bar, on a real account.
+
+        Read the refusal mix before the rows: a governor with nothing to
+        govern is indistinguishable from one that is switched off, opted into
+        by nobody, or refusing a stale series — and those have four different
+        fixes.
+        """
+        return await self._get("/internal/diag/trail-governor")
+
     async def data_intake(self) -> Any:
         """What the engine is actually reading from Binance.
 

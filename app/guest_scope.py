@@ -53,6 +53,11 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/signals/{signal_id}",
         "/positions",
         "/pairs",
+        # The live governor's read-only X-ray. Guest-readable deliberately:
+        # it renders counters and parked levels the engine already publishes
+        # and carries no control of its own — the master switch lives on
+        # /control (owner-only) and the per-user opt-in on /control/users.
+        "/signals/trail-governor",
         # -- measurement lanes ---------------------------------------------
         "/signals/sar",
         "/signals/sar/export.csv",

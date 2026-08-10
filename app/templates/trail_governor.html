@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Trail governor — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Trail governor <span class="muted small">— the exit mechanism placing real orders</span></h1>
+
+<section class="card">
+  <p class="muted small">
+    Every other trail page in this dashboard —
+    <a href="/signals/sar-live">SAR live</a>, <a href="/signals/atr-live">ATR trail
+    live</a>, <a href="/signals/sar">SAR signals</a>, the Profit tab's bake-off —
+    renders a <strong>measurement</strong>: where a stop <em>would</em> have been
+    parked. This page renders the stop the engine is
+    <strong>actually amending on a live Binance account</strong>, on every closed
+    bar, for the users who opted in.
+  </p>
+  <p class="muted small">
+    <strong>Two switches are required and they are not the same switch.</strong>
+    The master switch below is engine-wide; the mechanism is chosen
+    <em>per user</em> (<code>exit_mechanism</code>). Master ON with nobody opted
+    in governs nothing — which is the intended state for everyone except the
+    account running the test.
+  </p>
+  <p class="muted small">
+    <strong>The measured edge over the current exit does not exclude zero.</strong>
+    On the 2026-08-10 window SAR read +2.687pp per arm against the live SL/TP
+    exit, and −0.152pp once the two campaigns carrying the book (BMTUSDT,
+    COOKIEUSDT — 15 of 35 arms) came out; the campaign-clustered 95% CI was
+    [−0.59, +4.87]pp. This is a canary on one account, not a rollout.
+  </p>
+</section>
+
+<section class="card">
+  {% if state == 'error' %}
+    <div class="badge badge-bad">UNAVAILABLE</div>
+    <p class="small">The engine could not report: <code>{{ error }}</code>.
+      This is <em>could not answer</em> — not "nothing is governed".</p>
+  {% elif state == 'index_cold' %}
+    <div class="badge badge-bad">INDEX COLD</div>
+    <p class="small">
+      The engine's in-memory position index is not serving, so the sweep cannot
+      see the book. There is deliberately no Firestore fallback here — that
+      query on this clock is the Session-24 billing incident — so the governor
+      refuses rather than guessing. <strong>Not</strong> the same as no open
+      positions.
+    </p>
+  {% elif state == 'off' %}
+    <div class="badge">OFF</div>
+    <p class="small">
+      The master switch is off: every position, for every user, is on the
+      ordinary SL/TP FSM exit. This is the default and is not a fault.
+      Turn it on from <a href="/control">Control → Engine</a>
+      (<code>trail_governor_enabled</code>).
+    </p>
+  {% elif state == 'armed' %}
+    <div class="badge badge-warn">ARMED — governing nothing</div>
+    <p class="small">
+      The switch is on and no open position is governed. That is correct when
+      no user has opted in, or when nobody is in a trade. Read the refusal mix
+      below before treating it as a fault — a governor with nothing to do and
+      one that is refusing every series look identical from the table alone.
+    </p>
+  {% else %}
+    <div class="badge badge-good">GOVERNING {{ governed }}</div>
+    <p class="small">
+      {{ governed }} open position{{ '' if governed == 1 else 's' }} governed
+      {% if open_total is not none %}of {{ open_total }} open{% endif %}.
+      Governing timeframe <strong>{{ timeframe }}</strong>.
+    </p>
+  {% endif %}
+  <p class="muted small">
+    Mechanism and timeframe are read off the engine's payload, never mirrored
+    from a copy of its flag registry here.
+  </p>
+</section>
+
+{% if refusals %}
+<section class="card">
+  <h2 class="small">Why the rest are not governed</h2>
+  <p class="muted small">
+    Counted by the engine, per sweep. These are four different states with four
+    different next moves, so they are never pooled into "no signals":
+    <strong>switch</strong> (deliberate) · <strong>expected</strong> (the
+    mechanism working as designed) · <strong>fault</strong> (ours to fix) ·
+    <strong>unclassified</strong> (a reason this page has not been taught —
+    rendered under its raw name rather than dropped).
+  </p>
+  <table class="data-table">
+    <thead><tr><th>Reason</th><th>Class</th><th>Count</th><th>What it means</th></tr></thead>
+    <tbody>
+      {% for r in refusals %}
+      <tr>
+        <td class="mono">{{ r.reason }}</td>
+        <td><span class="badge badge-{{ 'bad' if r.cls == 'fault' else ('warn' if r.cls == 'unclassified' else '') }}">{{ r.cls }}</span></td>
+        <td>{{ r.count }}</td>
+        <td class="small muted">{{ r.note or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if rows %}
+<section class="card">
+  <h2 class="small">Governed positions</h2>
+  <p class="muted small">
+    <strong>Read “Bar age” before any price column.</strong> It is the age of
+    the bar the engine's governor actually consumed, stamped engine-side — not
+    this page's clock, and not the age of the payload. A stop is only current
+    if the arm that placed it is still stepping. <em>Handover</em> is where the
+    mechanism cancelled the evaluator's SL and TP ladder and took the exit
+    over; before it, the designed stop is still live and the parked column is
+    empty.
+  </p>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Side</th><th>Mechanism</th><th>State</th>
+        <th>Entry</th><th>Designed SL</th><th>Parked stop</th>
+        <th>Re-places</th><th>Bar age</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.symbol }}</td>
+        <td class="side-{{ (r.side or '')|lower }}">{{ r.side }}</td>
+        <td class="mono small">{{ r.mechanism }}</td>
+        <td>
+          {% if r.governing %}
+            <span class="badge badge-good">governing</span>
+          {% else %}
+            <span class="badge">pre-handover</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ r.entry | price }}</td>
+        <td class="mono">{{ r.designed_sl | price }}</td>
+        <td class="mono">{{ (r.parked_stop if r.governing else None) | price }}</td>
+        <td>{{ r.seq }}</td>
+        <td class="mono">{{ r.bar_age_sec | secs }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2 class="small">Sweep counters</h2>
+  <p class="muted small">
+    <code>orphan_cancel</code> is the one to watch: it means a replacement stop
+    is live but the cancel of the one it superseded failed, so two stops are
+    resting. Both are <code>closePosition</code>, so the nearer level wins and
+    the position cannot double-close — over-protected, not dangerous — and the
+    governor retries the cancel next bar. <code>place_failed</code> is the safe
+    failure: nothing was given up, the previous stop is still exactly where it
+    was.
+  </p>
+  <table class="data-table">
+    <thead><tr><th>Counter</th><th>Value</th></tr></thead>
+    <tbody>
+      {% for k in ['cycles', 'governed', 'handovers', 'replaced', 'unchanged', 'place_failed', 'orphan_cancel'] %}
+      <tr><td class="mono">{{ k }}</td><td>{{ health.get(k, '—') }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
