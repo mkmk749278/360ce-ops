@@ -28,28 +28,59 @@
 </div>
 {% endif %}
 
-{# ── At-a-glance status strip ── #}
+{# ── At-a-glance status strip ────────────────────────────────────────────────
+   Every tile links to the control that sets it, so the strip is the second
+   half of the jump nav rather than a read-only banner: you see the state and
+   land on the switch in one move.
+
+   The trail governor is the exception and says so on its face — it is the one
+   switch here that moves a REAL stop order, and nothing on this page can show
+   what it is doing, so its tile goes to the page that can. #}
 <div class="ctl-summary">
-  <div class="ctl-stat">
+  <a class="ctl-stat" href="#sec-safety">
     <div class="k">Kill switch</div>
     <div class="v">{% if ks.get('engaged') %}<span class="badge badge-bad">Engaged</span>{% else %}<span class="badge badge-ok">Clear</span>{% endif %}</div>
-  </div>
-  <div class="ctl-stat">
+  </a>
+  <a class="ctl-stat" href="#sec-mode">
     <div class="k">Auto-execution</div>
     <div class="v"><span class="badge {% if auto.get('mode')=='live' %}badge-bad{% elif auto.get('mode')=='paper' %}badge-warn{% else %}badge-muted{% endif %}">{{ (auto.get('mode') or 'unknown')|upper }}</span></div>
-  </div>
-  <div class="ctl-stat">
+  </a>
+  <a class="ctl-stat" href="#sec-safety">
     <div class="k">Global auto-trade</div>
     <div class="v">{% if glob.get('enabled') %}<span class="badge badge-ok">Enabled</span>{% else %}<span class="badge badge-muted">Disabled</span>{% endif %}</div>
-  </div>
-  <div class="ctl-stat">
+  </a>
+  <a class="ctl-stat" href="#sec-safety">
     <div class="k">Signal expiry</div>
     <div class="v">{% if expiry.get('enabled') %}<span class="badge badge-warn">On</span>{% else %}<span class="badge badge-muted">Off</span>{% endif %}</div>
-  </div>
-  <div class="ctl-stat">
+  </a>
+  <a class="ctl-stat" href="#sec-safety">
     <div class="k">Play billing</div>
     <div class="v">{% if billing.get('configured') is false %}<span class="badge badge-muted">N/A</span>{% elif billing.get('enabled') %}<span class="badge badge-ok">Live</span>{% else %}<span class="badge badge-muted">Off</span>{% endif %}</div>
-  </div>
+  </a>
+  <a class="ctl-stat" href="/signals/trail-governor"
+     title="Trailing-exit governor — opens the live governor page">
+    <div class="k">Trail governor <span class="stat-away">↗</span></div>
+    <div class="v">
+      {% if governor.state == 'governing' %}
+        <span class="badge badge-warn">Governing {{ governor.governed }}</span>
+      {% elif governor.state == 'armed' %}
+        <span class="badge badge-ok">Armed</span>
+      {% elif governor.state == 'off' %}
+        <span class="badge badge-muted">Off</span>
+      {% elif governor.state == 'index_cold' %}
+        <span class="badge badge-bad">Index cold</span>
+      {% else %}
+        <span class="badge badge-bad">Unreadable</span>
+      {% endif %}
+      {# The timeframe is on the tile because it is the field that broke: a
+         free-text value left the switch ON and every position refused. It
+         renders only when the governor is actually on, so it can never
+         describe a governor that is not running. #}
+      {% if governor.state in ('armed', 'governing') and governor.timeframe %}
+        <span class="stat-sub">{{ governor.timeframe }}</span>
+      {% endif %}
+    </div>
+  </a>
 </div>
 
 <h2 class="sec-head" id="sec-safety">Safety switches</h2>
@@ -437,8 +468,12 @@
 })();
 </script>
 
-<section class="card">
-  <h2 id="sec-danger">Full signal reset</h2>
+{# The one irreversible action on the page rendered in a card identical to the
+   five reversible ones above it. Given its own section head and frame so the
+   boundary is visible before the reader is inside it. #}
+<h2 class="sec-head sec-head-danger" id="sec-danger">Danger zone</h2>
+<section class="card card-danger">
+  <h2>Full signal reset</h2>
   <p class="muted">
     Clears ALL signals everywhere: active signals shown in the app,
     signal history feed, performance stats, invalidation records,
