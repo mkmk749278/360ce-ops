@@ -266,3 +266,112 @@ def test_the_page_is_registered_before_signal_detail():
 def test_the_page_actually_resolves(client):
     """The route list is not the authority — the request is."""
     _get(client)
+
+
+# --------------------------------------------------------------------------- #
+# A placement rejection has to say what the exchange said
+#
+# Live on the owner's account 2026-08-10: once the governing timeframe was
+# fixed, `place_failed` climbed at 2 per sweep with `handovers` stuck at 0 —
+# every stop the governor computed was being refused, and the page could only
+# show the integer. -2021 (level already through the mark), -1111 (rounding)
+# and a dead key are three different fixes behind one number, and the reason
+# lived in a log line that needs `docker exec`.
+# --------------------------------------------------------------------------- #
+
+
+def _failure(**over):
+    base = {
+        "ts": 1_700_000_900.0, "symbol": "BLUAIUSDT", "side": "SHORT",
+        "signal_id": "SIG9", "seq": 1, "level": 0.0155252,
+        "kind": "OrderRejectedByBinance", "binance_code": -2021,
+        "error": ("order placement failed (phase=place): code=BINANCE_HTTP_ERROR "
+                  "status=400 message=Binance returned -2021: Order would "
+                  "immediately trigger."),
+    }
+    base.update(over)
+    return base
+
+
+def _with_failures(*failures, **health_over):
+    health = dict(_payload()["health"])
+    health.update({"place_failed": len(failures), "place_failures": list(failures)})
+    health.update(health_over)
+    return _payload(health=health)
+
+
+def test_the_exchange_s_own_words_reach_the_page(client):
+    c, api = client
+    api.payload = _with_failures(_failure())
+    html = _get(client)
+    assert "BLUAIUSDT" in html
+    assert "-2021" in html
+    assert "immediately trigger" in _flat(html)
+
+
+def test_a_non_binance_rejection_shows_a_dash_rather_than_a_zero(client):
+    """"The exchange refused" and "we never reached the exchange" send a reader
+    to different places; a 0 there reads as a Binance code nobody can look up."""
+    c, api = client
+    api.payload = _with_failures(
+        _failure(binance_code=None, kind="OrderPlacementKeyError",
+                 error="code=KEY_BLOB_NOT_FOUND status=0 message=not connected")
+    )
+    html = _get(client)
+    assert "KEY_BLOB_NOT_FOUND" in html
+    assert ">-2021<" not in html
+
+
+def test_an_engine_that_reports_no_detail_is_not_read_as_no_rejections(client):
+    """A missing key means an older engine, not a clean run — the two have
+    different next moves and the page must not merge them."""
+    c, api = client
+    health = dict(_payload()["health"])
+    health["place_failed"] = 7
+    health.pop("place_failures", None)
+    api.payload = _payload(health=health)
+    flat = _flat(_get(client))
+    assert "does not report rejection detail" in flat
+    assert "none recorded" not in flat
+
+
+def test_no_rejections_says_the_exchange_accepted_every_stop(client):
+    c, api = client
+    api.payload = _with_failures(place_failed=0)
+    flat = _flat(_get(client))
+    assert "none recorded" in flat
+    assert "accepted every stop" in flat
+
+
+def test_an_empty_ring_over_a_nonzero_count_is_not_read_as_clean(client):
+    """The counter and the ring are filled by the same call, so this pairing
+    only happens across a deploy — and "the exchange accepted every stop" is a
+    conclusion these two numbers do not support."""
+    c, api = client
+    api.payload = _with_failures(place_failed=6)
+    flat = _flat(_get(client))
+    assert "accepted every stop" not in flat
+    assert "6" in flat
+
+
+def test_the_ring_is_shown_as_a_sample_of_a_larger_count(client):
+    """A bounded buffer feeding a display must publish the total beside it, or
+    the newest few read as the whole population."""
+    c, api = client
+    api.payload = _with_failures(_failure(), _failure(symbol="TSTUSDT"),
+                                 place_failed=412)
+    flat = _flat(_get(client))
+    assert "the last 2 of" in flat
+    assert "412" in flat
+
+
+def test_retry_deferred_is_rendered_and_explained(client):
+    """It is neither a success nor a new failure; unshown, a reader cannot tell
+    a throttled retry from a governor that stopped trying."""
+    c, api = client
+    health = dict(_payload()["health"])
+    health["retry_deferred"] = 9
+    api.payload = _payload(health=health)
+    html = _get(client)
+    assert "retry_deferred" in html
+    assert ">9<" in html.replace(" ", "").replace("\n", "")

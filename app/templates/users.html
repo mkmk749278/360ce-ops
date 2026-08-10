@@ -93,15 +93,60 @@
       can carry more risk than its designed SL implies. The measured edge over
       the current exit did <strong>not</strong> exclude zero.
     </p>
+    {# The state comes FIRST, and it is read off the engine's lookup payload —
+       not assumed from the last write and not mirrored here. Until 2026-08-10
+       this card was a write with no read-back: the select below is a static
+       list, so an account already handed to SAR rendered
+       "default (SL/TP FSM — unchanged)" on every reload and the owner's only
+       evidence that the write had landed was a flash message that had already
+       scrolled past. #}
+    {# `.get`, not `.exit_mechanism`: on an engine that predates the field the
+       attribute form yields Undefined, which is neither none nor a mechanism —
+       it would fall past both branches below and render the "set" wording with
+       a blank name. Missing and default are different facts and this card is
+       exactly where they must not merge. #}
+    {% set stored_mech = lookup.get('exit_mechanism') %}
+    {% set governor_on = lookup.get('governor_enabled') %}
+    <p>
+      Exit mechanism now:
+      {% if stored_mech is none %}
+        <strong>not reported</strong>
+        <span class="muted small">— this engine's lookup does not carry the
+        field, so ops cannot say. That is not the same as
+        <code>default</code>.</span>
+      {% elif stored_mech == 'default' %}
+        <strong>default</strong>
+        <span class="muted small">— the SL/TP FSM owns the exit. The governor
+        does not touch this account.</span>
+      {% elif governor_on %}
+        <strong>{{ stored_mech|upper }}</strong>
+        <span class="badge badge-good">LIVE</span>
+        <span class="muted small">— master switch is ON, so the governor takes
+        the exit over on the next signal that comes onside. Watch it on
+        <a href="/signals/trail-governor">Signals → Trail governor</a>.</span>
+      {% else %}
+        <strong>{{ stored_mech|upper }}</strong>
+        <span class="badge badge-warn">SET, NOT RUNNING</span>
+        <span class="muted small">— the engine-wide <em>Live trail governor</em>
+        is OFF, so this account still exits on the SL/TP FSM. Both switches are
+        required.</span>
+      {% endif %}
+    </p>
     {% if may_use('/control/users/exit-mechanism', 'POST') %}
     <form method="post" action="/control/users/exit-mechanism"
           onsubmit="return confirm('Hand {{ lookup.phone }} exits to ' + this.exit_mechanism.value.toUpperCase() + '? This changes how REAL positions close.');">
       <input type="hidden" name="phone" value="{{ lookup.phone }}">
       <label>Mechanism
+        {# Pre-selected from the STORED value, so the control opens on the
+           state it is about to change rather than on its first option. #}
         <select name="exit_mechanism">
-          <option value="default">default (SL/TP FSM — unchanged)</option>
-          <option value="sar">sar (Parabolic SAR)</option>
-          <option value="chandelier">chandelier (ATR trail)</option>
+          {% for value, label in [
+              ('default', 'default (SL/TP FSM — unchanged)'),
+              ('sar', 'sar (Parabolic SAR)'),
+              ('chandelier', 'chandelier (ATR trail)')] %}
+          <option value="{{ value }}"
+            {% if stored_mech == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
         </select>
       </label>
       <input type="text" name="reason" maxlength="200" placeholder="Reason (optional, recorded)">

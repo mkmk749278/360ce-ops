@@ -153,16 +153,83 @@
     resting. Both are <code>closePosition</code>, so the nearer level wins and
     the position cannot double-close — over-protected, not dangerous — and the
     governor retries the cancel next bar. <code>place_failed</code> is the safe
-    failure: nothing was given up, the previous stop is still exactly where it
-    was.
+    failure — nothing was given up, the previous stop is still exactly where it
+    was — but it is not a benign one: a rejection that repeats is a handover
+    that will never happen, so read it beside <code>handovers</code> and check
+    the rejections below. <code>retry_deferred</code> is the governor declining
+    to re-ask the exchange about a bar it has already refused; the level is
+    fixed for the bar, so the answer would be the same.
   </p>
   <table class="data-table">
     <thead><tr><th>Counter</th><th>Value</th></tr></thead>
     <tbody>
-      {% for k in ['cycles', 'governed', 'handovers', 'replaced', 'unchanged', 'place_failed', 'orphan_cancel'] %}
+      {% for k in ['cycles', 'governed', 'handovers', 'replaced', 'unchanged', 'place_failed', 'retry_deferred', 'orphan_cancel'] %}
       <tr><td class="mono">{{ k }}</td><td>{{ health.get(k, '—') }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
+</section>
+
+{# A counter cannot say what to do next: -2021 (the level is already through
+   the mark), -1111 (rounding), -4015 (duplicate id) and a disconnected key all
+   read as the same integer and have four different fixes. The engine keeps the
+   last few rejections with the exchange's own words; without them the reason
+   lives only in a log line that needs `docker exec`, and the owner reads the
+   page. #}
+<section class="card">
+  <h2 class="small">Placement rejections</h2>
+  {% if health.get('place_failures') is none %}
+  <p class="muted small">
+    This engine does not report rejection detail — the counter above is all it
+    publishes. Not the same as "there were none".
+  </p>
+  {% elif not health.get('place_failures') and not health.get('place_failed') %}
+  <p class="muted small">
+    None recorded, and <code>place_failed</code> is zero — the exchange has
+    accepted every stop this process has tried to park.
+  </p>
+  {% elif not health.get('place_failures') %}
+  {# Empty ring over a non-zero count. The conclusion above does NOT follow
+     from these two numbers, and printing it here would be a sentence the page
+     cannot support. #}
+  <p class="muted small">
+    <strong>{{ health.get('place_failed') }}</strong> rejections counted with
+    no detail retained. The counter and the ring are filled by the same call,
+    so this is a process that counted before it recorded — an engine mid-deploy
+    reading a snapshot from the previous build. It is not "no rejections".
+  </p>
+  {% else %}
+  <p class="muted small">
+    The last {{ health.get('place_failures')|length }} of
+    <strong>{{ health.get('place_failed', 0) }}</strong> — a bounded ring, so
+    the count beside it is the total and this list is a sample of the newest.
+    <code>binance_code</code> empty means the rejection did not come from
+    Binance at all (signing service, key state, or a bug on our side), which is
+    a different first move.
+  </p>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Side</th><th>Level</th><th>Seq</th>
+        <th>Binance code</th><th>Kind</th><th>What the exchange said</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for f in health.get('place_failures')|reverse %}
+      <tr>
+        <td class="mono">{{ f.get('symbol') }}</td>
+        <td>{{ f.get('side') }}</td>
+        <td class="mono">{{ f.get('level')|price }}</td>
+        <td class="mono">{{ f.get('seq') }}</td>
+        <td class="mono">
+          {% if f.get('binance_code') is none %}—{% else %}{{ f.get('binance_code') }}{% endif %}
+        </td>
+        <td class="mono">{{ f.get('kind') }}</td>
+        <td class="small">{{ f.get('error') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
 </section>
 {% endblock %}
