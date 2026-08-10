@@ -67,11 +67,21 @@ def test_control_page_requires_auth():
         assert r.headers["location"] == "/login"
 
 
-def _patch_reads(monkeypatch, *, mode="paper"):
-    """Monkeypatch the three read calls _render makes, so control tests
+#: What the governor diag looks like with the switch off — the default state,
+#: and the one every test that is not about the governor should see.
+GOVERNOR_OFF = {"enabled": False, "governed": 0, "rows": [], "health": {}}
+
+
+def _patch_reads(monkeypatch, *, mode="paper", governor=None):
+    """Monkeypatch the read calls _render makes, so control tests
     don't hit the network."""
     async def fake_auto_mode(self):
         return {"mode": mode}
+
+    async def fake_governor(self):
+        return GOVERNOR_OFF if governor is None else governor
+
+    monkeypatch.setattr(EngineApiClient, "trail_governor", fake_governor)
 
     async def fake_ks(self):
         return {"engaged": False, "initialised": True, "reason": None}
@@ -370,8 +380,15 @@ def test_operational_controls_render_above_the_wall_of_tunables(monkeypatch):
 
 
 def test_every_jump_target_exists(monkeypatch):
-    """A nav link to an anchor nobody rendered scrolls nowhere and reads as a
-    broken page — the nav rule one level down."""
+    """A link to an anchor nobody rendered scrolls nowhere and reads as a
+    broken page — the nav rule one level down.
+
+    Scans the WHOLE document rather than the nav element. The first cut read
+    only ``.ctl-jump``, which was correct on the day and silent by
+    construction the moment a second set of fragment links appeared — which
+    is exactly what the status strip then became. Derive the requirement from
+    the rendered page, not from the one place links happened to live.
+    """
     import re
 
     _patch_reads(monkeypatch)
@@ -382,9 +399,120 @@ def test_every_jump_target_exists(monkeypatch):
     with TestClient(app) as client:
         _login(client)
         html = client.get("/control").text
-    nav = html[html.index('class="ctl-jump"'):html.index("</nav>")]
-    for target in re.findall(r'href="#([^"]+)"', nav):
+    targets = set(re.findall(r'href="#([^"]+)"', html))
+    assert "sec-safety" in targets, "the strip/nav rendered no fragment links"
+    for target in targets:
         assert f'id="{target}"' in html, f"jump target #{target} renders nowhere"
+
+
+def test_governor_summary_classifies_with_the_governor_pages_own_states():
+    """The five states exist because four of them render as an empty table.
+
+    Re-deriving them here would put a second classifier beside the page this
+    tile summarises, and the two would drift.
+    """
+    assert control_route.governor_summary(
+        {"enabled": False, "governed": 0})["state"] == "off"
+    assert control_route.governor_summary(
+        {"enabled": True, "governed": 0})["state"] == "armed"
+    gov = control_route.governor_summary({"enabled": True, "governed": 2})
+    assert gov["state"] == "governing" and gov["governed"] == 2
+    assert control_route.governor_summary(
+        {"enabled": True, "index_cold": True})["state"] == "index_cold"
+    assert control_route.governor_summary({"error": "boom"})["state"] == "error"
+    # Not a dict at all — an engine that answered with a list must not read as
+    # a healthy quiet book.
+    assert control_route.governor_summary(["nope"])["state"] == "error"
+
+
+def test_the_strip_shows_what_the_governor_is_doing_not_what_the_switch_says(
+    monkeypatch,
+):
+    """The tile reads the governor's own diag, never `trail_governor_enabled`.
+
+    Those two came apart on 2026-08-10: a free-text timeframe left the switch
+    reading ON while every position was refused as `bad_timeframe`. A tile
+    sourced from the tunable would have shown green over a governor that had
+    not moved a stop all day.
+    """
+    _patch_reads(
+        monkeypatch,
+        governor={"enabled": True, "governed": 2, "timeframe": "5m"},
+    )
+    # The switch below says the opposite of the diag above; the tile must
+    # follow the diag.
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(_knob("trail_governor_enabled", "Stops & exits", False, False)),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    flat = _flat(html)
+    assert "Trail governor" in flat
+    assert "Governing 2" in flat
+    assert "/signals/trail-governor" in html
+    # The timeframe is the field that broke; a value carried into the template
+    # and rendered by nothing is the seam this repo keeps paying for.
+    assert "5m" in flat
+
+
+def test_the_timeframe_renders_only_when_the_governor_is_running(monkeypatch):
+    """A stored timeframe beside an OFF governor describes a governor that is
+    not consuming it — the caption naming a state the page is not in."""
+    _patch_reads(
+        monkeypatch,
+        governor={"enabled": False, "governed": 0, "timeframe": "15m"},
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    tile = _flat(html).split("Trail governor")[1][:300]
+    assert "Off" in tile
+    assert "15m" not in tile
+
+
+def test_an_unreadable_governor_is_named_and_does_not_break_the_page(monkeypatch):
+    """This page carries the kill switch. The newest read on it must never be
+    what stops the owner reaching that button, and a failure must be visible
+    rather than rendering as a quiet 'off'."""
+    _patch_reads(monkeypatch, governor={"error": "connection refused"})
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/control")
+    assert r.status_code == 200
+    flat = _flat(r.text)
+    assert "Unreadable" in flat
+    assert "Off</span>" not in flat.split("Trail governor")[1][:400]
+    # The kill switch is still operable.
+    assert 'action="/control/kill-switch"' in r.text
+
+
+def test_a_governor_read_that_raises_still_renders_the_page(monkeypatch):
+    """`_get` converts an HTTP failure into an error dict; this covers the
+    residue (a non-JSON body), because the tolerated path is the whole point
+    of catching it."""
+    async def boom(self):
+        raise RuntimeError("non-JSON body")
+
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(EngineApiClient, "trail_governor", boom)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.get("/control")
+    assert r.status_code == 200
+    assert "Unreadable" in _flat(r.text)
+
+
+def test_the_danger_zone_is_framed_apart_from_the_reversible_controls(monkeypatch):
+    """The one irreversible action rendered in a card identical to five
+    reversible toggles."""
+    _patch_reads(monkeypatch)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert 'class="sec-head sec-head-danger" id="sec-danger"' in html
+    assert "card card-danger" in html
 
 
 def test_changed_knobs_are_badged_and_counted(monkeypatch):

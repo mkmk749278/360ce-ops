@@ -20,6 +20,7 @@ from fastapi.responses import RedirectResponse
 
 from app import audit
 from app.routes.positions import _enrich_row
+from app.routes.trail_governor import lane_state
 
 router = APIRouter()
 
@@ -104,6 +105,37 @@ def group_tunables(tunables: object) -> tuple[dict[str, list], bool]:
     return {c: groups[c] for c in sorted(groups, key=_rank)}, initialised
 
 
+def governor_summary(payload: object) -> dict:
+    """The trail governor, reduced for the at-a-glance strip.
+
+    The strip named five switches and omitted the only one that moves a real
+    stop order on a live account — the governor cancels the evaluator's SL and
+    parks its own, and its state was readable nowhere on this page. A reader
+    checking "is anything touching my stops right now?" had to know that the
+    answer lived 77 knobs down inside a collapsed category.
+
+    The state is CLASSIFIED BY THE GOVERNOR PAGE'S OWN ``lane_state``, not
+    re-derived here — its five states exist because ``off``, ``armed``,
+    ``index_cold`` and a working-but-quiet book all render as "no rows" and
+    have four different next moves. A second classifier would drift from the
+    page it is meant to summarise, and the fix for a drifting mirror is not a
+    second mirror.
+
+    Note this deliberately does NOT read ``trail_governor_enabled`` from the
+    tunables already on the page. That is the *switch*; this is what the
+    governor is *doing*, and the two came apart on 2026-08-10 when a
+    free-text timeframe left the switch reading ON while every position was
+    refused. A tile sourced from the switch would have shown green.
+    """
+    state = lane_state(payload if isinstance(payload, dict) else {"error": "no payload"})
+    data = payload if isinstance(payload, dict) else {}
+    return {
+        "state": state,
+        "governed": int(data.get("governed") or 0),
+        "timeframe": data.get("timeframe"),
+    }
+
+
 async def _render(request: Request):
     api = request.app.state.engine_api
     settings = request.app.state.settings
@@ -115,6 +147,15 @@ async def _render(request: Request):
     expiry = await api.signal_expiry_state()
     billing = await api.billing_enabled_state()
     tunables = await api.tunables_state()
+    # Tolerated separately from the five switches above: this page carries the
+    # kill switch, and the newest read on it must never be what stops the
+    # owner reaching that button. `_get` already converts an HTTP failure into
+    # an error dict; this catches the residue (a non-JSON body). Nothing is
+    # swallowed — an error renders as the tile's own `error` state.
+    try:
+        governor_raw = await api.trail_governor()
+    except Exception as exc:  # pragma: no cover - defensive
+        governor_raw = {"error": f"{type(exc).__name__}: {exc}"}
     flash = request.session.pop("_control_flash", None)
 
     tunable_groups, tunables_initialised = group_tunables(tunables)
@@ -139,6 +180,7 @@ async def _render(request: Request):
             "glob": glob if isinstance(glob, dict) else {},
             "expiry": expiry if isinstance(expiry, dict) else {},
             "billing": billing if isinstance(billing, dict) else {},
+            "governor": governor_summary(governor_raw),
             "tunable_groups": tunable_groups,
             "groups_meta": groups_meta,
             "changed_total": changed_total,

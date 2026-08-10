@@ -267,7 +267,12 @@ code {
 
 /* Control status summary strip (control.html) */
 .ctl-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.8rem; margin-bottom: 1.2rem; }
-.ctl-summary .ctl-stat { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md); padding: 0.8rem 1rem; box-shadow: var(--shadow-sm); }
+.ctl-summary .ctl-stat { display: block; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md); padding: 0.8rem 1rem; box-shadow: var(--shadow-sm); text-decoration: none; color: inherit; }
+/* Each tile links to the control that sets it (2026-08-10) — the hover is the
+   only thing telling the reader that, so it is not optional polish. */
+.ctl-summary a.ctl-stat:hover { border-color: var(--fg-dim); }
+.ctl-summary .stat-away { opacity: 0.55; font-size: 0.7em; }
+.ctl-summary .stat-sub { color: var(--fg-dim); font-size: 0.72rem; font-weight: 400; margin-left: 0.4rem; }
 .ctl-summary .ctl-stat .k { color: var(--fg-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .ctl-summary .ctl-stat .v { font-size: 1.15rem; font-weight: 700; margin-top: 0.25rem; }
 /* Control cards grid — rich yet minimal */
@@ -416,6 +421,12 @@ details.raw-section pre { margin: 0; border: none; border-radius: 0; background:
 }
 .ctl-jump a:hover { color: var(--fg); border-color: var(--fg-dim); }
 h2.sec-head { margin: 1.4rem 0 0.6rem; font-size: 0.95rem; }
+
+/* The danger zone read as one more card. The full reset is the only action on
+   this page that cannot be undone, and it sat in the same frame as five
+   reversible toggles. */
+h2.sec-head-danger { color: #e44; }
+.card-danger { border-color: #e4444455; box-shadow: inset 3px 0 0 #e44; }
 
 .pill-chg {
   display: inline-block; background: #e4a40022; color: #e4a400;
