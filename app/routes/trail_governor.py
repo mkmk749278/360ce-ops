@@ -85,6 +85,12 @@ REFUSAL_COPY: dict[str, tuple[str, str]] = {
         "The mechanism has not come onside yet, so the evaluator's own SL and "
         "TP1 are still governing. This is the pre-handover state.",
     ),
+    "no_quantity": (
+        "fault",
+        "The position's remaining size read as zero, so there was nothing to "
+        "park a stop over and none was sent. The exchange was never asked — "
+        "this is our own book, not a rejection.",
+    ),
     "no_level": (
         "fault",
         "The mechanism could not produce a level for the bar now forming.",
