@@ -375,3 +375,26 @@ def test_retry_deferred_is_rendered_and_explained(client):
     html = _get(client)
     assert "retry_deferred" in html
     assert ">9<" in html.replace(" ", "").replace("\n", "")
+
+
+def test_no_quantity_is_classified_as_a_fault_not_an_exchange_rejection(client):
+    """It is our own book saying there is nothing to protect — the exchange was
+    never asked, so it must not read as a placement failure."""
+    c, api = client
+    health = dict(_payload()["health"])
+    health["refusals"] = {"no_quantity": 2}
+    api.payload = _payload(health=health)
+    flat = _flat(_get(client))
+    assert "no_quantity" in flat
+    assert "unclassified" not in flat.split("no_quantity")[1][:400]
+    assert "never asked" in flat
+
+
+def test_the_two_resting_stops_are_not_described_as_close_position(client):
+    """The governor's stop is reduceOnly with a size (engine #915) — Binance
+    refuses a second closePosition stop in the same direction, which is what
+    made every handover impossible. The copy explaining why two stops are safe
+    has to describe the orders actually being placed."""
+    flat = _flat(_get(client))
+    assert "reduceonly" in flat
+    assert "both are closeposition" not in flat

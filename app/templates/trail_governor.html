@@ -150,9 +150,11 @@
   <p class="muted small">
     <code>orphan_cancel</code> is the one to watch: it means a replacement stop
     is live but the cancel of the one it superseded failed, so two stops are
-    resting. Both are <code>closePosition</code>, so the nearer level wins and
-    the position cannot double-close — over-protected, not dangerous — and the
-    governor retries the cancel next bar. <code>place_failed</code> is the safe
+    resting. That is over-protected, not dangerous: the governor's stop is
+    <code>reduceOnly</code> for the position's own size, so whichever level
+    triggers first closes the position and the exchange cancels the other
+    rather than opening or flipping anything — and the governor retries the
+    cancel next bar. <code>place_failed</code> is the safe
     failure — nothing was given up, the previous stop is still exactly where it
     was — but it is not a benign one: a rejection that repeats is a handover
     that will never happen, so read it beside <code>handovers</code> and check

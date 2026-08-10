@@ -1387,3 +1387,23 @@ about the wrong axis reads as reassurance.** The engine now publishes the last
 few rejections; the page renders them, says `—` where the rejection did not come
 from Binance at all, and prints the ring's size against the unbounded count so
 the newest few cannot read as the whole population.
+
+## Two resting stops, and why the copy about them had to change (2026-08-10)
+
+`/signals/trail-governor`'s `orphan_cancel` paragraph explained why two stops
+resting at once is safe: *"Both are `closePosition`, so the nearer level wins and
+the position cannot double-close."* That sentence was the engine's own design
+argument, ported faithfully — and the design it described could never run.
+Binance refuses a second `closePosition` stop in the same direction (-4130), so
+the governor's stop is now `reduceOnly` for the position's own size. One of the
+two resting orders is no longer a `closePosition`, and the safety argument is a
+different one: whichever level triggers first closes the position, and the
+exchange cancels the reduce-only remainder rather than opening or flipping
+anything.
+
+The rule this is an instance of: **when the engine changes the shape of a thing,
+ops' explanation of why it is safe is part of the change.** A paragraph that
+still describes the old shape is wrong on screen even though every counter above
+it is right — and it is the kind of wrong a reader cannot detect, because it
+reads as authoritative and internally consistent. A route test now asserts the
+page does not say "both are closePosition".
