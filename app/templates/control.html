@@ -8,6 +8,20 @@
   this is.
 </p>
 
+{# ── Jump nav ──────────────────────────────────────────────────────────────
+   77 tunables across {{ groups_meta|length }} categories used to sit between
+   the safety switches and the auto-execution mode, so on a phone the mode
+   toggle and the live positions table were several screens below a wall of
+   knobs. The order below is the fix; this bar is how you skip anyway. #}
+<nav class="ctl-jump" aria-label="Control sections">
+  <a href="#sec-safety">Safety</a>
+  <a href="#sec-mode">Mode</a>
+  <a href="#sec-positions">Positions</a>
+  <a href="#sec-tunables">Tunables{% if changed_total %} <span class="pill-chg">{{ changed_total }}</span>{% endif %}</a>
+  <a href="#sec-danger">Danger</a>
+  <a href="#sec-audit">Audit</a>
+</nav>
+
 {% if flash %}
 <div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
   {{ flash.text }}
@@ -38,6 +52,7 @@
   </div>
 </div>
 
+<h2 class="sec-head" id="sec-safety">Safety switches</h2>
 <div class="ctl-grid">
 <section class="card">
   <h2>Global kill switch</h2>
@@ -148,7 +163,44 @@
 </div><!-- /.ctl-grid -->
 
 <section class="card">
-  <h2>Engine tunables <span class="muted">(live — applied within 5s, no redeploy)</span></h2>
+  <h2 id="sec-mode">Auto-execution mode</h2>
+  {% if auto.get('error') %}
+    <p class="muted">Could not read current mode: {{ auto.error }}</p>
+  {% else %}
+    <p>Current engine-wide mode:
+      <strong class="mode-{{ auto.get('mode', 'unknown') }}">
+        {{ (auto.get('mode') or 'unknown')|upper }}
+      </strong>
+    </p>
+  {% endif %}
+  <div class="btn-row">
+    {% for m, label, danger in [
+        ('off', 'Off', false),
+        ('paper', 'Paper', false),
+        ('live', 'Live', true)] %}
+    <form method="post" action="/control/auto-mode"
+          {% if danger %}onsubmit="return confirm('Switch the engine to LIVE — real Binance orders will fire. Continue?');"{% endif %}>
+      <input type="hidden" name="mode" value="{{ m }}">
+      <button type="submit"
+              class="btn {% if auto.get('mode') == m %}btn-current{% elif danger %}btn-danger{% else %}btn-plain{% endif %}"
+              {% if auto.get('mode') == m %}disabled{% endif %}>
+        {{ label }}{% if auto.get('mode') == m %} ✓{% endif %}
+      </button>
+    </form>
+    {% endfor %}
+  </div>
+  <p class="muted">Off halts new entries; Paper simulates; Live fires real orders.</p>
+</section>
+
+<section class="card">
+  <h2 id="sec-positions">Open positions <span class="muted">(live)</span></h2>
+  <div hx-get="/control/positions" hx-trigger="load, every 5s" hx-swap="innerHTML">
+    <p class="muted">Loading positions…</p>
+  </div>
+</section>
+
+<section class="card">
+  <h2 id="sec-tunables">Engine tunables <span class="muted">(live — applied within 5s, no redeploy)</span></h2>
   <p class="muted">
     The 2026-07-07 exit overhaul ships ACTIVE with every knob controlled from
     here. These write to the engine's <code>control/runtime_tunables</code>
@@ -157,6 +209,30 @@
     7-day study (52% of stops were shakeouts; 84% of break-even scratches were
     winners that resumed).
   </p>
+  {% if tunable_groups %}
+  <div class="tun-toolbar">
+    <input type="search" id="tun-filter" class="tun-filter"
+           placeholder="Filter {{ tunable_groups.values()|map('length')|sum }} tunables by name, key or description…"
+           autocomplete="off" aria-label="Filter tunables">
+    <label class="tun-only-changed">
+      <input type="checkbox" id="tun-changed-only"> Only changed
+    </label>
+    <span class="muted small" id="tun-count"></span>
+  </div>
+  <p class="muted small">
+    {% if changed_total %}
+      <strong>{{ changed_total }}</strong> of
+      {{ tunable_groups.values()|map('length')|sum }} are off their boot
+      default — those rows are marked <span class="pill-chg">changed</span>.
+    {% else %}
+      Every tunable is currently at its boot default.
+    {% endif %}
+    Categories are collapsed; open the one you need, or filter above.
+    <strong>Filtering hides rows, it does not exclude them from a save</strong>
+    — a hidden field still posts its current value, so applying a category
+    always writes that whole category exactly as it stands.
+  </p>
+  {% endif %}
   {% if not tunables_initialised and not tunable_groups %}
     <p class="muted">Engine tunables unavailable — the engine reports the
       store never initialised (no Firestore / GCP creds), so it is running on
@@ -168,9 +244,15 @@
         writes will fail until Firestore is wired.</p>
     {% endif %}
     {% for category, entries in tunable_groups.items() %}
+    {% set meta = (groups_meta | selectattr('category', 'equalto', category) | first) %}
+    <details class="tun-cat" id="{{ meta.anchor }}" data-cat="{{ category }}">
+      <summary>
+        <span class="tun-cat-name">{{ category }}</span>
+        <span class="muted small">{{ meta.count }} knob{{ '' if meta.count == 1 else 's' }}</span>
+        {% if meta.changed %}<span class="pill-chg">{{ meta.changed }} changed</span>{% endif %}
+      </summary>
     <form method="post" action="/control/tunables" class="tunable-group"
           onsubmit="return confirm('Apply these {{ category|lower }} changes to the LIVE engine? They take effect within 5 seconds.');">
-      <h3>{{ category }}</h3>
       <input type="hidden" name="_bool_keys"
              value="{{ entries | selectattr('type', 'equalto', 'bool') | map(attribute='key') | join(',') }}">
       {# Companion for text tunables, for the same reason _bool_keys exists.
@@ -183,9 +265,12 @@
       <table class="tunables">
         <tbody>
           {% for t in entries %}
-          <tr>
+          <tr class="tun-row{% if t.changed %} tun-row-chg{% endif %}"
+              data-hay="{{ (t.label ~ ' ' ~ t.key ~ ' ' ~ t.description)|lower }}"
+              data-changed="{{ '1' if t.changed else '0' }}">
             <td class="tunable-label">
               <label for="tun-{{ t.key }}"><strong>{{ t.label }}</strong></label>
+              {% if t.changed %}<span class="pill-chg">changed</span>{% endif %}
               {% if t.unit %}<span class="muted">({{ t.unit }})</span>{% endif %}
               <p class="muted tunable-desc">{{ t.description }}</p>
             </td>
@@ -223,49 +308,55 @@
         Apply {{ category|lower }} changes
       </button>
     </form>
+    </details>
     {% endfor %}
   {% endif %}
 </section>
 
-<section class="card">
-  <h2>Auto-execution mode</h2>
-  {% if auto.get('error') %}
-    <p class="muted">Could not read current mode: {{ auto.error }}</p>
-  {% else %}
-    <p>Current engine-wide mode:
-      <strong class="mode-{{ auto.get('mode', 'unknown') }}">
-        {{ (auto.get('mode') or 'unknown')|upper }}
-      </strong>
-    </p>
-  {% endif %}
-  <div class="btn-row">
-    {% for m, label, danger in [
-        ('off', 'Off', false),
-        ('paper', 'Paper', false),
-        ('live', 'Live', true)] %}
-    <form method="post" action="/control/auto-mode"
-          {% if danger %}onsubmit="return confirm('Switch the engine to LIVE — real Binance orders will fire. Continue?');"{% endif %}>
-      <input type="hidden" name="mode" value="{{ m }}">
-      <button type="submit"
-              class="btn {% if auto.get('mode') == m %}btn-current{% elif danger %}btn-danger{% else %}btn-plain{% endif %}"
-              {% if auto.get('mode') == m %}disabled{% endif %}>
-        {{ label }}{% if auto.get('mode') == m %} ✓{% endif %}
-      </button>
-    </form>
-    {% endfor %}
-  </div>
-  <p class="muted">Off halts new entries; Paper simulates; Live fires real orders.</p>
-</section>
+<script>
+/* Tunable filter. Hides ROWS only — a hidden input still posts its current
+   value, so filtering can never silently drop a knob from a category save.
+   That is deliberate: the alternative (disabling filtered inputs) would make
+   what you apply depend on what you typed, which is the one behaviour a
+   money-path form must not have. */
+(function () {
+  var box = document.getElementById('tun-filter');
+  var onlyChanged = document.getElementById('tun-changed-only');
+  var count = document.getElementById('tun-count');
+  if (!box) return;
+  var rows = Array.prototype.slice.call(document.querySelectorAll('.tun-row'));
+  var cats = Array.prototype.slice.call(document.querySelectorAll('.tun-cat'));
+
+  function apply() {
+    var q = box.value.trim().toLowerCase();
+    var wantChanged = onlyChanged && onlyChanged.checked;
+    var shown = 0;
+    rows.forEach(function (r) {
+      var hit = (!q || (r.dataset.hay || '').indexOf(q) !== -1) &&
+                (!wantChanged || r.dataset.changed === '1');
+      r.style.display = hit ? '' : 'none';
+      if (hit) shown++;
+    });
+    cats.forEach(function (c) {
+      var vis = c.querySelectorAll('.tun-row:not([style*="none"])').length;
+      c.style.display = (q || wantChanged) && vis === 0 ? 'none' : '';
+      /* Auto-open on an active filter so matches are not hidden behind a
+         collapsed summary — a search that finds something and shows nothing
+         reads as a search that found nothing. */
+      if (q || wantChanged) { c.open = vis > 0; }
+    });
+    count.textContent = (q || wantChanged)
+      ? shown + ' of ' + rows.length + ' shown'
+      : '';
+  }
+  box.addEventListener('input', apply);
+  if (onlyChanged) onlyChanged.addEventListener('change', apply);
+  apply();
+})();
+</script>
 
 <section class="card">
-  <h2>Open positions <span class="muted">(live)</span></h2>
-  <div hx-get="/control/positions" hx-trigger="load, every 5s" hx-swap="innerHTML">
-    <p class="muted">Loading positions…</p>
-  </div>
-</section>
-
-<section class="card">
-  <h2>Full signal reset</h2>
+  <h2 id="sec-danger">Full signal reset</h2>
   <p class="muted">
     Clears ALL signals everywhere: active signals shown in the app,
     signal history feed, performance stats, invalidation records,
@@ -284,7 +375,7 @@
 </section>
 
 <section class="card">
-  <h2>Recent control actions</h2>
+  <h2 id="sec-audit">Recent control actions</h2>
   {% if audit %}
   <table class="audit">
     <thead><tr><th>When (UTC)</th><th>Action</th><th>Params</th><th>Result</th></tr></thead>

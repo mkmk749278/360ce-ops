@@ -30,6 +30,80 @@ def _is_error(result: object) -> bool:
     return isinstance(result, dict) and bool(result.get("error"))
 
 
+#: Category render order, most-consequential first. Anything the engine adds
+#: that is not named here still renders — it sorts to the end rather than
+#: disappearing, because a hand-kept order list that silently drops a category
+#: is the deny-list defect this repo has paid for under several names.
+_CATEGORY_ORDER = ("Stops & exits", "Signal gating", "Execution", "Measurement")
+
+
+def anchor_for(category: str) -> str:
+    """A stable DOM id for a category, for the jump nav."""
+    slug = "".join(
+        ch.lower() if ch.isalnum() else "-" for ch in str(category)
+    ).strip("-")
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return f"tun-{slug or 'other'}"
+
+
+def is_changed(entry: dict) -> bool:
+    """Has this tunable been moved off its boot default?
+
+    The single most useful operational question on this page — *what did I
+    change?* — and it was not answerable before: 77 knobs rendered identically
+    whether or not anyone had ever touched them.
+
+    Compared as strings deliberately. The engine round-trips these through
+    JSON, so an int knob can arrive as ``3`` or ``3.0`` depending on the store,
+    and ``!=`` on the raw values would mark untouched rows as changed — a
+    "you edited this" badge that cries wolf is worse than no badge, because the
+    reader stops reading it.
+    """
+    if not isinstance(entry, dict):
+        return False
+    value, default = entry.get("value"), entry.get("default")
+    if isinstance(value, bool) or isinstance(default, bool):
+        return bool(value) is not bool(default)
+    if value is None and default is None:
+        return False
+    try:
+        if value is not None and default is not None:
+            return float(value) != float(default)
+    except (TypeError, ValueError):
+        pass
+    return str(value if value is not None else "") != str(
+        default if default is not None else ""
+    )
+
+
+def group_tunables(tunables: object) -> tuple[dict[str, list], bool]:
+    """Group the engine's tunables by category, in render order.
+
+    Each entry gains ``changed``; the caller does not recompute it, so the
+    badge, the per-category count and the page total can never disagree.
+    """
+    groups: dict[str, list] = {}
+    initialised = False
+    if isinstance(tunables, dict) and not tunables.get("error"):
+        initialised = bool(tunables.get("initialised"))
+        for entry in tunables.get("tunables") or []:
+            if isinstance(entry, dict):
+                entry = dict(entry)
+                entry["changed"] = is_changed(entry)
+                groups.setdefault(
+                    str(entry.get("category") or "Other"), []
+                ).append(entry)
+
+    def _rank(cat: str) -> tuple[int, str]:
+        try:
+            return (_CATEGORY_ORDER.index(cat), "")
+        except ValueError:
+            return (len(_CATEGORY_ORDER), cat)
+
+    return {c: groups[c] for c in sorted(groups, key=_rank)}, initialised
+
+
 async def _render(request: Request):
     api = request.app.state.engine_api
     settings = request.app.state.settings
@@ -43,17 +117,17 @@ async def _render(request: Request):
     tunables = await api.tunables_state()
     flash = request.session.pop("_control_flash", None)
 
-    # Group tunables by category so the template renders one card per
-    # concern ("Stops & exits", "Signal gating") with per-knob explanations.
-    tunable_groups: dict[str, list] = {}
-    tunables_initialised = False
-    if isinstance(tunables, dict) and not tunables.get("error"):
-        tunables_initialised = bool(tunables.get("initialised"))
-        for entry in tunables.get("tunables") or []:
-            if isinstance(entry, dict):
-                tunable_groups.setdefault(
-                    str(entry.get("category") or "Other"), []
-                ).append(entry)
+    tunable_groups, tunables_initialised = group_tunables(tunables)
+    groups_meta = [
+        {
+            "category": cat,
+            "anchor": anchor_for(cat),
+            "count": len(entries),
+            "changed": sum(1 for e in entries if e.get("changed")),
+        }
+        for cat, entries in tunable_groups.items()
+    ]
+    changed_total = sum(g["changed"] for g in groups_meta)
 
     return templates.TemplateResponse(
         "control.html",
@@ -66,6 +140,8 @@ async def _render(request: Request):
             "expiry": expiry if isinstance(expiry, dict) else {},
             "billing": billing if isinstance(billing, dict) else {},
             "tunable_groups": tunable_groups,
+            "groups_meta": groups_meta,
+            "changed_total": changed_total,
             "tunables_initialised": tunables_initialised,
             "audit": audit.tail(settings.audit_log_path, limit=25),
             "flash": flash,
