@@ -70,8 +70,15 @@ REFUSAL_COPY: dict[str, tuple[str, str]] = {
     ),
     "no_series": (
         "fault",
-        "No usable candle window for the symbol. The existing stop is left "
+        "No usable candle window for THIS SYMBOL. The existing stop is left "
         "alone; the position is protected, not naked.",
+    ),
+    "bad_timeframe": (
+        "switch",
+        "The configured governing timeframe is not one the candle store "
+        "carries — check Control → Engine → Stops & exits. Until it is 5m or "
+        "15m the governor can never hand over, and every position keeps its "
+        "original SL/TP.",
     ),
     "not_onside": (
         "expected",

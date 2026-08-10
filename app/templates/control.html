@@ -279,6 +279,20 @@
                 <input type="checkbox" id="tun-{{ t.key }}" name="{{ t.key }}"
                        {% if t.value %}checked{% endif %}>
                 <span class="muted">{{ 'ON' if t.value else 'OFF' }} now</span>
+              {% elif t.choices %}
+                {# A closed set of values must not be typeable. Shipping the
+                   governing timeframe as free text is how it got stored as
+                   "5" instead of "5m", which made the live trail governor
+                   permanently inert while reporting a candle-feed fault. #}
+                <select id="tun-{{ t.key }}" name="{{ t.key }}">
+                  {% for c in t.choices %}
+                  <option value="{{ c }}" {% if t.value|string == c %}selected{% endif %}>{{ c }}</option>
+                  {% endfor %}
+                </select>
+                <span class="muted">default <code>{{ t.default }}</code></span>
+                {% if t.value is not none and t.value|string not in t.choices %}
+                  <span class="pill-chg">stored {{ t.value }} — not a valid option</span>
+                {% endif %}
               {% elif t.type == 'str' %}
                 {# Free text — e.g. the structural-snap per-path allow-list.
                    Rendering this through the number input below would make the
@@ -312,6 +326,74 @@
     {% endfor %}
   {% endif %}
 </section>
+
+<script>
+/* Jump-nav scroll offset + active pill.
+   Owner-reported 2026-08-10: every pill "looked the same". The anchors were
+   all present and correct — they scrolled the target to viewport-top, which
+   in this app is BEHIND two stacked sticky bars (`header` + `.subnav`), so
+   the heading was hidden and the view barely changed.
+
+   The offset is MEASURED, not assumed: `header nav` wraps to its own row at
+   the mobile breakpoint, so the stack is materially taller on a phone —
+   which is precisely the device this was reported from. A hardcoded value
+   would have been right on the desktop I tested and wrong where it mattered. */
+(function () {
+  var nav = document.querySelector('.ctl-jump');
+  if (!nav) return;
+  var links = Array.prototype.slice.call(nav.querySelectorAll('a[href^="#"]'));
+  var targets = links.map(function (a) {
+    return document.getElementById(a.getAttribute('href').slice(1));
+  });
+
+  function stickyHeight() {
+    var h = 0;
+    ['header', '.subnav'].forEach(function (sel) {
+      var el = document.querySelector(sel);
+      if (!el) return;
+      var cs = window.getComputedStyle(el);
+      if (cs.position === 'sticky' || cs.position === 'fixed') {
+        h += el.getBoundingClientRect().height;
+      }
+    });
+    return h;
+  }
+
+  function sync() {
+    document.documentElement.style.setProperty(
+      '--sticky-h', Math.round(stickyHeight()) + 'px');
+  }
+  sync();
+  window.addEventListener('resize', sync);
+
+  /* Scroll ourselves rather than relying on the fragment default, so the
+     offset applies in browsers that ignore scroll-margin on a hash jump. */
+  links.forEach(function (a, i) {
+    a.addEventListener('click', function (ev) {
+      var el = targets[i];
+      if (!el) return;              /* never swallow a click we cannot serve */
+      ev.preventDefault();
+      sync();
+      var y = el.getBoundingClientRect().top + window.pageYOffset
+              - stickyHeight() - 12;
+      window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+      history.replaceState(null, '', a.getAttribute('href'));
+    });
+  });
+
+  /* Which section am I in? The lowest target whose top has passed the chrome. */
+  function spy() {
+    var line = stickyHeight() + 24;
+    var cur = -1;
+    targets.forEach(function (el, i) {
+      if (el && el.getBoundingClientRect().top <= line) cur = i;
+    });
+    links.forEach(function (a, i) { a.classList.toggle('on', i === cur); });
+  }
+  spy();
+  window.addEventListener('scroll', spy, { passive: true });
+})();
+</script>
 
 <script>
 /* Tunable filter. Hides ROWS only — a hidden input still posts its current
