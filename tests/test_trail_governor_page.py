@@ -720,3 +720,53 @@ def test_the_page_no_longer_claims_binance_retires_the_orphan(client):
     flat = _flat(_get(client))
     assert "the exchange cancels the other" not in flat
     assert "does not clear itself" in flat
+
+
+def test_the_counter_and_the_record_are_reconciled_on_screen(client):
+    """GUARD, from what the deployed page showed on 2026-08-11.
+
+    Minutes after the record shipped, the counters read `stops_filled: 2` over
+    a one-row history. Both were right — the engine's ledger had deduplicated
+    one exit seen by two observers — and nothing on screen said which was the
+    book. Two numbers for one thing, which is the defect this session has now
+    fixed three times.
+    """
+    c, api = client
+    health = dict(_payload()["health"])
+    health.update(exits=0, stops_filled=2, duplicate_fills=1)
+    api.payload = _payload(health=health)
+    api.history = _history(_exit())
+    flat = _flat(_get(client))
+    assert "reconcile" in flat
+    assert "maintenance heartbeat" in flat
+    assert "deduplicated" in flat
+
+
+def test_no_reconcile_note_when_they_agree(client):
+    """It is a reconciliation note, not decoration."""
+    c, api = client
+    health = dict(_payload()["health"])
+    health.update(exits=0, stops_filled=1, duplicate_fills=0)
+    api.payload = _payload(health=health)
+    api.history = _history(_exit())
+    assert "reconcile" not in _flat(_get(client))
+
+
+def test_a_record_larger_than_the_counters_reads_as_a_restart(client):
+    """The counters reset on restart and the ledger survives it — which is the
+    whole reason the ledger exists, so it must not read as a fault."""
+    c, api = client
+    health = dict(_payload()["health"])
+    health.update(exits=0, stops_filled=0, duplicate_fills=0)
+    api.payload = _payload(health=health)
+    api.history = _history(_exit(signal_id="A"), _exit(signal_id="B"))
+    flat = _flat(_get(client))
+    assert "reset by a restart" in flat
+
+
+def test_duplicate_fills_is_rendered_in_the_counters(client):
+    c, api = client
+    health = dict(_payload()["health"])
+    health["duplicate_fills"] = 3
+    api.payload = _payload(health=health)
+    assert "duplicate_fills" in _get(client)

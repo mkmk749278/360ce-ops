@@ -227,7 +227,7 @@
   <table class="data-table">
     <thead><tr><th>Counter</th><th>Value</th></tr></thead>
     <tbody>
-      {% for k in ['cycles', 'governed', 'handovers', 'replaced', 'unchanged', 'exits', 'exit_failed', 'stops_filled', 'place_failed', 'retry_deferred', 'orphan_cancel'] %}
+      {% for k in ['cycles', 'governed', 'handovers', 'replaced', 'unchanged', 'exits', 'exit_failed', 'stops_filled', 'duplicate_fills', 'place_failed', 'retry_deferred', 'orphan_cancel'] %}
       <tr><td class="mono">{{ k }}</td><td>{{ health.get(k, '—') }}</td></tr>
       {% endfor %}
     </tbody>
@@ -263,6 +263,36 @@
     same convention as the arm's <code>pnl_level_pct</code> so the two are
     directly comparable.
   </p>
+
+  {% if counted_exits is not none and counted_exits != history_total %}
+  <p class="small">
+    <span class="badge badge-warn">RECONCILE</span>
+    The counters above report <strong>{{ counted_exits }}</strong> governed
+    exit(s); this record holds <strong>{{ history_total }}</strong>.
+    {% if counted_exits > history_total %}
+      The record is written on the engine's <strong>5-minute maintenance
+      heartbeat</strong>, so an exit in the last few minutes is counted here
+      before it is persisted — that is the ordinary case and it resolves on the
+      next tick. It is <em>not</em> the only cause: a failed write leaves the
+      same gap permanently, and
+      {% if health.get('duplicate_fills') %}
+      <strong>{{ health.duplicate_fills }}</strong> fill(s) were deduplicated
+      as one exit seen by two observers, which accounts for part of it.
+      {% else %}
+      no fill has been deduplicated, so that is not what this gap is.
+      {% endif %}
+    {% else %}
+      The record holds MORE than the counters, which means the counters were
+      reset by a restart and the ledger survived it — expected after a deploy,
+      and the whole reason this record exists.
+    {% endif %}
+  </p>
+  <p class="muted small">
+    The two are printed together deliberately. They were shown as separate
+    figures on 2026-08-11 and read <code>stops_filled: 2</code> over a one-row
+    record — both correct, and no way on screen to tell which one was the book.
+  </p>
+  {% endif %}
 
   {% if history_error %}
   <p class="small"><span class="badge sev-high">UNREADABLE</span>

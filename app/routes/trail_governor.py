@@ -352,6 +352,18 @@ async def trail_governor_page(
             "history_total": len(hist_all),
             "history_summary": summarize_history(hist_sel),
             "history_error": hist_error,
+            # What the LIVE counters say the governor exited, against what the
+            # record holds. Never silently one or the other: on 2026-08-11 the
+            # page showed `stops_filled: 2` over a one-row record — both right
+            # (the ledger had deduplicated one exit seen by two observers) and
+            # nothing on screen said which was the book. `None` when the engine
+            # reports neither counter, because "we cannot compare" is not the
+            # same as "they agree".
+            "counted_exits": (
+                None if not health else
+                int(health.get("exits") or 0)
+                + int(health.get("stops_filled") or 0)
+            ),
             "history_stats": payload.get("history_stats"),
             "history_provenance": vol.trail_history_provenance(),
             "sel": {"symbol": symbol, "fill": fill, "mechanism": mechanism},
