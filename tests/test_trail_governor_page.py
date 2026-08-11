@@ -57,6 +57,9 @@ def client():
         client rather than being hand-written here."""
 
         payload: dict = _payload()
+        #: What the data volume's `trail_exits_v1.json` holds. The engine's own
+        #: reader returns this shape for a file it has never written.
+        history: object = {"error": "missing: /engine-data/trail_exits_v1.json"}
 
         def __init__(self, real):
             self._real = real
@@ -68,17 +71,31 @@ def client():
             return _API.payload
 
     _API.payload = _payload()
+    _API.history = {"error": "missing: /engine-data/trail_exits_v1.json"}
     # Context-manager the client so `lifespan` runs and sets
     # `app.state.templates`; the stub engine_api goes on AFTER, because
     # lifespan installs the real one.
     with TestClient(app) as c:
         prev = app.state.engine_api
         app.state.engine_api = _API(prev)
+        # The traded record is read off the DATA VOLUME, not the diag payload:
+        # the payload carries only a bounded tail because it rides a snapshot
+        # written every ~15s. Only the two calls that would hit disk are
+        # swapped, so the seam under test is the one the page actually uses.
+        vol = app.state.data_volume
+        vol_hist, vol_prov = vol.trail_history, vol.trail_history_provenance
+        vol.trail_history = lambda: _API.history
+        vol.trail_history_provenance = lambda: {
+            "file": "trail_exits_v1.json", "exists": True,
+            "modified_at": "2026-08-11 06:00 UTC", "age_sec": 12.0,
+        }
         c.post("/login", data={"password": os.environ["OPS_AUTH_TOKEN"]})
         try:
             yield c, _API
         finally:
             app.state.engine_api = prev
+            vol.trail_history = vol_hist
+            vol.trail_history_provenance = vol_prov
 
 
 def _get(client):
@@ -523,7 +540,23 @@ def test_matching_counts_do_not_print_the_note(client):
     assert "different populations" not in _flat(_get(client))
 
 
-def test_realized_exits_render_and_keep_the_two_fills_apart(client):
+def _history(*rows, evicted=0):
+    return {"schema": 1, "written_at": 1_700_000_500.0, "evicted": evicted,
+            "max_rows": 5000, "rows": list(rows)}
+
+
+def _exit(**over):
+    base = {
+        "ts": 1_700_000_100.0, "signal_id": "S1", "uid": "U1",
+        "symbol": "BTCUSDT", "side": "LONG", "mechanism": "sar",
+        "exit_kind": "trail_stop", "entry": 100.0, "exit": 98.0,
+        "pnl_pct": -2.0, "designed_sl": 97.0, "parked_stop": 98.0, "seq": 4,
+    }
+    base.update(over)
+    return base
+
+
+def test_traded_history_renders_and_keeps_the_two_fills_apart(client):
     """GUARD (fails pre-fix — there was no such panel).
 
     `handovers`/`replaced` say the machine is turning and cannot say what it
@@ -531,47 +564,145 @@ def test_realized_exits_render_and_keep_the_two_fills_apart(client):
     repo. The two fills are never pooled, exactly as on `/signals/sar-live`.
     """
     c, api = client
-    health = dict(_payload()["health"])
-    health["exits"] = 2
-    health["stops_filled"] = 1
-    health["outcomes"] = [
-        {"ts": 1_700_000_100.0, "signal_id": "S1", "symbol": "BTCUSDT",
-         "side": "LONG", "mechanism": "sar", "exit_kind": "trail_stop",
-         "entry": 100.0, "exit": 98.0, "pnl_pct": -2.0,
-         "designed_sl": 97.0, "parked_stop": 98.0, "seq": 4},
-        {"ts": 1_700_000_200.0, "signal_id": "S2", "symbol": "ETHUSDT",
-         "side": "SHORT", "mechanism": "sar", "exit_kind": "flip_close",
-         "entry": 50.0, "exit": 49.0, "pnl_pct": 2.0,
-         "designed_sl": 51.5, "parked_stop": 49.5, "seq": 9},
-    ]
-    api.payload = _payload(health=health)
+    api.history = _history(
+        _exit(signal_id="S1", symbol="BTCUSDT", exit_kind="trail_stop",
+              pnl_pct=-2.0),
+        _exit(signal_id="S2", symbol="ETHUSDT", side="SHORT",
+              exit_kind="flip_close", entry=50.0, exit=49.0, pnl_pct=2.0),
+    )
     html = _get(client)
     flat = _flat(html)
-    assert "realized exits" in flat
-    assert "trail_stop" in html and "flip_close" in html
+    assert "traded history" in flat
     assert "BTCUSDT" in html and "ETHUSDT" in html
-    # No blended figure over the two fills — the same rule the arm follows.
-    assert "blended" in flat and "no blended average" in flat
+    assert "@level" in html and "@confirm" in html
+    assert "no blended average" in flat
+
+
+def test_the_history_survives_a_restart_and_says_so(client):
+    """The point of the ledger. The first cut of this panel read an in-memory
+    ring of 40 that every deploy destroyed — on a mechanism that re-deploys
+    several times a session, that is not history."""
+    c, api = client
+    api.history = _history(_exit())
+    flat = _flat(_get(client))
+    assert "persisted across deploys" in flat
+    assert "not a measurement" in flat
+
+
+def test_an_unclassified_fill_renders_under_its_raw_name(client):
+    """Iterating ops' own key list would be silent by construction on the next
+    fill the engine adds — MEASUREMENT_SUFFIXES wearing another hat."""
+    c, api = client
+    api.history = _history(_exit(exit_kind="some_new_engine_fill"))
+    html = _get(client)
+    assert "some_new_engine_fill" in html
+    assert "unclassified" in _flat(html)
+
+
+def test_an_unreadable_ledger_is_not_read_as_an_empty_book(client):
+    """"Could not answer" and "nothing has closed" send a reader to completely
+    different places."""
+    c, api = client
+    api.history = {"error": "JSONDecodeError: line 1"}
+    flat = _flat(_get(client))
+    assert "unreadable" in flat
+    assert "no governed exit recorded yet" not in flat
+
+
+def test_a_file_the_engine_never_wrote_is_not_a_fault(client):
+    """The engine's reader says "missing: <path>" for a file it has never
+    written — an engine that predates the ledger, or a governor that has never
+    closed a position. Not a fault on our side."""
+    c, api = client
+    api.history = {"error": "missing: /engine-data/trail_exits_v1.json"}
+    flat = _flat(_get(client))
+    assert "no governed exit recorded yet" in flat
+    assert "unreadable" not in flat
+
+
+def test_an_evicted_ring_says_this_is_not_the_whole_book(client):
+    """A verdict on a capped buffer is a verdict on a sample, and a reader
+    cannot see the cap."""
+    c, api = client
+    api.payload = _payload(history_stats={
+        "rows": 5000, "evicted": 12, "max_rows": 5000, "complete": False,
+    })
+    api.history = _history(_exit(), evicted=12)
+    flat = _flat(_get(client))
+    assert "rotated" in flat
+    assert "12" in flat
+
+
+def test_the_export_is_reachable_and_uncapped(client):
+    """A truncated export is a trade record with a hole in it, and these rows
+    cannot be re-derived."""
+    c, api = client
+    api.history = _history(*[_exit(signal_id=f"S{i}") for i in range(3)])
+    assert "/signals/trail-governor/history.csv" in _get(client)
+    r = c.get("/signals/trail-governor/history.csv")
+    assert r.status_code == 200
+    body = r.text
+    assert "exit_kind" in body
+    assert body.count("BTCUSDT") == 3
+
+
+def test_the_export_honours_the_filter(client):
+    c, api = client
+    api.history = _history(
+        _exit(signal_id="S1", symbol="BTCUSDT"),
+        _exit(signal_id="S2", symbol="ETHUSDT"),
+    )
+    r = c.get("/signals/trail-governor/history.csv?symbol=ETHUSDT")
+    assert "ETHUSDT" in r.text
+    assert "BTCUSDT" not in r.text
+
+
+def test_each_selector_counts_with_every_filter_except_its_own(client):
+    """#90/#91 — a selector applied to its own counts makes every option read
+    "n = whatever I picked"."""
+    rows = [
+        _exit(signal_id="S1", symbol="BTCUSDT", exit_kind="trail_stop"),
+        _exit(signal_id="S2", symbol="BTCUSDT", exit_kind="flip_close"),
+        _exit(signal_id="S3", symbol="ETHUSDT", exit_kind="trail_stop"),
+    ]
+    from app.routes import trail_governor as t
+
+    parsed, err = t.reduce_history(_history(*rows))
+    assert err is None
+    # The FILL selector's counts are computed with the symbol filter applied
+    # and its own not — so with symbol=BTCUSDT both fills still show.
+    scoped = t.filter_history(parsed, symbol="BTCUSDT")
+    assert {r["exit_kind"] for r in scoped} == {"trail_stop", "flip_close"}
+    # ...and the SYMBOL selector's with the fill filter applied.
+    scoped2 = t.filter_history(parsed, fill="trail_stop")
+    assert {r["symbol"] for r in scoped2} == {"BTCUSDT", "ETHUSDT"}
 
 
 def test_an_unpriced_fill_renders_a_dash_not_a_zero(client):
-    """An accepted MARKET order reports no average until it fills. A zero there
-    averages in as a flat trade, which is a claim — the engine writes None."""
+    """An accepted MARKET order reports no average until it fills. A zero
+    averages in as a flat trade, which is a claim; None says it does not know."""
     c, api = client
-    health = dict(_payload()["health"])
-    health["exits"] = 1
-    health["outcomes"] = [
-        # A symbol that appears nowhere else in the payload, so the row this
-        # asserts on cannot be another table's.
-        {"ts": 1_700_000_100.0, "signal_id": "S1", "symbol": "UNPRICEDUSDT",
-         "side": "LONG", "mechanism": "sar", "exit_kind": "flip_close",
-         "entry": 100.0, "exit": 0.0, "pnl_pct": None,
-         "designed_sl": 97.0, "parked_stop": 98.0, "seq": 4},
-    ]
-    api.payload = _payload(health=health)
-    row = _row_containing(_get(client), "UNPRICEDUSDT")
+    api.history = _history(_exit(symbol="UNPRICEDUSDT", exit=0.0, pnl_pct=None))
+    html = _get(client)
+    row = _row_containing(html, "UNPRICEDUSDT")
     assert "—" in row
     assert "0.00" not in row
+    assert "carry no fill price" in _flat(html)
+
+
+def test_the_summary_never_blends_the_two_fills():
+    """There is deliberately no pooled average over both fills — their
+    difference IS the cost of confirmation."""
+    from app.routes import trail_governor as t
+
+    rows, _ = t.reduce_history(_history(
+        _exit(signal_id="A", exit_kind="trail_stop", pnl_pct=-2.0),
+        _exit(signal_id="B", exit_kind="flip_close", pnl_pct=4.0),
+    ))
+    out = t.summarize_history(rows)
+    assert set(out["by_fill"]) == {"trail_stop", "flip_close"}
+    assert "avg_pnl_pct" not in out
+    assert "total_pnl_pct" not in out
 
 
 def test_no_recorded_exit_is_not_read_as_an_inert_mechanism(client):

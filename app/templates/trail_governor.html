@@ -235,7 +235,7 @@
 </section>
 
 <section class="card">
-  <h2 class="small">Realized exits — what the canary actually earned</h2>
+  <h2 class="small">Traded history — every governed position that has closed</h2>
   <p class="muted small">
     <strong>The counters above say the machine is turning; they cannot say what
     it made.</strong> Until 2026-08-11 that was the whole story: this page
@@ -246,37 +246,143 @@
     test exists to produce, landed on no surface in either repo.
   </p>
   <p class="muted small">
+    <strong>This is the record, not a measurement.</strong> Every other trail
+    page here renders a counterfactual that can be re-derived by waiting for a
+    fresh window; these are real fills on a real account, and nothing in the
+    engine will produce them again. So it is <em>never</em> reconstructed and
+    never merged with a replayed figure — <a href="/track-record">Track
+    record</a>'s rule, arriving at the money leg. It is persisted across
+    deploys, which the first cut of this panel was not: that ring lived in
+    memory, held 40 rows and was destroyed by every restart.
+  </p>
+  <p class="muted small">
     <strong>The two fills are never pooled</strong>, exactly as on SAR live.
-    <code>trail_stop</code> is the parked level being touched (the arm's
-    <em>fill @level</em>); <code>flip_close</code> is the mechanism coming
-    offside and the position closing at market (<em>fill @confirm</em>). Their
-    difference is the cost of confirmation, and there is deliberately no blended
-    average here — picking one before that cost is known is choosing the answer.
-    Figures are <strong>gross</strong>, signed toward the trade, and on the same
-    convention as the arm's <code>pnl_level_pct</code> so the two are directly
-    comparable.
+    Their difference is the cost of confirmation, so there is deliberately no
+    blended average — picking one before that cost is known is choosing the
+    answer. Figures are <strong>gross</strong>, signed toward the trade, on the
+    same convention as the arm's <code>pnl_level_pct</code> so the two are
+    directly comparable.
   </p>
-  {% if outcomes %}
+
+  {% if history_error %}
+  <p class="small"><span class="badge sev-high">UNREADABLE</span>
+    The history ledger could not be read: <code>{{ history_error }}</code>.
+    That is <em>could not answer</em> — deliberately not rendered as "nothing has
+    closed", because the two send a reader to completely different places.
+  </p>
+  {% elif history_total == 0 %}
   <p class="small">
-    Showing the newest <strong>{{ outcomes|length }}</strong> of
-    <strong>{{ health.get('exits', 0) + health.get('stops_filled', 0) }}</strong>
-    governed exits — a bounded ring, so the count beside it is the total and
-    this list is a sample.
+    <strong>No governed exit recorded yet.</strong> Expected while
+    <code>handovers</code> is low or every governed trade is still open — a row
+    lands here only when a governed position actually closes, which is rarer
+    than a re-park by construction. It is <em>not</em> evidence the mechanism is
+    inert: read <code>handovers</code> and <code>replaced</code> above for that.
+    {% if history_provenance and not history_provenance.exists %}
+    The ledger file does not exist yet, which is what an engine that has never
+    closed a governed position looks like.
+    {% endif %}
   </p>
+  {% else %}
+
+  <table class="data-table">
+    <thead><tr>
+      <th>Fill</th><th>n</th><th>Win rate</th><th>Avg PnL %</th>
+      <th>Total PnL %</th><th>Best</th><th>Worst</th><th>What it is</th>
+    </tr></thead>
+    <tbody>
+      {% for kind, b in history_summary.by_fill.items() %}
+      <tr>
+        <td><span class="badge{% if not b.classified %} sev-high{% endif %}">{{ b.label }}</span>
+            <span class="mono small">{{ kind }}</span>
+            {% if not b.classified %}<em class="small">unclassified</em>{% endif %}</td>
+        <td>{{ b.n }}</td>
+        <td class="mono">{{ b.win_rate | pct }}</td>
+        <td class="mono">{{ b.avg_pnl_pct | pct }}</td>
+        <td class="mono">{{ b.total_pnl_pct | pct }}</td>
+        <td class="mono">{{ b.best_pnl_pct | pct }}</td>
+        <td class="mono">{{ b.worst_pnl_pct | pct }}</td>
+        <td class="small muted">{{ b.note | safe or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if history_summary.unpriced %}
+  <p class="muted small">
+    <strong>{{ history_summary.unpriced }}</strong> row(s) carry no fill price —
+    a MARKET close Binance had accepted but not yet priced when the row was
+    written. Counted here and excluded from every average rather than booked as
+    a flat trade, because a zero there is a claim.
+  </p>
+  {% endif %}
+
+  <form method="get" action="/signals/trail-governor" class="small">
+    <label>Symbol
+      <select name="symbol">
+        <option value="">All ({{ history_total }})</option>
+        {% for v, n in symbol_counts %}
+        <option value="{{ v }}"{% if sel.symbol == v %} selected{% endif %}>{{ v }} ({{ n }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Fill
+      <select name="fill">
+        <option value="">All</option>
+        {% for v, n in fill_counts %}
+        <option value="{{ v }}"{% if sel.fill == v %} selected{% endif %}>{{ v }} ({{ n }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Mechanism
+      <select name="mechanism">
+        <option value="">All</option>
+        {% for v, n in mechanism_counts %}
+        <option value="{{ v }}"{% if sel.mechanism == v %} selected{% endif %}>{{ v }} ({{ n }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">Apply</button>
+    <a class="btn" href="/signals/trail-governor/history.csv?symbol={{ sel.symbol }}&amp;fill={{ sel.fill }}&amp;mechanism={{ sel.mechanism }}">Export CSV</a>
+  </form>
+  <p class="muted small">
+    Each selector's counts are measured with every filter applied <strong>except
+    its own</strong>, so an option never reads "n = whatever I picked". The
+    export honours the filter and is <strong>uncapped</strong> — a truncated
+    download is a trade record with a hole in it.
+  </p>
+
+  <p class="small">
+    Showing <strong>{{ history_shown }}</strong> of
+    <strong>{{ history_matched }}</strong> matching
+    {% if history_matched != history_total %}(of {{ history_total }} recorded){% endif %}.
+    {% if history_matched > history_cap %}
+    <span class="badge sev-high">CAPPED</span> The table stops at
+    {{ history_cap }} rows — the cap bit, and the CSV above is the whole book.
+    {% endif %}
+    {% if history_stats and history_stats.get('evicted') %}
+    <br><span class="badge sev-high">ROTATED</span>
+    The engine's ring has evicted <strong>{{ history_stats.evicted }}</strong>
+    row(s) past its {{ history_stats.max_rows }}-row cap, so this is the newest
+    part of the book rather than all of it.
+    {% elif history_stats and history_stats.get('complete') %}
+    Nothing has been evicted, so this is the complete record.
+    {% endif %}
+  </p>
+
   <div style="overflow-x:auto">
   <table class="data-table">
     <thead><tr>
-      <th>Symbol</th><th>Side</th><th>Mechanism</th><th>Fill</th>
-      <th>Entry</th><th>Exit</th><th>PnL %</th>
+      <th>Closed (UTC)</th><th>Symbol</th><th>Side</th><th>Mechanism</th>
+      <th>Fill</th><th>Entry</th><th>Exit</th><th>PnL %</th>
       <th>Designed SL</th><th>Parked stop</th><th>Seq</th>
     </tr></thead>
     <tbody>
-      {% for o in outcomes %}
+      {% for o in history %}
       <tr>
+        <td class="mono small">{{ o.closed_utc or '—' }}</td>
         <td class="mono">{{ o.symbol }}</td>
         <td>{{ o.side }}</td>
         <td class="small">{{ o.mechanism or '—' }}</td>
-        <td><span class="badge">{{ o.exit_kind }}</span></td>
+        <td><span class="badge">{{ fill_copy.get(o.exit_kind, [o.exit_kind])[0] }}</span></td>
         <td class="mono">{{ o.entry | price }}</td>
         <td class="mono">{{ o.exit | price }}</td>
         <td class="mono">{{ o.pnl_pct | pct }}</td>
@@ -290,28 +396,18 @@
   </div>
   <p class="muted small">
     An em-dash in <strong>PnL %</strong> is a fill Binance had accepted but not
-    yet priced when the row was written — the engine records
-    <code>None</code> rather than a zero, because a zero averages in as a flat
-    trade, which is a claim. The FSM's own close-fill event carries the real
-    average.
-  </p>
-  {% else %}
-  <p class="small">
-    <strong>No governed exit recorded yet.</strong> Expected while
-    <code>handovers</code> is low or every governed trade is still open — this
-    ring only fills when a governed position actually closes, which is rarer
-    than a re-park by construction. It is <em>not</em> evidence the mechanism is
-    inert: read <code>handovers</code> and <code>replaced</code> above for that.
+    yet priced when the row was written — the engine records <code>None</code>
+    rather than a zero. Dates are UTC, like every other figure in this
+    dashboard; a UTC day ends at 05:30 IST.
+    {% if history_provenance and history_provenance.modified_at %}
+    Ledger last written <strong>{{ history_provenance.modified_at }}</strong> —
+    context, not a verdict: this file flushes on the maintenance heartbeat
+    whether or not anything closed, so a current file with no new rows is the
+    ordinary quiet case.
+    {% endif %}
   </p>
   {% endif %}
 </section>
-
-{# A counter cannot say what to do next: -2021 (the level is already through
-   the mark), -1111 (rounding), -4015 (duplicate id) and a disconnected key all
-   read as the same integer and have four different fixes. The engine keeps the
-   last few rejections with the exchange's own words; without them the reason
-   lives only in a log line that needs `docker exec`, and the owner reads the
-   page. #}
 <section class="card">
   <h2 class="small">Placement rejections</h2>
   {% if health.get('place_failures') is none %}

@@ -58,6 +58,11 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         # and carries no control of its own — the master switch lives on
         # /control (owner-only) and the per-user opt-in on /control/users.
         "/signals/trail-governor",
+        # The traded record as CSV. Guest-readable for the same reason the page
+        # is: it carries no control, and it is the same rows the reader can
+        # already see — an export the eye can reach and the download cannot is
+        # the nav's own drift one layer down.
+        "/signals/trail-governor/history.csv",
         # -- measurement lanes ---------------------------------------------
         "/signals/sar",
         "/signals/sar/export.csv",

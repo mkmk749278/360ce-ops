@@ -469,6 +469,53 @@ class DataVolumeReader:
             return None
         return self._load(name)
 
+    def trail_history(self) -> Any:
+        """Every governed position that has actually closed (engine
+        ``src/trail_history.py``).
+
+        **The one artifact in this table that is not a measurement.** Every other
+        file here holds a counterfactual — where a stop *would* have been, what a
+        rule *would* have dropped — and can be re-derived by waiting for a fresh
+        window. These are real fills on a real account: the position is closed,
+        the bars have moved on, and nothing in the engine will produce that fill
+        again. `/track-record`'s rule therefore applies with full force —
+        recorded and reconstructed must never be merged, and nothing on the
+        history tab may be replayed.
+
+        Read from the file rather than from the diag payload, which carries only
+        a bounded tail: that payload rides a snapshot written every ~15s and an
+        unbounded list on that clock is the hot-path shape the cost rules forbid.
+        """
+        return self._load("trail_exits_v1.json")
+
+    def trail_history_provenance(self) -> dict[str, Any]:
+        """Which file the history reads, and when the engine last wrote it.
+
+        The age is **context, not the verdict**: this ledger flushes on the
+        maintenance heartbeat whether or not a governed position closed, so a
+        current file with no new rows is the ordinary quiet case. Grading a trade
+        record on its clock is the `/invalidations` mistake — an alarming caption
+        over a subsystem that is working sends the owner to debug nothing.
+        """
+        name = "trail_exits_v1.json"
+        info: dict[str, Any] = {
+            "file": name, "exists": False, "modified_at": None, "age_sec": None,
+        }
+        try:
+            path = self._dir / name
+            if path.exists():
+                info["exists"] = True
+                mtime = path.stat().st_mtime
+                info["modified_at"] = datetime.fromtimestamp(
+                    mtime, tz=timezone.utc
+                ).strftime("%Y-%m-%d %H:%M UTC")
+                info["age_sec"] = max(
+                    0.0, datetime.now(timezone.utc).timestamp() - mtime
+                )
+        except OSError:
+            pass
+        return info
+
     def trail_arms_provenance(self, mechanism: str, dark: bool = False) -> dict[str, Any]:
         """Which file this lane reads, and when the engine last wrote it.
 

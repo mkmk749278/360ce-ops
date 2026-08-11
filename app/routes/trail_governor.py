@@ -33,9 +33,12 @@ Rules it inherits
 """
 from __future__ import annotations
 
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Query, Request
+
+from app.reports import csv_response
 
 router = APIRouter()
 
@@ -118,6 +121,131 @@ def classify_refusals(health: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+#: Render bound on the history table.  Applied in the route AFTER filtering, and
+#: the page says when it bit — a cap inside a reducer filters the newest N and
+#: then filters that, which starves exactly the rarest rows (#97).  The CSV is
+#: uncapped, because a truncated export is #97 wearing a download button.
+HISTORY_ROW_CAP = 500
+
+#: What each fill means, in one sentence.  Rendered by looking up the ENGINE's
+#: `exit_kind`; a kind ops has never heard of renders under its raw name badged
+#: `unclassified` rather than being dropped or bucketed into a neighbour.
+FILL_COPY: dict[str, tuple[str, str]] = {
+    "trail_stop": (
+        "@level",
+        "The parked stop was touched. This is the fill the measurement lane "
+        "calls <code>@level</code>.",
+    ),
+    "flip_close": (
+        "@confirm",
+        "The mechanism came offside — SAR flipped, or the chandelier's level "
+        "was already past the close — and the position was closed at market. "
+        "The measurement lane's <code>@confirm</code>.",
+    ),
+}
+
+
+def reduce_history(payload: Any) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """The stored record, newest FIRST, plus a reason when it cannot be read.
+
+    ``(rows, error)`` rather than an empty list on failure: *could not read* and
+    *nothing has closed yet* are different states with different next moves, and
+    a page that renders them alike reports a fault that is not happening — or,
+    worse, hides one that is.
+    """
+    if payload is None:
+        return [], "the engine did not report a history ledger"
+    if isinstance(payload, dict) and payload.get("error"):
+        err = str(payload["error"])
+        # The engine's own reader says "missing: <path>" for a file it has never
+        # written. That is an engine that predates the ledger or a governor that
+        # has never closed a position — NOT a fault on our side, and the two
+        # send a reader to completely different places.
+        if err.startswith("missing:"):
+            return [], None
+        return [], err
+    if not isinstance(payload, dict):
+        return [], f"unexpected ledger shape: {type(payload).__name__}"
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return [], "unexpected ledger shape: no row list"
+    clean = [r for r in rows if isinstance(r, dict)]
+    clean.sort(key=lambda r: float(r.get("ts") or 0.0), reverse=True)
+    # Rendered UTC, stamped here rather than in the template: every figure in
+    # this dashboard is UTC because the engine is UTC end to end, and a date
+    # with no zone is the same class of omission as a percentage with no
+    # denominator.  A row with no readable stamp renders an em-dash rather than
+    # the epoch — 1970 beside a live trade is a number nobody computed.
+    for r in clean:
+        try:
+            r["closed_utc"] = datetime.fromtimestamp(
+                float(r.get("ts") or 0.0), tz=timezone.utc
+            ).strftime("%Y-%m-%d %H:%M UTC")
+        except (TypeError, ValueError, OSError, OverflowError):
+            r["closed_utc"] = None
+    return clean, None
+
+
+def filter_history(
+    rows: list[dict[str, Any]],
+    *,
+    symbol: str = "",
+    fill: str = "",
+    mechanism: str = "",
+) -> list[dict[str, Any]]:
+    """Narrow the record. Each selector's own counts are computed by the caller
+    with every filter applied EXCEPT its own (#90/#91) — a selector applied to
+    its own counts makes each option read "n = whatever I picked"."""
+    out = rows
+    if symbol:
+        out = [r for r in out if str(r.get("symbol") or "") == symbol]
+    if fill:
+        out = [r for r in out if str(r.get("exit_kind") or "") == fill]
+    if mechanism:
+        out = [r for r in out if str(r.get("mechanism") or "") == mechanism]
+    return out
+
+
+def summarize_history(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-fill totals — **never** a blended figure across the two.
+
+    Their difference is the cost of confirmation, which is the number this
+    mechanism's design turns on, so there is deliberately no pooled average here
+    any more than there is on `/signals/sar-live`. A row whose fill price never
+    arrived is counted in ``unpriced`` rather than averaged as a flat trade:
+    `None` and `0.0` are different facts and a zero there is a claim.
+    """
+    out: dict[str, Any] = {"n": len(rows), "unpriced": 0, "by_fill": {}}
+    buckets: dict[str, list[float]] = {}
+    for r in rows:
+        kind = str(r.get("exit_kind") or "unknown")
+        buckets.setdefault(kind, [])
+        pnl = r.get("pnl_pct")
+        if pnl is None:
+            out["unpriced"] += 1
+            continue
+        try:
+            buckets[kind].append(float(pnl))
+        except (TypeError, ValueError):
+            out["unpriced"] += 1
+    for kind, vals in sorted(buckets.items()):
+        n = len(vals)
+        label, note = FILL_COPY.get(kind, (kind, ""))
+        out["by_fill"][kind] = {
+            "label": label,
+            "note": note,
+            "classified": kind in FILL_COPY,
+            "n": n,
+            "wins": sum(1 for v in vals if v > 0),
+            "win_rate": (sum(1 for v in vals if v > 0) / n * 100.0) if n else None,
+            "avg_pnl_pct": (sum(vals) / n) if n else None,
+            "total_pnl_pct": sum(vals) if n else None,
+            "best_pnl_pct": max(vals) if n else None,
+            "worst_pnl_pct": min(vals) if n else None,
+        }
+    return out
+
+
 def lane_state(payload: dict[str, Any]) -> str:
     """One of: `error` · `index_cold` · `off` · `armed` · `governing`.
 
@@ -135,8 +263,41 @@ def lane_state(payload: dict[str, Any]) -> str:
     return "armed"
 
 
+HISTORY_COLS = (
+    "ts", "signal_id", "uid", "symbol", "side", "mechanism", "exit_kind",
+    "entry", "exit", "pnl_pct", "designed_sl", "parked_stop", "seq",
+)
+
+
+@router.get("/signals/trail-governor/history.csv")
+async def trail_governor_history_export(
+    request: Request,
+    symbol: str = Query(""),
+    fill: str = Query(""),
+    mechanism: str = Query(""),
+):
+    """The record as CSV, honouring the current filter and **uncapped**.
+
+    A truncated export is #97 wearing a download button, and it matters more
+    here than on any measurement page: these rows are real fills that cannot be
+    re-derived, so a spreadsheet quietly missing the oldest of them is a trade
+    record with a hole in it. `exit_kind` rides on every row, because a
+    spreadsheet is precisely where the two fills get averaged into one.
+    """
+    vol = request.app.state.data_volume
+    rows, _err = reduce_history(vol.trail_history())
+    rows = filter_history(rows, symbol=symbol, fill=fill, mechanism=mechanism)
+    data = [[r.get(c) for c in HISTORY_COLS] for r in rows]
+    return csv_response("trail_governor_history", list(HISTORY_COLS), data)
+
+
 @router.get("/signals/trail-governor")
-async def trail_governor_page(request: Request):
+async def trail_governor_page(
+    request: Request,
+    symbol: str = Query(""),
+    fill: str = Query(""),
+    mechanism: str = Query(""),
+):
     api = request.app.state.engine_api
     payload = await api.trail_governor()
     if not isinstance(payload, dict):
@@ -151,12 +312,53 @@ async def trail_governor_page(request: Request):
         key=lambda r: (not r.get("governing"), r.get("symbol") or ""),
     )
 
+    # The traded record, read off the data volume rather than the diag payload.
+    # The payload's `history` is a bounded tail (it rides a snapshot written
+    # every ~15s); this is the whole ledger, which is what "keep the history"
+    # means.
+    vol = request.app.state.data_volume
+    hist_all, hist_error = reduce_history(vol.trail_history())
+
+    # Every selector's counts are measured with every filter applied EXCEPT its
+    # own (#90/#91) — otherwise each option reads "n = whatever I picked".
+    scoped_symbol = filter_history(hist_all, fill=fill, mechanism=mechanism)
+    scoped_fill = filter_history(hist_all, symbol=symbol, mechanism=mechanism)
+    scoped_mech = filter_history(hist_all, symbol=symbol, fill=fill)
+    hist_sel = filter_history(
+        hist_all, symbol=symbol, fill=fill, mechanism=mechanism
+    )
+
+    def _counts(rows: list[dict[str, Any]], key: str) -> list[tuple[str, int]]:
+        seen: dict[str, int] = {}
+        for r in rows:
+            v = str(r.get(key) or "")
+            if v:
+                seen[v] = seen.get(v, 0) + 1
+        return sorted(seen.items(), key=lambda kv: (-kv[1], kv[0]))
+
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "trail_governor.html",
         {
             "request": request,
             "state": lane_state(payload),
+            # The record. Summaries are measured on the SELECTION, never on the
+            # truncated table (#90) — and the cap is applied here, after every
+            # filter, with the template saying when it bit (#97).
+            "history": hist_sel[:HISTORY_ROW_CAP],
+            "history_matched": len(hist_sel),
+            "history_shown": min(len(hist_sel), HISTORY_ROW_CAP),
+            "history_cap": HISTORY_ROW_CAP,
+            "history_total": len(hist_all),
+            "history_summary": summarize_history(hist_sel),
+            "history_error": hist_error,
+            "history_stats": payload.get("history_stats"),
+            "history_provenance": vol.trail_history_provenance(),
+            "sel": {"symbol": symbol, "fill": fill, "mechanism": mechanism},
+            "symbol_counts": _counts(scoped_symbol, "symbol"),
+            "fill_counts": _counts(scoped_fill, "exit_kind"),
+            "mechanism_counts": _counts(scoped_mech, "mechanism"),
+            "fill_copy": FILL_COPY,
             "error": payload.get("error"),
             "enabled": bool(payload.get("enabled")),
             "timeframe": payload.get("timeframe"),
