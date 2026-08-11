@@ -280,6 +280,43 @@ def test_the_page_actually_resolves(client):
 # --------------------------------------------------------------------------- #
 
 
+def _rejection_row(html: str, symbol: str) -> str:
+    """The one `<tr>` of the rejections table carrying ``symbol``.
+
+    Asserting on the row rather than the page is what keeps "this cell shows a
+    dash" from being coupled to every sentence elsewhere on the page.
+    """
+    import re
+
+    for row in re.findall(r"<tr>(.*?)</tr>", html, re.S):
+        if symbol in row and "seq" not in row:
+            return row
+    raise AssertionError(f"no rejection row for {symbol}")
+
+
+def _row_containing(html: str, needle: str) -> str:
+    """The one `<tr>` carrying ``needle``, wherever on the page it is.
+
+    Asserting on a row rather than the page is what keeps a cell-level claim
+    from being coupled to every sentence elsewhere — pass a value that appears
+    exactly once, or this raises rather than picking one.
+    """
+    import re
+
+    hits = [r for r in re.findall(r"<tr>(.*?)</tr>", html, re.S) if needle in r]
+    assert len(hits) == 1, f"expected one row for {needle}, found {len(hits)}"
+    return hits[0]
+
+
+def _code_cell(row: str) -> str:
+    """The Binance-code cell — the fifth `<td>` of a rejection row."""
+    import re
+
+    cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+    assert len(cells) >= 5, f"unexpected rejection row shape: {len(cells)} cells"
+    return cells[4].strip()
+
+
 def _failure(**over):
     base = {
         "ts": 1_700_000_900.0, "symbol": "BLUAIUSDT", "side": "SHORT",
@@ -311,7 +348,16 @@ def test_the_exchange_s_own_words_reach_the_page(client):
 
 def test_a_non_binance_rejection_shows_a_dash_rather_than_a_zero(client):
     """"The exchange refused" and "we never reached the exchange" send a reader
-    to different places; a 0 there reads as a Binance code nobody can look up."""
+    to different places; a 0 there reads as a Binance code nobody can look up.
+
+    Scoped to the rejections TABLE.  This asserted ``">-2021<" not in html``
+    over the whole page, which held only while no prose on the page mentioned a
+    Binance code — a page-wide substring standing in for a claim about one
+    cell.  2026-08-11's copy explains the -2021 the exit leg was built to
+    remove, and the assertion failed on an entirely correct page.  The claim was
+    always about the cell, so it is now made there: a proxy that breaks when
+    unrelated copy changes teaches the next reader to weaken it.
+    """
     c, api = client
     api.payload = _with_failures(
         _failure(binance_code=None, kind="OrderPlacementKeyError",
@@ -319,7 +365,10 @@ def test_a_non_binance_rejection_shows_a_dash_rather_than_a_zero(client):
     )
     html = _get(client)
     assert "KEY_BLOB_NOT_FOUND" in html
-    assert ">-2021<" not in html
+    row = _rejection_row(html, "BLUAIUSDT")
+    assert "—" in row
+    assert "-2021" not in row
+    assert "0" not in _code_cell(row)
 
 
 def test_an_engine_that_reports_no_detail_is_not_read_as_no_rejections(client):
@@ -398,3 +447,145 @@ def test_the_two_resting_stops_are_not_described_as_close_position(client):
     flat = _flat(_get(client))
     assert "reduceonly" in flat
     assert "both are closeposition" not in flat
+
+
+# --------------------------------------------------------------------------- #
+# 2026-08-11 — the page must state what it is about to be read as
+# --------------------------------------------------------------------------- #
+
+
+def test_armed_names_the_timeframe_and_the_open_book(client):
+    """GUARD (fails pre-fix).
+
+    ``timeframe`` and ``open_total`` were rendered ONLY inside the `governing`
+    branch, so in the state the owner was actually in the page showed neither —
+    and the two states it has to separate there are "nobody opted in" and "the
+    engine has lost a position it was governing". The timeframe is the setting
+    that has already been wrong once (`5` where the store is keyed `5m`).
+    """
+    c, api = client
+    api.payload = _payload(governed=0, rows=[], open_total=3, timeframe="5m")
+    flat = _flat(_get(client))
+    assert "armed" in flat
+    assert "5m" in flat
+    assert "3" in flat
+    assert "exit_mechanism" in flat
+
+
+def test_armed_with_open_positions_points_at_the_per_user_setting(client):
+    """Open positions and none governed is the state worth acting on: the
+    mechanism is per user, so that is where a reader has to look next."""
+    c, api = client
+    api.payload = _payload(governed=0, rows=[], open_total=2)
+    assert "/control/users" in _get(client)
+
+
+def test_armed_with_an_empty_book_does_not_raise_the_alarm(client):
+    """...and with nothing open it must NOT, or the page cries wolf on the
+    ordinary quiet case."""
+    c, api = client
+    api.payload = _payload(governed=0, rows=[], open_total=0)
+    assert "/control/users" not in _get(client)
+
+
+def test_the_refusal_section_renders_when_the_mix_is_empty(client):
+    """GUARD. The state copy says "read the refusal mix below"; the section was
+    gated on the mix being non-empty, so it pointed at evidence that was not on
+    the page in exactly the state where its absence is the finding."""
+    c, api = client
+    health = dict(_payload()["health"])
+    health["refusals"] = {}
+    api.payload = _payload(governed=0, rows=[], health=health)
+    flat = _flat(_get(client))
+    assert "why the rest are not governed" in flat
+    assert "no refusal recorded" in flat
+
+
+def test_the_two_governed_counts_are_never_silently_merged(client):
+    """GUARD. `payload["governed"]` counts every open position with a
+    mechanism; `health["governed"]` also requires `protection_mode=managed`.
+    Both rendered under the word "governed" — one in the badge, one in the
+    counters table — so a legitimate difference read as a contradiction."""
+    c, api = client
+    health = dict(_payload()["health"])
+    health["governed"] = 0
+    api.payload = _payload(governed=1, health=health)
+    flat = _flat(_get(client))
+    assert "different populations" in flat
+    assert "protection_mode" in flat
+
+
+def test_matching_counts_do_not_print_the_note(client):
+    """It is a reconciliation note, not decoration — it must appear only when
+    the two actually differ."""
+    c, api = client
+    api.payload = _payload()
+    assert "different populations" not in _flat(_get(client))
+
+
+def test_realized_exits_render_and_keep_the_two_fills_apart(client):
+    """GUARD (fails pre-fix — there was no such panel).
+
+    `handovers`/`replaced` say the machine is turning and cannot say what it
+    earned, so a governed exit's realized result was on no surface in either
+    repo. The two fills are never pooled, exactly as on `/signals/sar-live`.
+    """
+    c, api = client
+    health = dict(_payload()["health"])
+    health["exits"] = 2
+    health["stops_filled"] = 1
+    health["outcomes"] = [
+        {"ts": 1_700_000_100.0, "signal_id": "S1", "symbol": "BTCUSDT",
+         "side": "LONG", "mechanism": "sar", "exit_kind": "trail_stop",
+         "entry": 100.0, "exit": 98.0, "pnl_pct": -2.0,
+         "designed_sl": 97.0, "parked_stop": 98.0, "seq": 4},
+        {"ts": 1_700_000_200.0, "signal_id": "S2", "symbol": "ETHUSDT",
+         "side": "SHORT", "mechanism": "sar", "exit_kind": "flip_close",
+         "entry": 50.0, "exit": 49.0, "pnl_pct": 2.0,
+         "designed_sl": 51.5, "parked_stop": 49.5, "seq": 9},
+    ]
+    api.payload = _payload(health=health)
+    html = _get(client)
+    flat = _flat(html)
+    assert "realized exits" in flat
+    assert "trail_stop" in html and "flip_close" in html
+    assert "BTCUSDT" in html and "ETHUSDT" in html
+    # No blended figure over the two fills — the same rule the arm follows.
+    assert "blended" in flat and "no blended average" in flat
+
+
+def test_an_unpriced_fill_renders_a_dash_not_a_zero(client):
+    """An accepted MARKET order reports no average until it fills. A zero there
+    averages in as a flat trade, which is a claim — the engine writes None."""
+    c, api = client
+    health = dict(_payload()["health"])
+    health["exits"] = 1
+    health["outcomes"] = [
+        # A symbol that appears nowhere else in the payload, so the row this
+        # asserts on cannot be another table's.
+        {"ts": 1_700_000_100.0, "signal_id": "S1", "symbol": "UNPRICEDUSDT",
+         "side": "LONG", "mechanism": "sar", "exit_kind": "flip_close",
+         "entry": 100.0, "exit": 0.0, "pnl_pct": None,
+         "designed_sl": 97.0, "parked_stop": 98.0, "seq": 4},
+    ]
+    api.payload = _payload(health=health)
+    row = _row_containing(_get(client), "UNPRICEDUSDT")
+    assert "—" in row
+    assert "0.00" not in row
+
+
+def test_no_recorded_exit_is_not_read_as_an_inert_mechanism(client):
+    """An empty ring is expected while every governed trade is still open —
+    "blank needs a cause before it gets a caption", on the money leg."""
+    c, api = client
+    assert "no governed exit recorded yet" in _flat(_get(client))
+
+
+def test_the_page_no_longer_claims_binance_retires_the_orphan(client):
+    """GUARD. The page said Binance cancels the superseded stop once the
+    position closes. It does not for a conditional stop — PROMUSDT's outlived
+    its position by 28 minutes — and that sentence told the owner an order
+    needing manual cleanup would clean itself up."""
+    flat = _flat(_get(client))
+    assert "the exchange cancels the other" not in flat
+    assert "does not clear itself" in flat

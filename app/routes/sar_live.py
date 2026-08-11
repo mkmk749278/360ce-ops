@@ -924,6 +924,66 @@ def _view(
 MECHANISM_PATHS = {"sar": "/signals/sar-live", "chandelier": "/signals/atr-live"}
 
 
+async def executing_arm(request: Request, mechanism: str, lane: str) -> dict:
+    """Which arm on this page, if any, is the one placing real orders.
+
+    **Every row here is a measurement, and exactly one class of them is also
+    being executed.** The trail governor runs ONE mechanism on ONE timeframe for
+    the users who opted in, while this page renders 5m and 15m as independent
+    arms across two mechanisms and two lanes — so at most a quarter of what a
+    reader is looking at describes the account, and the page said nothing about
+    which quarter.  It cost a session: the governor's INXUSDT stop sat at the
+    5m arm's level while the 15m arm beside it was parked 3.7% away, and nothing
+    on screen distinguished them.
+
+    Read off the **engine's** payload — the governor's own reported mechanism
+    and timeframe — never mirrored from a copy of the flag registry here.  The
+    fix for a drifting mirror is not a second mirror, and this one has drifted
+    already: `trail_governor_timeframe` was stored as ``5`` where the candle
+    store is keyed ``5m``, which left the mechanism inert for a day (#910).
+
+    Fails **open and silent**: an engine that cannot answer yields
+    ``reported: False``, and the template says the page cannot tell rather than
+    claiming nothing is executing.  Absence of knowledge is not permission to
+    assert the negative — an unbadged page reading "nothing here is live" while
+    a stop moves on a real account is the reassuring blank one page over.
+    """
+    out = {
+        "reported": False, "enabled": False, "timeframe": "",
+        "mechanism": "", "matches_page": False, "lane_executes": False,
+    }
+    try:
+        payload = await request.app.state.engine_api.trail_governor()
+    except Exception:
+        return out
+    if not isinstance(payload, dict) or payload.get("error"):
+        return out
+    out["reported"] = True
+    out["enabled"] = bool(payload.get("enabled"))
+    out["timeframe"] = str(payload.get("timeframe") or "")
+    # The mechanism the governor is running comes from the positions it holds,
+    # not from a page-level guess: the setting is per user, so "the governor is
+    # on" does not say which mechanism any account chose.  With no governed row
+    # there is nothing to read, and the page says the tf without claiming the
+    # mechanism.
+    mechs = {
+        str(r.get("mechanism") or "").lower()
+        for r in (payload.get("rows") or [])
+        if isinstance(r, dict)
+    } - {""}
+    out["mechanism"] = sorted(mechs)[0] if len(mechs) == 1 else ""
+    # Only the DELIVERED lane can be executed — a dark row reached nobody and
+    # no position exists to govern.  Stated here rather than left to the
+    # template, so the dark page cannot badge a row as live by omission.
+    out["lane_executes"] = str(lane) != LANE_DARK
+    out["matches_page"] = bool(
+        out["enabled"]
+        and out["lane_executes"]
+        and (not out["mechanism"] or out["mechanism"] == mechanism)
+    )
+    return out
+
+
 async def _render(
     request: Request,
     *,
@@ -955,6 +1015,8 @@ async def _render(
         prices = await request.app.state.binance_klines.fetch_all_prices()
     except Exception:
         prices = {}
+
+    executing = await executing_arm(request, mechanism, lane)
 
     # Stamped on the FULL selection, before any summary reads it — the summaries
     # below are measured on `selected`, not on the truncated table, and a row
@@ -988,6 +1050,7 @@ async def _render(
         "other_label": MECHANISM_FALLBACK[
             "chandelier" if mechanism == "sar" else "sar"
         ]["label"],
+        "executing": executing,
         "tab": tab,
         "rows": rows,
         "matched": len(selected),

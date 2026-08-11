@@ -162,8 +162,23 @@ async def trail_governor_page(request: Request):
             "timeframe": payload.get("timeframe"),
             "rows": rows,
             "governed": int(payload.get("governed") or 0),
+            # The sweep's OWN count, which is not the same population: it also
+            # requires `protection_mode == "managed"`, so a `user_owned` take
+            # carrying a mechanism appears in `governed` and not here.  Both
+            # render, and the page says why they differ — they were shown under
+            # the same word until 2026-08-11, one in the badge and one in the
+            # counters table, where a disagreement read as a contradiction.
+            "swept_governed": (health or {}).get("governed"),
             "open_total": payload.get("open_total"),
             "health": health,
+            # Realized governed exits, newest FIRST for reading.  The engine
+            # appends newest-last (a ring), so the reversal happens here rather
+            # than engine-side: the ledger's order is its own business and a
+            # display preference must not reach back into it.
+            "outcomes": list(reversed(
+                [o for o in ((health or {}).get("outcomes") or [])
+                 if isinstance(o, dict)]
+            )),
             "refusals": classify_refusals(health),
             "active": "trail_governor",
         },

@@ -110,8 +110,81 @@
   </p>
   {% endif %}
   <p class="muted small">
-    <strong>These arms place no orders and change no exit.</strong> Live exits still run on the
-    signal's SL/TP and the FSM. Nothing on this page has touched anyone's capital.
+    <strong>These arms place no orders and change no exit.</strong> The rows here are a
+    measurement: live exits for everyone not opted in run on the signal's SL/TP and the FSM.
+    This paragraph used to go further and tell you no capital was involved anywhere on the page.
+    That stopped being true when the <a href="/signals/trail-governor">trail governor</a>
+    shipped — one arm here is the mechanism running on a real account, and the page has to say
+    which one rather than disclaiming all of them.
+  </p>
+</section>
+
+<section class="card">
+  <h2 class="small">Which of these arms is actually being traded?</h2>
+  {% if not executing.reported %}
+    <div class="badge badge-warn">CANNOT TELL</div>
+    <p class="small">
+      The engine did not report the governor's state, so this page cannot say whether any arm
+      below is being executed. That is <em>could not answer</em> — deliberately not rendered as
+      “nothing is live”, because a page asserting the safe negative while a stop moves on a real
+      account is the reassuring blank this lane exists to refuse. Check
+      <a href="/signals/trail-governor">Trail governor</a>.
+    </p>
+  {% elif not executing.enabled %}
+    <div class="badge">MEASUREMENT ONLY</div>
+    <p class="small">
+      The engine-wide trail governor is <strong>off</strong>, so every arm below is a pure
+      measurement and no account is running this mechanism. This is the default.
+    </p>
+  {% elif not executing.lane_executes %}
+    <div class="badge">MEASUREMENT ONLY — dark lane</div>
+    <p class="small">
+      The governor is on, but these are <strong>dark</strong> rows: they belong to signals nobody
+      received, so no position exists to govern. The executed arm, if any, is on the
+      <a href="{{ page_path }}?lane=delivered">delivered lane</a>.
+    </p>
+  {% elif not executing.matches_page %}
+    <div class="badge">MEASUREMENT ONLY — other mechanism</div>
+    <p class="small">
+      The governor is on and running
+      <strong>{{ executing.mechanism or 'another mechanism' }}</strong>, not the one on this page.
+      Every arm below is a measurement; the executed one is on
+      <a href="{{ other_path }}">{{ other_label }}</a>.
+    </p>
+  {% else %}
+    <div class="badge badge-good">
+      EXECUTING — {{ executing.timeframe or 'timeframe not reported' }}
+    </div>
+    <p class="small">
+      The governor is live on this mechanism and this lane, on the
+      <strong>{{ executing.timeframe or 'unreported' }}</strong> timeframe. So the
+      <strong>{{ executing.timeframe or '—' }}</strong> rows below are the arm whose level is
+      actually resting on Binance for the opted-in account; the other timeframe is a measurement
+      running beside it and <strong>is not what closes a real position</strong>.
+    </p>
+    {% if not executing.timeframe %}
+    <p class="small">
+      <strong>The engine did not report a timeframe.</strong> That is a fault, not a quiet state —
+      the governor cannot hand over without one, and it has been stored wrong before
+      (<code>5</code> where the candle store is keyed <code>5m</code>, which left the mechanism
+      inert for a day). Check <a href="/control">Control → Engine</a>.
+    </p>
+    {% endif %}
+  {% endif %}
+  <p class="muted small">
+    Read off the <strong>engine's</strong> own payload — the governor's reported mechanism and
+    timeframe — never mirrored from a copy of its flag registry here. Two arms per signal and two
+    mechanisms across two lanes means at most a quarter of what you are looking at describes the
+    account, and until 2026-08-11 the page said nothing about which quarter: the governor's
+    INXUSDT stop sat at the 5m arm's level while the 15m arm beside it was parked 3.7% away.
+  </p>
+  <p class="muted small">
+    Even on the executing arm the numbers are not the account's. This page is
+    <strong>gross</strong> and models a fill; the realized result of a governed exit — the fee-
+    bearing price the exchange actually gave — is on
+    <a href="/signals/trail-governor">Trail governor → Realized exits</a>. Same mechanism, two
+    surfaces, and they are not reconciled: one measures every delivered signal, the other only
+    the positions one account held.
   </p>
 </section>
 

@@ -54,10 +54,28 @@
   {% elif state == 'armed' %}
     <div class="badge badge-warn">ARMED — governing nothing</div>
     <p class="small">
-      The switch is on and no open position is governed. That is correct when
-      no user has opted in, or when nobody is in a trade. Read the refusal mix
-      below before treating it as a fault — a governor with nothing to do and
-      one that is refusing every series look identical from the table alone.
+      The switch is on and <strong>no open position is governed</strong>
+      {% if open_total is not none %}
+        — the engine's index holds <strong>{{ open_total }}</strong> open
+        position{{ '' if open_total == 1 else 's' }}, none of them carrying a
+        governable <code>exit_mechanism</code>
+      {% endif %}.
+      Governing timeframe <strong>{{ timeframe or 'not reported' }}</strong>.
+    </p>
+    <p class="muted small">
+      Both facts render here deliberately. Until 2026-08-11 this branch showed
+      neither, so the state the owner was actually in could not distinguish
+      <em>nobody opted in</em> from <em>the engine has lost a position it was
+      governing</em> — and the timeframe, the setting that was already wrong
+      once (<code>5</code> where the candle store is keyed <code>5m</code>), was
+      visible only once the governor was already working. A page that hides its
+      inputs in the state you need them is the reassuring blank this page exists
+      to refuse.
+      {% if open_total is not none and open_total > 0 %}
+        <strong>With open positions and none governed, check the per-user
+        <code>exit_mechanism</code> on <a href="/control/users">Control →
+        Users</a> before reading this as quiet.</strong>
+      {% endif %}
     </p>
   {% else %}
     <div class="badge badge-good">GOVERNING {{ governed }}</div>
@@ -70,12 +88,36 @@
   <p class="muted small">
     Mechanism and timeframe are read off the engine's payload, never mirrored
     from a copy of its flag registry here.
+    {% if swept_governed is not none and swept_governed != governed %}
+      <br><strong>Note:</strong> the sweep's own last cycle counted
+      <strong>{{ swept_governed }}</strong> governed against
+      <strong>{{ governed }}</strong> here. They are different populations, not
+      a contradiction — this figure counts every open position carrying a
+      mechanism, the sweep's also requires <code>protection_mode =
+      managed</code>, so a <code>user_owned</code> take appears in one and not
+      the other. Both are printed rather than one silently winning: they were
+      rendered under the same word until 2026-08-11.
+    {% endif %}
   </p>
 </section>
 
-{% if refusals %}
 <section class="card">
   <h2 class="small">Why the rest are not governed</h2>
+{% if not refusals %}
+  <p class="small">
+    <strong>No refusal recorded this cycle.</strong> That is not the same as
+    "everything is fine": a refusal is only counted once the sweep reaches a
+    position, so an empty mix means either every governed position was acted on,
+    or <em>the sweep found nothing to govern at all</em> — read the state above,
+    which now says which.
+  </p>
+  <p class="muted small">
+    This section renders whether or not anything was refused. The copy above
+    tells the reader to check the refusal mix, and until 2026-08-11 the whole
+    block was hidden when the mix was empty — pointing at evidence that was not
+    on the page, in precisely the state where its absence is the finding.
+  </p>
+{% else %}
   <p class="muted small">
     Counted by the engine, per sweep. These are four different states with four
     different next moves, so they are never pooled into "no signals":
@@ -97,8 +139,8 @@
       {% endfor %}
     </tbody>
   </table>
-</section>
 {% endif %}
+</section>
 
 {% if rows %}
 <section class="card">
@@ -148,28 +190,120 @@
 <section class="card">
   <h2 class="small">Sweep counters</h2>
   <p class="muted small">
-    <code>orphan_cancel</code> is the one to watch: it means a replacement stop
-    is live but the cancel of the one it superseded failed, so two stops are
-    resting. That is over-protected, not dangerous: the governor's stop is
+    <code>exits</code> is the mechanism's own exit — SAR flipped, or the
+    chandelier's level is already past the close — closed at market and the
+    parked stop retired with it. Counted apart from <code>replaced</code>
+    because they are opposite events: one moves protection, the other ends the
+    trade. Before 2026-08-11 there was no such leg at all, so a flip produced a
+    level the exchange can only answer with <code>-2021</code> and the position
+    sat on its last pre-flip stop while the measured arm had already booked the
+    trade closed.
+  </p>
+  <p class="muted small">
+    <code>orphan_cancel</code> is the one to watch: a replacement stop is live
+    but the cancel of the one it superseded failed, so two are resting. That is
+    over-protected, not dangerous — the governor's stop is
     <code>reduceOnly</code> for the position's own size, so whichever level
-    triggers first closes the position and the exchange cancels the other
-    rather than opening or flipping anything — and the governor retries the
-    cancel next bar. <code>place_failed</code> is the safe
-    failure — nothing was given up, the previous stop is still exactly where it
-    was — but it is not a benign one: a rejection that repeats is a handover
-    that will never happen, so read it beside <code>handovers</code> and check
-    the rejections below. <code>retry_deferred</code> is the governor declining
-    to re-ask the exchange about a bar it has already refused; the level is
-    fixed for the bar, so the answer would be the same.
+    triggers first closes the position and the exchange rejects the remainder
+    rather than opening or flipping anything, and the cancel is retried next
+    bar. <strong>It does not clear itself.</strong> This page said until
+    2026-08-11 that Binance cancels the other one once the position closes; it
+    does not for a conditional stop, and PROMUSDT's reduce-only stop outlived
+    its position by 28 minutes on the owner's own account. A non-zero count
+    here is an order somebody has to retire.
+  </p>
+  <p class="muted small">
+    <code>place_failed</code> is the safe failure — nothing was given up, the
+    previous stop is still exactly where it was — but it is not a benign one:
+    a rejection that repeats is a handover that will never happen, so read it
+    beside <code>handovers</code> and check the rejections below.
+    <code>retry_deferred</code> is the governor declining to re-ask the exchange
+    about a bar it has already refused; the level is fixed for the bar, so the
+    answer would be the same. <code>exit_failed</code> is <em>not</em> deferred
+    that way — a market close that failed on a transient is worth re-asking,
+    and leaving a position in a mechanism that has said exit is the state the
+    exit leg exists to remove.
   </p>
   <table class="data-table">
     <thead><tr><th>Counter</th><th>Value</th></tr></thead>
     <tbody>
-      {% for k in ['cycles', 'governed', 'handovers', 'replaced', 'unchanged', 'place_failed', 'retry_deferred', 'orphan_cancel'] %}
+      {% for k in ['cycles', 'governed', 'handovers', 'replaced', 'unchanged', 'exits', 'exit_failed', 'stops_filled', 'place_failed', 'retry_deferred', 'orphan_cancel'] %}
       <tr><td class="mono">{{ k }}</td><td>{{ health.get(k, '—') }}</td></tr>
       {% endfor %}
     </tbody>
   </table>
+</section>
+
+<section class="card">
+  <h2 class="small">Realized exits — what the canary actually earned</h2>
+  <p class="muted small">
+    <strong>The counters above say the machine is turning; they cannot say what
+    it made.</strong> Until 2026-08-11 that was the whole story: this page
+    published <code>handovers</code> and <code>replaced</code>,
+    <a href="/signals/sar-live">SAR live</a> published the <em>shadow</em>, and
+    <a href="/track-record">Track record</a> reads the <em>signal</em> record —
+    so the realized result of a governed exit, the one number an own-capital
+    test exists to produce, landed on no surface in either repo.
+  </p>
+  <p class="muted small">
+    <strong>The two fills are never pooled</strong>, exactly as on SAR live.
+    <code>trail_stop</code> is the parked level being touched (the arm's
+    <em>fill @level</em>); <code>flip_close</code> is the mechanism coming
+    offside and the position closing at market (<em>fill @confirm</em>). Their
+    difference is the cost of confirmation, and there is deliberately no blended
+    average here — picking one before that cost is known is choosing the answer.
+    Figures are <strong>gross</strong>, signed toward the trade, and on the same
+    convention as the arm's <code>pnl_level_pct</code> so the two are directly
+    comparable.
+  </p>
+  {% if outcomes %}
+  <p class="small">
+    Showing the newest <strong>{{ outcomes|length }}</strong> of
+    <strong>{{ health.get('exits', 0) + health.get('stops_filled', 0) }}</strong>
+    governed exits — a bounded ring, so the count beside it is the total and
+    this list is a sample.
+  </p>
+  <div style="overflow-x:auto">
+  <table class="data-table">
+    <thead><tr>
+      <th>Symbol</th><th>Side</th><th>Mechanism</th><th>Fill</th>
+      <th>Entry</th><th>Exit</th><th>PnL %</th>
+      <th>Designed SL</th><th>Parked stop</th><th>Seq</th>
+    </tr></thead>
+    <tbody>
+      {% for o in outcomes %}
+      <tr>
+        <td class="mono">{{ o.symbol }}</td>
+        <td>{{ o.side }}</td>
+        <td class="small">{{ o.mechanism or '—' }}</td>
+        <td><span class="badge">{{ o.exit_kind }}</span></td>
+        <td class="mono">{{ o.entry | price }}</td>
+        <td class="mono">{{ o.exit | price }}</td>
+        <td class="mono">{{ o.pnl_pct | pct }}</td>
+        <td class="mono">{{ o.designed_sl | price }}</td>
+        <td class="mono">{{ o.parked_stop | price }}</td>
+        <td>{{ o.seq }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">
+    An em-dash in <strong>PnL %</strong> is a fill Binance had accepted but not
+    yet priced when the row was written — the engine records
+    <code>None</code> rather than a zero, because a zero averages in as a flat
+    trade, which is a claim. The FSM's own close-fill event carries the real
+    average.
+  </p>
+  {% else %}
+  <p class="small">
+    <strong>No governed exit recorded yet.</strong> Expected while
+    <code>handovers</code> is low or every governed trade is still open — this
+    ring only fills when a governed position actually closes, which is rarer
+    than a re-park by construction. It is <em>not</em> evidence the mechanism is
+    inert: read <code>handovers</code> and <code>replaced</code> above for that.
+  </p>
+  {% endif %}
 </section>
 
 {# A counter cannot say what to do next: -2021 (the level is already through
