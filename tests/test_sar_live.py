@@ -1033,3 +1033,118 @@ class TestOpenSetIsNotTheRunningSet:
         )
         assert [r["arm_id"] for r in live] == ["x"]
         assert done == []
+
+
+
+# --------------------------------------------------------------------------- #
+# Which arm is actually being traded (2026-08-11)
+# --------------------------------------------------------------------------- #
+#
+# Owner: *"make SAR live and Binance autotrade exactly same"*.  They are not one
+# population and cannot be: the trail governor runs ONE mechanism on ONE
+# timeframe for the users who opted in, while this page renders 5m and 15m as
+# independent arms across two mechanisms and two lanes.  At most a quarter of
+# what a reader sees describes the account, and the page said nothing about
+# which quarter — the governor's INXUSDT stop sat at the 5m arm's level while
+# the 15m arm beside it was parked 3.7% away.
+
+
+def _gov_payload(**over):
+    base = {
+        "schema": 1, "enabled": True, "timeframe": "5m",
+        "index_cold": False, "open_total": 1, "governed": 1,
+        "health": {}, "rows": [{"symbol": "BTCUSDT", "mechanism": "sar"}],
+    }
+    base.update(over)
+    return base
+
+
+def _with_governor(client, payload):
+    """Swap only `engine_api.trail_governor`, leaving every other call real.
+
+    Applied INSIDE the client context: `_client()` enters the lifespan, which
+    installs the real engine client, so a swap made before it would be
+    overwritten and every assertion below would run against the real one.
+    """
+    from app.main import app
+
+    class _API:
+        def __init__(self, real):
+            self._real = real
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        async def trail_governor(self):
+            if isinstance(payload, Exception):
+                raise payload
+            return payload
+
+    app.state.engine_api = _API(app.state.engine_api)
+    return client
+
+
+def _gov_html(payload, lane="delivered"):
+    with _client() as client:
+        _with_governor(client, payload)
+        return client.get(f"/signals/sar-live?lane={lane}").text
+
+
+def test_the_executing_timeframe_is_named_on_the_page():
+    """GUARD (fails pre-fix — the page had no such panel).
+
+    Both timeframes render as equals and only one is resting on a real account.
+    """
+    html = _gov_html(_gov_payload(timeframe="5m"))
+    assert "EXECUTING" in html
+    assert "5m" in html
+
+
+def test_the_dark_lane_is_never_badged_as_executing():
+    """A dark row reached nobody, so no position exists to govern. The lane
+    check lives in the route rather than the template, so the dark page cannot
+    badge a row live by omission."""
+    html = _gov_html(_gov_payload(), lane="dark")
+    assert "EXECUTING —" not in html
+    assert "MEASUREMENT ONLY" in html
+
+
+def test_a_governor_running_the_other_mechanism_does_not_claim_this_page():
+    """The mechanism is per user, so "the governor is on" says nothing about
+    which mechanism any account chose. Read it off the governed rows."""
+    html = _gov_html(
+        _gov_payload(rows=[{"symbol": "BTCUSDT", "mechanism": "chandelier"}])
+    )
+    assert "EXECUTING —" not in html
+    assert "other mechanism" in html.lower()
+
+
+def test_governor_off_reads_as_measurement_only():
+    html = _gov_html(_gov_payload(enabled=False, governed=0, rows=[]))
+    assert "MEASUREMENT ONLY" in html
+    assert "EXECUTING —" not in html
+
+
+def test_an_engine_that_cannot_answer_says_so_rather_than_the_safe_negative():
+    """Absence of knowledge is not permission to assert the negative. A page
+    reading "nothing here is live" while a stop moves on a real account is the
+    reassuring blank the governor page exists to refuse."""
+    html = _gov_html(RuntimeError("engine down"))
+    assert "CANNOT TELL" in html
+    assert "MEASUREMENT ONLY" not in html
+
+
+def test_a_governor_with_no_reported_timeframe_is_a_fault_not_a_quiet_state():
+    """It has been stored wrong before — `5` where the candle store is keyed
+    `5m` — and the governor cannot hand over without one."""
+    html = _gov_html(_gov_payload(timeframe=""))
+    assert "did not report a timeframe" in html
+
+
+def test_the_page_no_longer_claims_it_cannot_touch_capital():
+    """GUARD. "Nothing on this page has touched anyone's capital" was true when
+    written and became false when the trail governor shipped: one arm here is
+    the mechanism running on a real account."""
+    html = _gov_html(_gov_payload())
+    assert "has touched anyone's capital" not in html
+    assert "/signals/trail-governor" in html
