@@ -99,6 +99,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
 
+from app.data_sources import dark_promotion as promo
 from app.data_sources.dark_exit_sim import (
     HOLD_OPEN,
     DarkRowInputs,
@@ -358,10 +359,18 @@ def concentration(rows: list[dict], *, fee_pct: float) -> dict:
 
 
 def filter_rows(
-    rows: list[dict], *, setup: str = "", gate: str = "", status: str = ""
+    rows: list[dict], *, setup: str = "", gate: str = "", status: str = "",
+    delivery: str = "",
 ) -> list[dict]:
     """Each selector independent, so a caller can omit one when counting that
-    selector's own options (#90/#91)."""
+    selector's own options (#90/#91).
+
+    ``delivery`` is the newest dimension and the one that must never be left
+    implicit: a promoted row went to the router and a dark row did not, so a
+    table pooling them describes a feed that never existed. The default is
+    still every row, because the whole book is what the lane has always shown —
+    but the panels below split on it whether or not the selector is used.
+    """
     out = rows
     if setup:
         out = [r for r in out if str(r.get("setup_class") or "") == setup]
@@ -369,6 +378,8 @@ def filter_rows(
         out = [r for r in out if str(r.get("dark_gate") or "").startswith(gate)]
     if status:
         out = [r for r in out if str(r.get("status") or "") == status]
+    if delivery:
+        out = [r for r in out if promo.delivery_of(r) == delivery]
     return out
 
 
@@ -891,6 +902,7 @@ async def dark_signals_live(
     setup: str = Query(""),
     gate: str = Query(""),
     status: str = Query(""),
+    delivery: str = Query(""),
     strategy: str = Query("hold"),
     target_pct: float = Query(1.0),
     fee_pct: float = Query(0.07),
@@ -922,10 +934,13 @@ async def dark_signals_live(
     mark_live_pnl(rows, prices)
 
     # Every count measured with every filter applied EXCEPT its own (#90/#91).
-    scoped_setup = filter_rows(rows, gate=gate, status=status)
-    scoped_gate = filter_rows(rows, setup=setup, status=status)
-    scoped_status = filter_rows(rows, setup=setup, gate=gate)
-    selected = filter_rows(rows, setup=setup, gate=gate, status=status)
+    scoped_setup = filter_rows(rows, gate=gate, status=status, delivery=delivery)
+    scoped_gate = filter_rows(rows, setup=setup, status=status, delivery=delivery)
+    scoped_status = filter_rows(rows, setup=setup, gate=gate, delivery=delivery)
+    scoped_delivery = filter_rows(rows, setup=setup, gate=gate, status=status)
+    selected = filter_rows(
+        rows, setup=setup, gate=gate, status=status, delivery=delivery
+    )
 
     # Measured on the rows the page is showing, after every filter — a summary
     # over the whole ledger beside a filtered table summarises nothing the
@@ -946,6 +961,21 @@ async def dark_signals_live(
     # concentration figure over the whole ledger beside a one-path table would
     # describe symbols the reader has filtered out.
     conc = concentration(selected, fee_pct=fee)
+
+    # ── Promotion panels ────────────────────────────────────────────────
+    # On the filtered selection like every other panel (#90/#91). `lanes` never
+    # blends: a promoted row reached the router and a dark row did not, and the
+    # rows written before the mechanism are counted apart from both because
+    # they are the evidence the first rules were built from, not rows any rule
+    # declined. `evidence` is the same computation the control page builds a
+    # rule from — one implementation, so a condition cannot be worth one thing
+    # where it is chosen and another where it is judged.
+    lanes = promo.promoted_vs_dark(selected, fee_pct=fee)
+    evidence = {
+        dim: promo.condition_evidence(selected, dimension=dim, fee_pct=fee)
+        for dim in ("gate", "regime", "session", "side")
+    }
+
     attach_strategy(selected, strategy, target, fee)
 
     # Truncate after filtering, never before (#97). The page says when it bit.
@@ -959,6 +989,9 @@ async def dark_signals_live(
         "exits": exits,
         "hold_coverage": coverage,
         "concentration": conc,
+        "lanes": lanes,
+        "evidence": evidence,
+        "delivery_copy": promo.DELIVERY_COPY,
         "strategies": [(k, s.label) for k, s in catalog.items()],
         "strategy": strategy,
         "strategy_label": catalog[strategy].label,
@@ -991,6 +1024,12 @@ async def dark_signals_live(
         "filter_setup": setup,
         "filter_gate": gate,
         "filter_status": status,
+        "filter_delivery": delivery,
+        "deliveries": sorted({promo.delivery_of(r) for r in rows}),
+        "n_delivery": {
+            d: sum(1 for r in scoped_delivery if promo.delivery_of(r) == d)
+            for d in sorted({promo.delivery_of(r) for r in rows})
+        },
     })
 
 
@@ -1030,6 +1069,14 @@ _DARK_COLS = [
     # bare number, because a what-if in a sheet beside a recorded outcome is
     # precisely where the two get read as one.
     "strategy_pct", "strategy_gross_pct", "strategy_labels", "strategy_skipped",
+    # Promotion. A spreadsheet is exactly where two populations get averaged
+    # into one, and these are two populations: `delivery` says whether the row
+    # reached the router, was delivered, was dropped there — or predates the
+    # mechanism entirely, which is neither. Without the column a sheet cannot
+    # tell a promoted row from a diverted one and every per-path average in it
+    # silently describes a feed that never existed.
+    "promoted", "delivery", "promotion_gate", "promotion_direction",
+    "delivered_at", "router_drop_reason",
 ]
 
 
@@ -1039,15 +1086,24 @@ async def dark_signals_export(
     setup: str = Query(""),
     gate: str = Query(""),
     status: str = Query(""),
+    delivery: str = Query(""),
     strategy: str = Query("hold"),
     target_pct: float = Query(1.0),
     fee_pct: float = Query(0.07),
 ):
-    """The current selection as CSV — uncapped, unlike the rendered table."""
+    """The current selection as CSV — uncapped, unlike the rendered table.
+
+    Takes every filter the page takes, ``delivery`` included: an export that
+    silently ignored a selector would describe a different book than the screen
+    it was downloaded from, which is #97 wearing a download button.
+    """
     from app.reports import csv_response
 
     vol = request.app.state.data_volume
-    rows = filter_rows(reduce_rows(vol.dark_signals()), setup=setup, gate=gate, status=status)
+    rows = filter_rows(
+        reduce_rows(vol.dark_signals()),
+        setup=setup, gate=gate, status=status, delivery=delivery,
+    )
     try:
         prices = await request.app.state.binance_klines.fetch_all_prices()
     except Exception:
