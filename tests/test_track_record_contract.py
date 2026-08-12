@@ -289,3 +289,47 @@ class TestKnownDivergences:
         """
         _all, _start, _s, buckets = _pipeline()
         assert "bucket" in buckets[0] and "date" not in buckets[0]
+
+
+class TestCalendarMonthWindow:
+    """The engine gained a CALENDAR-MONTH mode; this page can express one too.
+
+    The Lumin app's calendar grid asks the engine for `month=YYYY-MM` so that a
+    month on screen is the month a reader means by the word — and, more
+    importantly, so a day missing from the answer means *nothing closed* rather
+    than *outside the window we happened to fetch*.
+
+    This page reaches the same window through `custom` with an inclusive end
+    date. Two different interfaces to one span, which is exactly the shape that
+    drifts, so it is asserted rather than assumed.
+    """
+
+    def test_a_calendar_month_agrees_with_the_engines_month_mode(self):
+        # August 2026 over the shared vector: the 2026-08-04 boundary row and
+        # everything after it, and nothing from July or September.
+        all_rows = reduce_records(CONTRACT_ROWS)
+        start, end, _ = resolve_range("custom", "2026-08-01", "2026-08-31",
+                                      now=CONTRACT_NOW)
+        rows = filter_rows(all_rows, start=start, end=end)
+        buckets = bucket_rows(
+            rows, "day", amount=AMOUNT, fee_pct=FEE,
+            start=start, end=end, now=CONTRACT_NOW,
+        )
+        # Same days the engine's `month="2026-08"` returns, oldest first.
+        assert [b["bucket"] for b in reversed(buckets)] == [
+            "2026-08-04", "2026-08-09", "2026-08-10", "2026-08-11",
+        ]
+        # ...and the whole vector is inside August, so the month summary is the
+        # contract summary. A month that silently differed from the window
+        # would be the two-surfaces-one-name defect wearing a date.
+        summary = summarize(rows, amount=AMOUNT, fee_pct=FEE)
+        for key, want in CONTRACT_EXPECTED["summary"].items():
+            assert summary[key] == pytest.approx(want, abs=1e-9), key
+
+    def test_the_inclusive_end_date_really_includes_that_day(self):
+        """`resolve_range` adds a day to the custom end so the last day is
+        whole. If it ever stopped doing so, a month would silently lose its
+        31st — the part-period fault at the other end of the window."""
+        _s, end, _ = resolve_range("custom", "2026-08-01", "2026-08-31",
+                                   now=CONTRACT_NOW)
+        assert end == datetime(2026, 9, 1, tzinfo=UTC)
