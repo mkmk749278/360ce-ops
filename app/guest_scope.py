@@ -160,6 +160,12 @@ OWNER_ONLY: dict[str, str] = {
     ),
     "/control/referrals": "subscriber PII",
     "/control/referrals/mark-paid": "write — payouts",
+    "/control/promotions": (
+        "the dark → live promotion panel — a guest must not see or set which "
+        "measured rows start reaching paid subscribers"
+    ),
+    "/control/promotions/save": "write — money path: arms a promotion rule",
+    "/control/promotions/delete": "write — removes a promotion rule",
     "/control/access": "the read-only access panel — a guest must not see or mint grants",
     "/control/access/issue": "write — mints access",
     "/control/access/revoke": "write — revokes access",

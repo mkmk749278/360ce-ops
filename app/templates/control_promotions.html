@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+{% block title %}Promotions · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Dark → live promotion</h1>
+
+<p class="muted">
+  Each path below has been emitting into the <a href="/signals/dark-live">dark
+  feed</a> — real signals the scanner was willing to send, carried past one
+  gate and diverted before the queue. This page is where a named slice of that
+  population stops being diverted. A promotion removes <strong>only</strong> the
+  gate the row was carried past: every other gate above it already said yes, and
+  the router's second layer (correlation lock, cooldowns, concurrency caps,
+  same-direction throttle) still runs below.
+</p>
+
+<p class="muted small">
+  <strong>Measuring does not stop.</strong> A promoted row is still written to
+  the dark ledger and still walked, marked <code>promoted</code> with its
+  delivery outcome stamped — so the evidence keeps arriving after the decision
+  instead of freezing at the moment it was taken. The two populations are never
+  pooled anywhere: a promoted row reached the router and a dark row did not.
+</p>
+
+{% if flash %}
+<div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
+  {{ flash.text }}
+</div>
+{% endif %}
+
+{% if error %}
+<div class="flash flash-err">
+  Engine unreachable — {{ error }}. The rules below cannot be read or written
+  until it answers; nothing has changed on the engine.
+</div>
+{% endif %}
+
+{# ── The two switches above every rule ─────────────────────────────────────
+   Published together because a rule is inert if either is off, for entirely
+   different reasons — and an operator seeing one without the other cannot
+   tell which half is missing. This is the exit-mechanism control's "three
+   states, never two" rule with the second switch that actually exists. #}
+<div class="panel">
+  <h2>Master switches</h2>
+  <table class="kv">
+    <tr>
+      <th>Promotion (<code>dark_promotion_enabled</code>)</th>
+      <td>
+        {% if snapshot.master_enabled %}
+          <span class="badge badge-live">ARMED</span>
+          Matching candidates are enqueued for real.
+        {% else %}
+          <span class="badge badge-off">OFF</span>
+          Every dark row is diverted exactly as before, <em>whatever any rule
+          below says</em>. This is the kill switch for the mechanism — set it on
+          <a href="/control#tun-signal-gating">Control → Engine → Signal gating</a>.
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Dark lane (<code>dark_emission_enabled</code>)</th>
+      <td>
+        {% if snapshot.dark_lane_enabled %}
+          <span class="badge badge-live">ON</span>
+          Candidates are being carried past their gate, so rules have rows to act on.
+        {% else %}
+          <span class="badge badge-off">OFF</span>
+          No candidate is carried past its gate, so nothing reaches a promotion
+          decision at all. A rule armed in this state is not idle — its input is
+          missing.
+        {% endif %}
+      </td>
+    </tr>
+    {% if snapshot.utc_day %}
+    <tr>
+      <th>Caps counted for</th>
+      <td class="small muted">
+        {{ snapshot.utc_day }} UTC · per-rule daily counts reset at 00:00 UTC.
+        Counters are in-process, so a low number after a deploy is a young
+        process, not a quiet market.
+      </td>
+    </tr>
+    {% endif %}
+  </table>
+</div>
+
+<p class="muted small">
+  Reading order for every table below: <strong>n, then campaigns, then the
+  average.</strong> A cell is not evidence until its row count and its
+  concentration have been read — three rows at a flattering average is how
+  <code>FAILED_AUCTION_RECLAIM</code> got a promotion request within a day of
+  posting +0.846R on a CI of [−1.00, +2.00]. Nothing here is sorted by edge,
+  for the same reason: the top row of a long table beats a coin flip by
+  construction, so each table prints how many cells it drew from.
+</p>
+
+{% if not cards %}
+<div class="panel">
+  <p><span class="badge badge-warn">NO ROWS</span>
+  The dark ledger has no signals, so there is nothing to promote and no evidence
+  to promote it on. That is the quiet case if the lane has just been switched on
+  or the engine has just restarted — check the dark-lane switch above before
+  reading it as a fault.</p>
+</div>
+{% endif %}
+
+{% for card in cards %}
+<div class="panel">
+  <h2>
+    {{ card.setup_class }}
+    {% if card.state == 'live' %}<span class="badge badge-live">LIVE</span>
+    {% elif card.state == 'inert' %}<span class="badge badge-err">ARMED BUT INERT</span>
+    {% elif card.state == 'master_off' %}<span class="badge badge-warn">ARMED · MASTER OFF</span>
+    {% elif card.state == 'lane_off' %}<span class="badge badge-warn">ARMED · LANE OFF</span>
+    {% elif card.state == 'off' %}<span class="badge badge-off">OFF</span>
+    {% else %}<span class="badge badge-off">NO RULE</span>{% endif %}
+  </h2>
+  <p class="muted small">{{ card.state_copy }}</p>
+
+  {# ── What this path has actually done ───────────────────────────────── #}
+  <table class="kv small">
+    <tr>
+      <th>Whole dark book</th>
+      <td>
+        n = {{ card.summary.n_scored }} scored
+        ({{ card.summary.campaigns }} campaign{{ '' if card.summary.campaigns == 1 else 's' }},
+        {{ card.summary.rows_per_campaign | pct if card.summary.rows_per_campaign else '—' }} rows each)
+        · avg <strong>{{ card.summary.avg_pct | pct }}%</strong>
+        {% if card.summary.ci_low is not none %}
+          · 95% CI [{{ card.summary.ci_low | pct }}, {{ card.summary.ci_high | pct }}]
+        {% endif %}
+        · {{ card.summary.wins }}W / {{ card.summary.losses }}L / {{ card.summary.flats }} flat
+      </td>
+    </tr>
+    {% set lanes = card.lanes %}
+    {% if lanes.split.n_promoted %}
+    <tr>
+      <th>Since this rule went live</th>
+      <td>
+        <strong>{{ lanes.split.n_promoted }}</strong> promoted →
+        <strong>{{ lanes.split.n_delivered }}</strong> delivered,
+        {{ lanes.split.n_dropped }} dropped by the router,
+        {{ lanes.split.n_awaiting_router }} awaiting its verdict.
+        {% if lanes.split.delivery_rate is not none %}
+          Delivery rate <strong>{{ lanes.split.delivery_rate | pct }}%</strong> —
+          this is what a promotion actually buys, and it is never inferred from
+          the promoted count.
+        {% endif %}
+        {% if lanes.split.drop_reasons %}
+          <br><span class="muted">Dropped by:
+          {% for reason, n in lanes.split.drop_reasons.items() %}
+            <code>{{ reason }}</code> {{ n }}{{ ", " if not loop.last }}
+          {% endfor %}</span>
+        {% endif %}
+      </td>
+    </tr>
+    <tr>
+      <th>Delivered vs still dark</th>
+      <td>
+        {# Never blended. Both measured on `pnl_pct`, which every closed row
+           carries whichever bucket it lands in, so the comparison is not
+           itself an artefact of what each side stamps. #}
+        delivered n = {{ lanes.delivered.n_scored }},
+        avg {{ lanes.delivered.avg_pct | pct }}%
+        · still-dark n = {{ lanes.dark.n_scored }},
+        avg {{ lanes.dark.avg_pct | pct }}%
+        {% if lanes.unstamped.n_scored %}
+          · <span class="muted">{{ lanes.unstamped.n_scored }} written before the
+          mechanism (counted apart — they are the evidence the rule was built
+          from, not rows it declined)</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endif %}
+  </table>
+
+  {# ── The evidence, beside the checkboxes that select it ───────────────── #}
+  <form method="post" action="/control/promotions/save" class="promo-form">
+    <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
+
+    {% for dim in dimensions %}
+      {% set ev = card.evidence[dim] %}
+      {% set selected = (card.rule[dim ~ 's'] if card.rule else []) or [] %}
+      <fieldset>
+        <legend>{{ dim | capitalize }}</legend>
+        <p class="muted small">{{ dimension_copy[dim] }}</p>
+        <table class="data small">
+          <thead>
+            <tr>
+              <th>Promote</th><th>{{ dim | capitalize }}</th>
+              <th>n</th><th>Campaigns</th><th>W/L/flat</th>
+              <th>Avg PnL %</th><th>95% CI</th><th>Already promoted</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for cell in ev.cells %}
+            <tr>
+              <td>
+                <input type="checkbox" name="{{ dim }}_pick" value="{{ cell.value }}"
+                       {% if cell.value in selected %}checked{% endif %}>
+              </td>
+              <td><code>{{ cell.value }}</code></td>
+              <td>{{ cell.n_scored }}</td>
+              <td>{{ cell.campaigns }}</td>
+              <td>{{ cell.wins }}/{{ cell.losses }}/{{ cell.flats }}</td>
+              <td>{{ cell.avg_pct | pct }}%</td>
+              <td class="muted">
+                {% if cell.ci_low is not none %}
+                  [{{ cell.ci_low | pct }}, {{ cell.ci_high | pct }}]
+                {% else %}—{% endif %}
+              </td>
+              <td class="muted">{{ cell.n_promoted or '—' }}</td>
+            </tr>
+          {% endfor %}
+            <tr>
+              <td></td>
+              <td>
+                <input type="checkbox" name="{{ dim }}_pick" value="{{ any_token }}"
+                       {% if any_token in selected %}checked{% endif %}>
+                <strong>Any</strong>
+              </td>
+              <td colspan="6" class="muted">
+                No restriction on this dimension. Has to be ticked explicitly —
+                an empty list matches <em>nothing</em>, so a half-filled form is
+                inert rather than a promotion of everything.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="muted small">
+          Drawn from {{ ev.cells_drawn }} cell{{ '' if ev.cells_drawn == 1 else 's' }};
+          baseline for this path is n = {{ ev.baseline.n_scored }} at
+          {{ ev.baseline.avg_pct | pct }}%.
+        </p>
+      </fieldset>
+    {% endfor %}
+
+    <fieldset>
+      <legend>Direction</legend>
+      <select name="direction">
+        {% for d in directions %}
+          <option value="{{ d }}"
+            {% if card.rule and card.rule.direction == d %}selected{% endif %}>
+            {{ d }}
+          </option>
+        {% endfor %}
+      </select>
+      <p class="muted small">
+        {% for d in directions %}
+          <code>{{ d }}</code> — {{ direction_copy.get(d, 'declared by the engine; no description here yet.') }}<br>
+        {% endfor %}
+      </p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Bounds</legend>
+      <label>Max promotions / UTC day
+        <input type="number" name="max_per_day" min="0" step="1"
+               value="{{ card.rule.max_per_day if card.rule else 25 }}">
+      </label>
+      <label>Min confidence (blank = no floor)
+        <input type="number" name="min_confidence" step="0.1"
+               value="{{ card.rule.min_confidence if card.rule and card.rule.min_confidence is not none else '' }}">
+      </label>
+      {% if card.rule and card.rule.promoted_today is defined %}
+        <span class="small muted">
+          {{ card.rule.promoted_today }} promoted today under this rule.
+        </span>
+      {% endif %}
+      <p class="muted small">
+        The cap is a blast-radius bound, not a target. Nobody can compute this
+        rule's volume in advance — the router layer has never been applied to
+        this population — so a candidate over the cap stays dark under its own
+        reason and is counted apart from a condition miss.
+      </p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Note</legend>
+      <input type="text" name="note" style="width:100%"
+             placeholder="why this rule, and on what window"
+             value="{{ card.rule.note if card.rule else '' }}">
+    </fieldset>
+
+    <p>
+      <label>
+        <input type="checkbox" name="enabled" value="1"
+               {% if card.rule and card.rule.enabled %}checked{% endif %}>
+        <strong>Arm this rule</strong>
+      </label>
+      <label style="margin-left:1.5em">
+        <input type="checkbox" name="confirm" value="1">
+        I understand this changes what paid subscribers receive
+      </label>
+    </p>
+    {# Arming needs the confirm; switching off does not. A confirm on the safe
+       direction only teaches the operator to click through both. #}
+    <button type="submit" class="btn btn-primary">Save rule</button>
+  </form>
+
+  {% if card.rule %}
+  <form method="post" action="/control/promotions/delete" class="inline"
+        onsubmit="return confirm('Remove the {{ card.setup_class }} rule and its conditions?')">
+    <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
+    <button type="submit" class="btn btn-danger small">Remove rule</button>
+    <span class="muted small">
+      Distinct from switching it off — off keeps the conditions, remove throws
+      them away.
+    </span>
+  </form>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% endblock %}

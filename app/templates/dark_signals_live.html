@@ -82,6 +82,14 @@
       {% endfor %}
     </select>
   </label>
+  <label class="small" title="whether the row was diverted (dark), promoted and enqueued, delivered by the router, or dropped by it. Never pooled in the panels below: a promoted row reached the router and a dark row did not.">Delivery
+    <select name="delivery" onchange="this.form.submit()">
+      <option value="">All</option>
+      {% for d in deliveries %}
+      <option value="{{ d }}" {% if filter_delivery == d %}selected{% endif %}>{{ d }} ({{ n_delivery.get(d, 0) }})</option>
+      {% endfor %}
+    </select>
+  </label>
   <label class="small">Exit strategy
     <select name="strategy" onchange="this.form.submit()">
       {% for k, label in strategies %}
@@ -95,7 +103,7 @@
   <label class="small" title="round-trip: Binance USD-M maker in (0.02%) + taker out (0.05%). Charged to every strategy AND to the row's own exit, so the comparison stays apples-to-apples.">Fee %
     <input type="number" name="fee_pct" value="{{ "%g"|format(fee_pct) }}" step="0.01" min="0" max="2" style="width:5em">
   </label>
-  <a class="btn" href="/signals/dark-live/export.csv?setup={{ filter_setup }}&gate={{ filter_gate }}&status={{ filter_status }}&strategy={{ strategy }}&target_pct={{ target_pct }}&fee_pct={{ fee_pct }}">Export CSV</a>
+  <a class="btn" href="/signals/dark-live/export.csv?setup={{ filter_setup }}&gate={{ filter_gate }}&status={{ filter_status }}&delivery={{ filter_delivery }}&strategy={{ strategy }}&target_pct={{ target_pct }}&fee_pct={{ fee_pct }}">Export CSV</a>
   <noscript><button class="btn" type="submit">Apply</button></noscript>
 </form>
 
@@ -530,6 +538,172 @@
   </p>
 </section>
 {% endif %}
+
+{# ── Promotion: what the rules have done, and what a rule would be built on ──
+   Two panels, both measured on the filtered selection like every other panel
+   here (#90/#91). The first splits the book by delivery and never blends the
+   halves; the second is the same computation the control page builds a rule
+   from, so a condition cannot be worth one thing where it is chosen and
+   another where it is judged. #}
+<section class="card">
+  <h2 class="small">
+    Promotion <span class="muted">— which of these rows stopped being diverted</span>
+  </h2>
+
+  {% set L = lanes %}
+  {% if not L.split.n_promoted %}
+    <p class="small muted">
+      Nothing in this selection has been promoted. That is the expected state
+      until a rule is armed{% if may_use(request, "/control/promotions") %} on
+      <a href="/control/promotions">Control → Promotions</a>{% endif %} — it is
+      not a fault, and it is not the same as a rule that is armed and matching
+      nothing. The panel renders either way, because a check that appears only
+      when it trips teaches the reader that its absence means "fine".
+    </p>
+  {% else %}
+  <div style="overflow-x:auto">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th>Population</th><th title="rows with a usable PnL — INSUFFICIENT is excluded, it is the absence of a measurement rather than a zero">n</th>
+        <th title="distinct symbol·side over the whole window. Read this before the average: a dark candidate is diverted before the router, so no per-symbol cooldown applies and its repeats spread across hours rather than bunching.">Campaigns</th>
+        <th>W / L / flat</th><th>Avg PnL %</th><th>95% CI</th><th>Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <th>Delivered to subscribers</th>
+        <td>{{ L.delivered.n_scored }}</td>
+        <td>{{ L.delivered.campaigns }}</td>
+        <td>{{ L.delivered.wins }} / {{ L.delivered.losses }} / {{ L.delivered.flats }}</td>
+        <td>{{ L.delivered.avg_pct | pct }}%</td>
+        <td class="muted">{% if L.delivered.ci_low is not none %}[{{ L.delivered.ci_low | pct }}, {{ L.delivered.ci_high | pct }}]{% else %}—{% endif %}</td>
+        <td>{{ L.delivered.total_pct | pct }}%</td>
+      </tr>
+      <tr>
+        <th>Promoted (incl. router-dropped)</th>
+        <td>{{ L.promoted.n_scored }}</td>
+        <td>{{ L.promoted.campaigns }}</td>
+        <td>{{ L.promoted.wins }} / {{ L.promoted.losses }} / {{ L.promoted.flats }}</td>
+        <td>{{ L.promoted.avg_pct | pct }}%</td>
+        <td class="muted">{% if L.promoted.ci_low is not none %}[{{ L.promoted.ci_low | pct }}, {{ L.promoted.ci_high | pct }}]{% else %}—{% endif %}</td>
+        <td>{{ L.promoted.total_pct | pct }}%</td>
+      </tr>
+      <tr>
+        <th>Still dark</th>
+        <td>{{ L.dark.n_scored }}</td>
+        <td>{{ L.dark.campaigns }}</td>
+        <td>{{ L.dark.wins }} / {{ L.dark.losses }} / {{ L.dark.flats }}</td>
+        <td>{{ L.dark.avg_pct | pct }}%</td>
+        <td class="muted">{% if L.dark.ci_low is not none %}[{{ L.dark.ci_low | pct }}, {{ L.dark.ci_high | pct }}]{% else %}—{% endif %}</td>
+        <td>{{ L.dark.total_pct | pct }}%</td>
+      </tr>
+      {% if L.unstamped.n_scored %}
+      <tr>
+        <th class="muted">Written before the mechanism</th>
+        <td>{{ L.unstamped.n_scored }}</td>
+        <td>{{ L.unstamped.campaigns }}</td>
+        <td>{{ L.unstamped.wins }} / {{ L.unstamped.losses }} / {{ L.unstamped.flats }}</td>
+        <td>{{ L.unstamped.avg_pct | pct }}%</td>
+        <td class="muted">{% if L.unstamped.ci_low is not none %}[{{ L.unstamped.ci_low | pct }}, {{ L.unstamped.ci_high | pct }}]{% else %}—{% endif %}</td>
+        <td>{{ L.unstamped.total_pct | pct }}%</td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+  </div>
+
+  <p class="small">
+    <strong>{{ L.split.n_promoted }}</strong> promoted →
+    <strong>{{ L.split.n_delivered }}</strong> delivered,
+    {{ L.split.n_dropped }} dropped by the router,
+    {{ L.split.n_awaiting_router }} still awaiting its verdict{% if L.split.delivery_rate is not none %} —
+    delivery rate <strong>{{ L.split.delivery_rate | pct }}%</strong>{% endif %}.
+    {% if L.split.drop_reasons %}
+    Dropped by:
+      {% for reason, n in L.split.drop_reasons.items() %}<code>{{ reason }}</code> {{ n }}{{ ", " if not loop.last }}{% endfor %}.
+    {% endif %}
+  </p>
+  <p class="small muted">
+    <strong>Promoted is not delivered.</strong> A promotion puts a candidate on
+    the queue; <a href="/signals/router-drops">the router's second layer</a>
+    then drops most of what it dequeues — the correlation lock alone takes the
+    large majority. So the promoted row count is what the rule <em>attempted</em>
+    and the delivered count is what a subscriber saw, and only the second can
+    justify changing what subscribers receive. The two are never rounded
+    together, on this page or in the export.
+  </p>
+  {% if L.split.unclassified %}
+  <p class="small">
+    <span class="badge badge-warn">UNCLASSIFIED</span>
+    The engine reported delivery states this page has no description for:
+    {% for state, n in L.split.unclassified.items() %}<code>{{ state }}</code> ({{ n }}){{ ", " if not loop.last }}{% endfor %}.
+    They are counted under their own names rather than dropped — a page that
+    iterated its own list of known states would be silent on the next one.
+  </p>
+  {% endif %}
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2 class="small">
+    Promotion evidence
+    <span class="muted">— what each condition is worth, on the rows shown</span>
+  </h2>
+  <p class="small muted">
+    The tables {% if may_use(request, "/control/promotions") %}<a
+    href="/control/promotions">Control → Promotions</a>{% else %}the promotion
+    control panel{% endif %} builds a rule from, computed here by the same code
+    so the two can never disagree.
+    Read <strong>n, then campaigns, then the average</strong> — in that order.
+    Nothing is sorted by edge: the top row of a table sorted that way beats a
+    coin flip by construction, so each table is sorted by evidence and prints
+    how many cells it drew from.
+  </p>
+  {% for dim, ev in evidence.items() %}
+    {% if ev.cells %}
+    <h3 class="small">{{ dim | capitalize }}</h3>
+    <div style="overflow-x:auto">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>{{ dim | capitalize }}</th><th>n</th><th>Campaigns</th>
+          <th>W / L / flat</th><th>Win %</th><th>Avg PnL %</th>
+          <th>95% CI</th><th>Total</th>
+          <th title="rows in this cell that a rule has already promoted. A cell that is partly the rule's own output is not fresh evidence for widening it.">Promoted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for cell in ev.cells %}
+        <tr>
+          <td><code>{{ cell.value }}</code></td>
+          <td>{{ cell.n_scored }}</td>
+          <td>{{ cell.campaigns }}</td>
+          <td>{{ cell.wins }} / {{ cell.losses }} / {{ cell.flats }}</td>
+          <td>{{ cell.win_rate_closed | pct }}%</td>
+          <td>{{ cell.avg_pct | pct }}%</td>
+          <td class="muted">{% if cell.ci_low is not none %}[{{ cell.ci_low | pct }}, {{ cell.ci_high | pct }}]{% else %}—{% endif %}</td>
+          <td>{{ cell.total_pct | pct }}%</td>
+          <td class="muted">{{ cell.n_promoted or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <p class="small muted">
+      {{ ev.cells_drawn }} cell{{ '' if ev.cells_drawn == 1 else 's' }} drawn ·
+      baseline for this selection n = {{ ev.baseline.n_scored }} at
+      {{ ev.baseline.avg_pct | pct }}%.
+    </p>
+    {% endif %}
+  {% endfor %}
+  <p class="small muted">
+    Win % has two defensible denominators and this column uses <em>all closed
+    rows</em>, so a flat expiry counts as a non-win rather than a loss — three
+    buckets, never two. The W/L/flat column beside it is what lets you compute
+    the other one.
+  </p>
+</section>
 
 {% if concentration and concentration.campaigns %}
 {% set C = concentration %}

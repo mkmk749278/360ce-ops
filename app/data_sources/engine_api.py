@@ -78,6 +78,31 @@ class EngineApiClient:
         except httpx.HTTPError as exc:
             return {"error": str(exc), "endpoint": path}
 
+    async def _delete(self, path: str) -> Any:
+        """DELETE an engine control resource.
+
+        Same error contract as :meth:`_post` — a failure returns a dict with
+        ``error``/``status_code`` rather than raising, so a control route can
+        name what the engine refused instead of rendering a 500.
+        """
+        try:
+            r = await self.client.delete(path)
+            r.raise_for_status()
+            return r.json()
+        except httpx.HTTPStatusError as exc:
+            detail: Any = None
+            try:
+                detail = exc.response.json().get("detail")
+            except Exception:
+                detail = exc.response.text
+            return {
+                "error": detail or str(exc),
+                "status_code": exc.response.status_code,
+                "endpoint": path,
+            }
+        except httpx.HTTPError as exc:
+            return {"error": str(exc), "endpoint": path}
+
     async def health(self) -> Any:
         return await self._get("/api/health")
 
@@ -248,6 +273,35 @@ class EngineApiClient:
         """Update one or more runtime tunables. Owner-gated on the engine;
         the engine validates types and ranges and persists to Firestore."""
         return await self._post("/api/tunables", {"values": values})
+
+    async def dark_promotions(self) -> Any:
+        """Promotion rules, the vocabulary they can be built from, and counters.
+
+        ``vocabulary`` is derived by the engine from the dark ledger's own rows,
+        not enumerated anywhere — so the form can only offer gates, regimes and
+        sessions this engine has actually stamped. A rule keyed on a label the
+        detector never emits would be enabled, plausible, and matching nothing
+        forever, which on screen is indistinguishable from a rule waiting for
+        its setup to appear.
+        """
+        return await self._get("/api/admin/dark-promotions")
+
+    async def set_dark_promotion(self, rule: dict[str, Any]) -> Any:
+        """Create or replace one path's promotion rule. Owner-gated.
+
+        The engine returns what it **stored**, not what was sent — it
+        normalises tokens, refuses an unknown direction and clamps the cap — so
+        the caller renders the response rather than the form it just submitted.
+        """
+        return await self._post("/api/admin/dark-promotions", rule)
+
+    async def delete_dark_promotion(self, setup_class: str) -> Any:
+        """Remove one path's promotion rule entirely.
+
+        Distinct from disabling it: a disabled rule keeps its conditions, so
+        re-arming is one switch. Deleting throws the conditions away.
+        """
+        return await self._delete(f"/api/admin/dark-promotions/{setup_class}")
 
     async def reset_signals(self) -> Any:
         """Full-signal reset: clears active signals, history, stats, invalidation,
