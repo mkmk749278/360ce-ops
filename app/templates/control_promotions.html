@@ -4,21 +4,9 @@
 <h1>Dark → live promotion</h1>
 
 <p class="muted">
-  Each path below has been emitting into the <a href="/signals/dark-live">dark
-  feed</a> — real signals the scanner was willing to send, carried past one
-  gate and diverted before the queue. This page is where a named slice of that
-  population stops being diverted. A promotion removes <strong>only</strong> the
-  gate the row was carried past: every other gate above it already said yes, and
-  the router's second layer (correlation lock, cooldowns, concurrency caps,
-  same-direction throttle) still runs below.
-</p>
-
-<p class="muted small">
-  <strong>Measuring does not stop.</strong> A promoted row is still written to
-  the dark ledger and still walked, marked <code>promoted</code> with its
-  delivery outcome stamped — so the evidence keeps arriving after the decision
-  instead of freezing at the moment it was taken. The two populations are never
-  pooled anywhere: a promoted row reached the router and a dark row did not.
+  Each path below emits into the <a href="/signals/dark-live">dark feed</a> —
+  real signals the scanner was willing to send, diverted before the queue. A
+  rule here is what stops a named slice of that population being diverted.
 </p>
 
 {% if flash %}
@@ -35,65 +23,180 @@
 {% endif %}
 
 {# ── The two switches above every rule ─────────────────────────────────────
-   Published together because a rule is inert if either is off, for entirely
-   different reasons — and an operator seeing one without the other cannot
-   tell which half is missing. This is the exit-mechanism control's "three
-   states, never two" rule with the second switch that actually exists. #}
+   Both, always, because a rule is inert if either is off for entirely
+   different reasons and a page showing one cannot say which half is missing. #}
 <div class="panel">
-  <h2>Master switches</h2>
-  <table class="kv">
+  <h2 class="small">Master switches</h2>
+  <table class="tbl small">
     <tr>
-      <th>Promotion (<code>dark_promotion_enabled</code>)</th>
+      <th style="width:14em">Promotion <code>dark_promotion_enabled</code></th>
       <td>
         {% if snapshot.master_enabled %}
           <span class="badge badge-live">ARMED</span>
           Matching candidates are enqueued for real.
         {% else %}
           <span class="badge badge-off">OFF</span>
-          Every dark row is diverted exactly as before, <em>whatever any rule
-          below says</em>. This is the kill switch for the mechanism — set it on
-          <a href="/control#tun-signal-gating">Control → Engine → Signal gating</a>.
+          Every dark row is diverted as before, <em>whatever any rule says</em> —
+          <a href="/control#tun-signal-gating">arm it on Control → Engine → Signal gating</a>.
         {% endif %}
       </td>
     </tr>
     <tr>
-      <th>Dark lane (<code>dark_emission_enabled</code>)</th>
+      <th>Dark lane <code>dark_emission_enabled</code></th>
       <td>
         {% if snapshot.dark_lane_enabled %}
           <span class="badge badge-live">ON</span>
           Candidates are being carried past their gate, so rules have rows to act on.
         {% else %}
           <span class="badge badge-off">OFF</span>
-          No candidate is carried past its gate, so nothing reaches a promotion
-          decision at all. A rule armed in this state is not idle — its input is
-          missing.
+          Nothing is carried past its gate, so no candidate reaches a promotion
+          decision. A rule armed now is not idle — its input is missing.
         {% endif %}
       </td>
     </tr>
-    {% if snapshot.utc_day %}
-    <tr>
-      <th>Caps counted for</th>
-      <td class="small muted">
-        {{ snapshot.utc_day }} UTC · per-rule daily counts reset at 00:00 UTC.
-        Counters are in-process, so a low number after a deploy is a young
-        process, not a quiet market.
-      </td>
-    </tr>
-    {% endif %}
   </table>
 </div>
 
-<p class="muted small">
-  Reading order for every table below: <strong>n, then campaigns, then the
-  average.</strong> A cell is not evidence until its row count and its
-  concentration have been read — three rows at a flattering average is how
-  <code>FAILED_AUCTION_RECLAIM</code> got a promotion request within a day of
-  posting +0.846R on a CI of [−1.00, +2.00]. Nothing here is sorted by edge,
-  for the same reason: the top row of a long table beats a coin flip by
-  construction, so each table prints how many cells it drew from.
-</p>
+{# ── The index. The whole point of this block: find your path in one screen
+   rather than scrolling past twelve you do not want. Sorted by evidence, not
+   by edge — a page that ranks paths by average puts the luckiest thin cell on
+   the top line and invites exactly the promotion this repo has paid for. #}
+{% if index %}
+<div class="panel">
+  <h2 class="small">Paths <span class="muted">— most evidence first</span></h2>
+  {# One selector, and the counts beside every option are measured on the WHOLE
+     ledger — a selector applied to its own counts makes each option read
+     "n = whatever I picked" (#90/#91). #}
+  <form method="get" class="filters">
+    <label class="small">Show
+      <select name="setup" onchange="this.form.submit()">
+        <option value="">All paths ({{ index | length }})</option>
+        {% for c in index %}
+        <option value="{{ c.setup_class }}"
+          {% if filter_setup == c.setup_class %}selected{% endif %}>
+          {{ c.setup_class }} (n={{ c.summary.n_scored }})
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if filter_setup %}<a class="btn small" href="/control/promotions">Clear</a>{% endif %}
+    <noscript><button class="btn small" type="submit">Apply</button></noscript>
+  </form>
+  <div style="overflow-x:auto">
+  <table class="tbl small">
+    <thead>
+      <tr>
+        <th>Path</th><th>Rule</th>
+        <th title="rows with a usable PnL">n</th>
+        <th title="distinct symbol·side — read this before the average">Campaigns</th>
+        <th>W/L/flat</th><th>Avg PnL %</th><th>95% CI</th><th>Promoted</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for card in index %}
+      <tr{% if filter_setup == card.setup_class %} class="row-sel"{% endif %}>
+        <td><a href="?setup={{ card.setup_class }}"><code>{{ card.setup_class }}</code></a></td>
+        <td>
+          {% if card.state == 'live' %}<span class="badge badge-live">LIVE</span>
+          {% elif card.state == 'inert' %}<span class="badge badge-err">INERT</span>
+          {% elif card.state == 'master_off' %}<span class="badge badge-warn">MASTER OFF</span>
+          {% elif card.state == 'lane_off' %}<span class="badge badge-warn">LANE OFF</span>
+          {% elif card.state == 'off' %}<span class="badge badge-off">OFF</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td>{{ card.summary.n_scored }}</td>
+        <td>{{ card.summary.campaigns }}</td>
+        <td>{{ card.summary.wins }}/{{ card.summary.losses }}/{{ card.summary.flats }}</td>
+        <td>{{ card.summary.avg_pct | pct }}%</td>
+        <td class="muted">
+          {% if card.summary.ci_low is not none %}
+            [{{ card.summary.ci_low | pct }}, {{ card.summary.ci_high | pct }}]
+          {% else %}—{% endif %}
+        </td>
+        <td class="muted">{{ card.lanes.split.n_promoted or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="small muted">
+    A dash under <strong>Rule</strong> means no rule exists and every dark row
+    for that path is diverted. Open a path below to see its evidence and set one.
+  </p>
+</div>
+{% endif %}
 
-{% if not cards %}
+{# ── Everything that used to repeat on all thirteen cards, said once.
+   The prose is not cut — it is the guardrail — but printing it per path is
+   what turned this page into thirty-two screens. #}
+<details class="panel">
+  <summary><strong>How a rule works, and how to read the tables</strong></summary>
+
+  <p class="small">
+    A promotion removes <strong>only</strong> the gate the row was carried
+    past. Every other gate above it already said yes, and the router's second
+    layer (correlation lock, cooldowns, concurrency caps, same-direction
+    throttle) still runs below — so a promoted row is not yet a delivered one.
+  </p>
+  <p class="small">
+    <strong>Measuring does not stop.</strong> A promoted row is still written
+    to the dark ledger and still walked, marked <code>promoted</code> with its
+    delivery outcome stamped, so the evidence keeps arriving after the decision
+    instead of freezing at the moment it was taken. Promoted rows and dark rows
+    are never pooled anywhere.
+  </p>
+  <p class="small">
+    <strong>Reading order for every table: n, then campaigns, then the
+    average.</strong> A cell is not evidence until its row count and its
+    concentration have been read — three rows at a flattering average is how
+    <code>FAILED_AUCTION_RECLAIM</code> got a promotion request within a day of
+    posting +0.846R on a CI of [−1.00, +2.00]. Nothing is sorted by edge, for
+    the same reason, and each table prints how many cells it drew from.
+  </p>
+
+  <table class="tbl small">
+    <tr><th style="width:9em">Gate</th>
+      <td>{{ dimension_copy['gate'] }}</td></tr>
+    <tr><th>Regime</th><td>{{ dimension_copy['regime'] }}</td></tr>
+    <tr><th>Session</th><td>{{ dimension_copy['session'] }}</td></tr>
+    <tr><th>Any</th>
+      <td>No restriction on that dimension. It has to be ticked explicitly — an
+        empty list matches <em>nothing</em>, so a half-filled form is inert
+        rather than a promotion of everything.</td></tr>
+    <tr><th>Direction</th>
+      <td>
+        {% for d in directions %}
+          <code>{{ d }}</code> — {{ direction_copy.get(d, 'declared by the engine; no description here yet.') }}<br>
+        {% endfor %}
+      </td></tr>
+    <tr><th>Daily cap</th>
+      <td>A blast radius, not a target. Nobody can compute a rule's volume in
+        advance — the router layer has never been applied to this population —
+        so a candidate over the cap stays dark under its own reason, counted
+        apart from a condition miss.</td></tr>
+  </table>
+
+  <table class="tbl small">
+    <thead><tr><th>Rule state</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td><span class="muted">—</span></td><td>No rule. Every dark row for this path is diverted.</td></tr>
+      <tr><td><span class="badge badge-off">OFF</span></td><td>Saved and switched off. Conditions are kept, so re-arming is one switch.</td></tr>
+      <tr><td><span class="badge badge-err">INERT</span></td><td>Switched ON but no condition can match — an allow-list is empty. Not off; <em>unfinished</em>.</td></tr>
+      <tr><td><span class="badge badge-warn">MASTER OFF</span></td><td>Armed, but the engine-wide switch is off. Nothing is promoted.</td></tr>
+      <tr><td><span class="badge badge-warn">LANE OFF</span></td><td>Armed, but the dark lane is off, so the rows it would promote never reach it.</td></tr>
+      <tr><td><span class="badge badge-live">LIVE</span></td><td>Matching candidates are enqueued for real.</td></tr>
+    </tbody>
+  </table>
+</details>
+
+{% if filter_missing %}
+<div class="panel">
+  <p><span class="badge badge-warn">NO SUCH PATH</span>
+  <code>{{ filter_setup }}</code> has no rows in the dark ledger, so there is
+  nothing to promote and no evidence to promote it on. That is not the same as
+  the whole book being empty — <a href="/control/promotions">show all paths</a>.</p>
+</div>
+{% elif not cards %}
 <div class="panel">
   <p><span class="badge badge-warn">NO ROWS</span>
   The dark ledger has no signals, so there is nothing to promote and no evidence
@@ -103,38 +206,31 @@
 </div>
 {% endif %}
 
+{# ── Per-path cards, collapsed. A path with a rule opens by default, because
+   the thing you changed is the thing you want to see. #}
 {% for card in cards %}
-<div class="panel">
-  <h2>
-    {{ card.setup_class }}
+<details class="panel" id="p-{{ card.setup_class }}" {% if card.open %}open{% endif %}>
+  <summary>
+    <strong>{{ card.setup_class }}</strong>
     {% if card.state == 'live' %}<span class="badge badge-live">LIVE</span>
     {% elif card.state == 'inert' %}<span class="badge badge-err">ARMED BUT INERT</span>
     {% elif card.state == 'master_off' %}<span class="badge badge-warn">ARMED · MASTER OFF</span>
     {% elif card.state == 'lane_off' %}<span class="badge badge-warn">ARMED · LANE OFF</span>
     {% elif card.state == 'off' %}<span class="badge badge-off">OFF</span>
     {% else %}<span class="badge badge-off">NO RULE</span>{% endif %}
-  </h2>
+    <span class="muted small">
+      n = {{ card.summary.n_scored }} · {{ card.summary.campaigns }} campaigns ·
+      avg {{ card.summary.avg_pct | pct }}%
+    </span>
+  </summary>
+
   <p class="muted small">{{ card.state_copy }}</p>
 
-  {# ── What this path has actually done ───────────────────────────────── #}
-  <table class="kv small">
+  {% set lanes = card.lanes %}
+  {% if lanes.split.n_promoted %}
+  <table class="tbl small">
     <tr>
-      <th>Whole dark book</th>
-      <td>
-        n = {{ card.summary.n_scored }} scored
-        ({{ card.summary.campaigns }} campaign{{ '' if card.summary.campaigns == 1 else 's' }},
-        {{ card.summary.rows_per_campaign | pct if card.summary.rows_per_campaign else '—' }} rows each)
-        · avg <strong>{{ card.summary.avg_pct | pct }}%</strong>
-        {% if card.summary.ci_low is not none %}
-          · 95% CI [{{ card.summary.ci_low | pct }}, {{ card.summary.ci_high | pct }}]
-        {% endif %}
-        · {{ card.summary.wins }}W / {{ card.summary.losses }}L / {{ card.summary.flats }} flat
-      </td>
-    </tr>
-    {% set lanes = card.lanes %}
-    {% if lanes.split.n_promoted %}
-    <tr>
-      <th>Since this rule went live</th>
+      <th style="width:12em">Since this rule went live</th>
       <td>
         <strong>{{ lanes.split.n_promoted }}</strong> promoted →
         <strong>{{ lanes.split.n_delivered }}</strong> delivered,
@@ -142,8 +238,7 @@
         {{ lanes.split.n_awaiting_router }} awaiting its verdict.
         {% if lanes.split.delivery_rate is not none %}
           Delivery rate <strong>{{ lanes.split.delivery_rate | pct }}%</strong> —
-          this is what a promotion actually buys, and it is never inferred from
-          the promoted count.
+          what a promotion actually buys, never inferred from the promoted count.
         {% endif %}
         {% if lanes.split.drop_reasons %}
           <br><span class="muted">Dropped by:
@@ -156,24 +251,20 @@
     <tr>
       <th>Delivered vs still dark</th>
       <td>
-        {# Never blended. Both measured on `pnl_pct`, which every closed row
-           carries whichever bucket it lands in, so the comparison is not
-           itself an artefact of what each side stamps. #}
         delivered n = {{ lanes.delivered.n_scored }},
         avg {{ lanes.delivered.avg_pct | pct }}%
         · still-dark n = {{ lanes.dark.n_scored }},
         avg {{ lanes.dark.avg_pct | pct }}%
         {% if lanes.unstamped.n_scored %}
           · <span class="muted">{{ lanes.unstamped.n_scored }} written before the
-          mechanism (counted apart — they are the evidence the rule was built
-          from, not rows it declined)</span>
+          mechanism (counted apart — the evidence the rule was built from, not
+          rows it declined)</span>
         {% endif %}
       </td>
     </tr>
-    {% endif %}
   </table>
+  {% endif %}
 
-  {# ── The evidence, beside the checkboxes that select it ───────────────── #}
   <form method="post" action="/control/promotions/save" class="promo-form">
     <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
 
@@ -182,8 +273,8 @@
       {% set selected = (card.rule[dim ~ 's'] if card.rule else []) or [] %}
       <fieldset>
         <legend>{{ dim | capitalize }}</legend>
-        <p class="muted small">{{ dimension_copy[dim] }}</p>
-        <table class="data small">
+        <div style="overflow-x:auto">
+        <table class="tbl small">
           <thead>
             <tr>
               <th>Promote</th><th>{{ dim | capitalize }}</th>
@@ -212,21 +303,17 @@
             </tr>
           {% endfor %}
             <tr>
-              <td></td>
               <td>
                 <input type="checkbox" name="{{ dim }}_pick" value="{{ any_token }}"
                        {% if any_token in selected %}checked{% endif %}>
-                <strong>Any</strong>
               </td>
-              <td colspan="6" class="muted">
-                No restriction on this dimension. Has to be ticked explicitly —
-                an empty list matches <em>nothing</em>, so a half-filled form is
-                inert rather than a promotion of everything.
-              </td>
+              <td colspan="7"><strong>Any</strong>
+                <span class="muted">— no restriction on this dimension</span></td>
             </tr>
           </tbody>
         </table>
-        <p class="muted small">
+        </div>
+        <p class="small muted">
           Drawn from {{ ev.cells_drawn }} cell{{ '' if ev.cells_drawn == 1 else 's' }};
           baseline for this path is n = {{ ev.baseline.n_scored }} at
           {{ ev.baseline.avg_pct | pct }}%.
@@ -235,50 +322,32 @@
     {% endfor %}
 
     <fieldset>
-      <legend>Direction</legend>
-      <select name="direction">
-        {% for d in directions %}
-          <option value="{{ d }}"
-            {% if card.rule and card.rule.direction == d %}selected{% endif %}>
-            {{ d }}
-          </option>
-        {% endfor %}
-      </select>
-      <p class="muted small">
-        {% for d in directions %}
-          <code>{{ d }}</code> — {{ direction_copy.get(d, 'declared by the engine; no description here yet.') }}<br>
-        {% endfor %}
-      </p>
-    </fieldset>
-
-    <fieldset>
-      <legend>Bounds</legend>
-      <label>Max promotions / UTC day
-        <input type="number" name="max_per_day" min="0" step="1"
+      <legend>Direction, bounds and note</legend>
+      <label>Direction
+        <select name="direction">
+          {% for d in directions %}
+            <option value="{{ d }}"
+              {% if card.rule and card.rule.direction == d %}selected{% endif %}>{{ d }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label style="margin-left:1em">Max promotions / UTC day
+        <input type="number" name="max_per_day" min="0" step="1" style="width:6em"
                value="{{ card.rule.max_per_day if card.rule else 25 }}">
       </label>
-      <label>Min confidence (blank = no floor)
-        <input type="number" name="min_confidence" step="0.1"
+      <label style="margin-left:1em">Min confidence
+        <input type="number" name="min_confidence" step="0.1" style="width:6em"
                value="{{ card.rule.min_confidence if card.rule and card.rule.min_confidence is not none else '' }}">
       </label>
       {% if card.rule and card.rule.promoted_today is defined %}
-        <span class="small muted">
-          {{ card.rule.promoted_today }} promoted today under this rule.
-        </span>
+        <span class="small muted">· {{ card.rule.promoted_today }} promoted today</span>
       {% endif %}
-      <p class="muted small">
-        The cap is a blast-radius bound, not a target. Nobody can compute this
-        rule's volume in advance — the router layer has never been applied to
-        this population — so a candidate over the cap stays dark under its own
-        reason and is counted apart from a condition miss.
-      </p>
-    </fieldset>
-
-    <fieldset>
-      <legend>Note</legend>
-      <input type="text" name="note" style="width:100%"
-             placeholder="why this rule, and on what window"
-             value="{{ card.rule.note if card.rule else '' }}">
+      <br>
+      <label>Note
+        <input type="text" name="note" style="width:60%"
+               placeholder="why this rule, and on what window"
+               value="{{ card.rule.note if card.rule else '' }}">
+      </label>
     </fieldset>
 
     <p>
@@ -303,12 +372,10 @@
     <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
     <button type="submit" class="btn btn-danger small">Remove rule</button>
     <span class="muted small">
-      Distinct from switching it off — off keeps the conditions, remove throws
-      them away.
+      Distinct from switching it off — off keeps the conditions.
     </span>
   </form>
   {% endif %}
-</div>
+</details>
 {% endfor %}
-
 {% endblock %}

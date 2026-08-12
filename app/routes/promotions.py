@@ -31,8 +31,9 @@ see every measurement page this decision is made from and none of the switches.
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import RedirectResponse
 
 from app import audit
@@ -83,6 +84,17 @@ DIRECTION_COPY = {
 _FLASH = "_promotions_flash"
 
 
+def _back(setup_class: str) -> str:
+    """Redirect target after a write — the card that was acted on.
+
+    PRG so a refresh cannot re-fire the action, and scoped to the path so the
+    operator lands on the rule they just changed instead of the top of a long
+    page.
+    """
+    token = quote(str(setup_class or "").strip())
+    return f"/control/promotions?setup={token}" if token else "/control/promotions"
+
+
 def _checked(values: list[str]) -> list[str]:
     """Normalise one dimension's checked boxes.
 
@@ -110,7 +122,9 @@ def _load_rows(request: Request) -> list[dict]:
     return reduce_rows(request.app.state.data_volume.dark_signals())
 
 
-def _build_context(request: Request, snapshot: Any, rows: list[dict]) -> dict:
+def _build_context(
+    request: Request, snapshot: Any, rows: list[dict], open_setup: str = ""
+) -> dict:
     setups = sorted({str(r.get("setup_class") or "") for r in rows if r.get("setup_class")})
     cards = []
     for setup in setups:
@@ -129,11 +143,36 @@ def _build_context(request: Request, snapshot: Any, rows: list[dict]) -> dict:
                 for dim in DIMENSIONS
             },
             "n_rows": len(setup_rows),
+            # Collapsed by default. A path with a rule opens, because the thing
+            # you changed is the thing you want to see — and so does the one
+            # named in `?setup=`, which is what the flash links back to after a
+            # save. Thirteen expanded cards is what made this page 32 screens.
+            "open": bool(rule) or setup.upper() == open_setup.upper(),
         })
     # Most evidence first. Deliberately not "best average first": a page that
     # ranks paths by edge puts the luckiest thin cell at the top and invites
     # exactly the promotion this repo has already paid for once.
     cards.sort(key=lambda c: -c["summary"]["n_scored"])
+
+    # The filter. `?setup=` narrows the page to one path — the index and the
+    # selector above it still list every path, measured on the WHOLE ledger,
+    # because a selector applied to its own counts makes every option read
+    # "n = whatever I picked" (#90/#91).
+    index = [
+        {"setup_class": c["setup_class"], "state": c["state"],
+         "summary": c["summary"], "lanes": c["lanes"]}
+        for c in cards
+    ]
+    if open_setup:
+        want = open_setup.strip().upper()
+        matched = [c for c in cards if c["setup_class"] == want]
+        # An unknown path filters to nothing rather than silently showing
+        # everything: "you picked a path that has no rows" and "here is the
+        # whole book" are different answers and only one of them is true.
+        cards = matched
+        filter_missing = not matched
+    else:
+        filter_missing = False
 
     directions = []
     if isinstance(snapshot, dict):
@@ -147,6 +186,9 @@ def _build_context(request: Request, snapshot: Any, rows: list[dict]) -> dict:
         "snapshot": snapshot if isinstance(snapshot, dict) else {},
         "error": (snapshot or {}).get("error") if isinstance(snapshot, dict) else None,
         "cards": cards,
+        "index": index,
+        "filter_setup": open_setup.strip().upper() if open_setup else "",
+        "filter_missing": filter_missing,
         "dimensions": DIMENSIONS,
         "dimension_copy": DIMENSION_COPY,
         "directions": directions,
@@ -154,17 +196,25 @@ def _build_context(request: Request, snapshot: Any, rows: list[dict]) -> dict:
         "any_token": (snapshot or {}).get("any_token", "*") if isinstance(snapshot, dict) else "*",
         "flash": request.session.pop(_FLASH, None),
         "n_rows": len(rows),
+        "open_setup": open_setup,
     }
 
 
 @router.get("/control/promotions")
-async def promotions_page(request: Request):
+async def promotions_page(request: Request, setup: str = Query("")):
+    """The index, then the cards.
+
+    ``?setup=`` opens one path's card. Every write redirects back with it set,
+    so a save lands on the card it changed rather than at the top of a page the
+    operator then has to search — the whole reason this page was hard to use.
+    """
     api = request.app.state.engine_api
     templates = request.app.state.templates
     snapshot = await api.dark_promotions()
     rows = _load_rows(request)
     return templates.TemplateResponse(
-        "control_promotions.html", _build_context(request, snapshot, rows)
+        "control_promotions.html",
+        _build_context(request, snapshot, rows, open_setup=setup),
     )
 
 
@@ -207,7 +257,7 @@ async def promotions_save(
                 f"subscribers receive, so it needs the confirm box."
             ),
         }
-        return RedirectResponse("/control/promotions", status_code=303)
+        return RedirectResponse(_back(setup_class), status_code=303)
 
     try:
         cap = max(0, int(float(max_per_day or 0)))
@@ -216,7 +266,7 @@ async def promotions_save(
             "ok": False,
             "text": f"{setup_class}: daily cap must be a number.",
         }
-        return RedirectResponse("/control/promotions", status_code=303)
+        return RedirectResponse(_back(setup_class), status_code=303)
 
     conf: float | None
     try:
@@ -253,7 +303,7 @@ async def promotions_save(
             "ok": False,
             "text": f"{setup_class}: engine refused — {detail}",
         }
-        return RedirectResponse("/control/promotions", status_code=303)
+        return RedirectResponse(_back(setup_class), status_code=303)
 
     stored = result.get("rule") or {}
     if stored.get("inert"):
@@ -283,7 +333,7 @@ async def promotions_save(
         state_ok = True
 
     request.session[_FLASH] = {"ok": state_ok, "text": text}
-    return RedirectResponse("/control/promotions", status_code=303)
+    return RedirectResponse(_back(setup_class), status_code=303)
 
 
 @router.post("/control/promotions/delete")
@@ -314,4 +364,4 @@ async def promotions_delete(request: Request, setup_class: str = Form(...)):
             else f"{setup_class}: engine refused — {(result or {}).get('error')}"
         ),
     }
-    return RedirectResponse("/control/promotions", status_code=303)
+    return RedirectResponse(_back(setup_class), status_code=303)
