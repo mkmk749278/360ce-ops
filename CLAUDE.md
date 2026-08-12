@@ -1407,3 +1407,70 @@ still describes the old shape is wrong on screen even though every counter above
 it is right — and it is the kind of wrong a reader cannot detect, because it
 reads as authoritative and internally consistent. A route test now asserts the
 page does not say "both are closePosition".
+
+## `/control/promotions` — the dark feed's control panel (2026-08-12)
+
+Added with engine #923 for the owner: *"add new tab that actually we can promote
+from dark to live with conditions, each path has master control promote switch
+and then options to add regimes, gates, sessions etc … and in dark measuring
+continuous as usual."*
+
+Per path: a master switch plus the gates, regimes, sessions, direction and
+confidence floor under which that path's diverted rows stop being diverted. Its
+own sub-tab for the reason `/control/access` has one, with its own flash key.
+
+**The evidence renders beside the checkbox that selects it**, and that is the
+page's whole design constraint. A control one click away from a number the owner
+has to open another page to read is a machine for promoting the top row of a
+table. So each dimension's cells print **n, campaigns, then the average**, in
+that order, **sorted by evidence and never by edge**, with the cell count on
+screen — `FAILED_AUCTION_RECLAIM` is the standing example of what reading a thin
+cell costs, and here it would have been one click from live.
+
+Rules the two surfaces carry:
+
+- **Five rule states, not two.** `none` · `off` (conditions kept — re-arming is
+  one switch) · **`inert`** (armed with an empty allow-list: not off,
+  *unfinished*, and the state an operator is most likely to misread as working)
+  · `master_off` · `lane_off` (the dark lane is off, so the rows the rule would
+  promote are killed upstream and never reach it). Both master switches render
+  together, because a rule is inert if either is off *for different reasons* and
+  a page showing one cannot say which half is missing. The exit-mechanism
+  control's "three states, never two", with the switches this chain actually
+  has.
+- **Four populations, never pooled.** `delivered` · `promoted` (incl.
+  router-dropped) · still `dark` · **`unstamped`**. `promoted_enqueued` is never
+  rounded up to delivered — the correlation lock alone takes ~89% of what the
+  router dequeues, so "promoted 20" and "20 subscribers saw it" differ by an
+  order of magnitude. And a row written before the mechanism is `unstamped`
+  rather than "not promoted": those rows are the **entire evidence base for the
+  first rule**, and folding them into the population the rules *declined* looks
+  right on the day it ships and diverges silently after.
+- **One reducer for both pages.** `app/data_sources/dark_promotion.py` serves the
+  control page and the dark feed, so a condition cannot be worth one thing where
+  it is chosen and another where it is judged.
+- **Arming needs a confirm; disabling does not.** A confirm on the safe direction
+  only teaches the operator to click through both.
+
+**Two defects found by rendering the page, not by testing it** — the 2026-08-06
+lesson arriving during implementation for the second time:
+
+- **`is_promoted` iterated ops' own list of three known delivery states**, so a
+  fourth state in the ledger vanished from `n_promoted` entirely: the figure
+  that says how many rows a rule put on the queue, silently under-reporting
+  itself. `MEASUREMENT_SUFFIXES` wearing a **fourth** hat, and the fix is the
+  usual one — match the engine's `promoted_` prefix, count what cannot be
+  classified under its own name, and keep an unknown state out of both
+  `delivered` and `dropped` so it can neither improve nor worsen the delivery
+  rate.
+- **`tests/test_guest_access.py` caught both new panels linking to
+  `/control/promotions`**, which a read-only guest can only 403 on. The derived
+  check earning its keep a second time: nobody had noticed, and a hand-written
+  list of controls to hide would have been silent on both.
+
+**The form posts plain repeated checkbox fields and is read as such.** The first
+cut joined them into a hidden input with JavaScript on submit — with JS off that
+posts *no allow-lists at all*, and because an empty allow-list is fail-closed
+engine-side, the owner would get a rule saved, armed, and promoting nothing. A
+control that appears to work and does nothing, this time wearing the shape of a
+working promotion.
