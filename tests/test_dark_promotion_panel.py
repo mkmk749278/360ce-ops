@@ -332,6 +332,10 @@ def client(monkeypatch):
         _row(symbol="A3", delivery=dp.DELIVERY_ENQUEUED),
         _row(symbol="A4", delivery=dp.DELIVERY_DARK, pnl=-1.2),
         _row(symbol="A5", unstamped=True),
+        # A second path — without one, "collapsed except the card with a rule"
+        # cannot fail, because there is nothing left to stay collapsed.
+        _row(symbol="B1", setup="MEAN_REVERT", pnl=-1.0),
+        _row(symbol="B2", setup="MEAN_REVERT", pnl=0.4),
     ]
     snapshot = {
         "schema": 1, "master_enabled": True, "dark_lane_enabled": True,
@@ -525,3 +529,151 @@ def test_a_saved_but_inert_rule_is_not_reported_as_a_success(client):
     )
     page = client.get("/control/promotions")
     assert "INERT" in page.text
+
+
+# --------------------------------------------------------------------------- #
+# Findability — the page has to be usable, not only correct
+# --------------------------------------------------------------------------- #
+#
+# The first cut rendered every path's card expanded, each repeating the same
+# explainers: 13 cards × (3 dimension paragraphs + 5 direction descriptions +
+# the cap prose) came to 32 printed pages, and finding one path meant scrolling
+# past twelve. Owner-caught 2026-08-12, from a PDF of the page.
+#
+# The guardrail copy is not cut — it is why the page can be trusted. It is said
+# ONCE. These tests pin that split, because "the page got long again" is not
+# something any other assertion would notice.
+
+
+def _visible(body: str) -> str:
+    """Rendered text, normalised.
+
+    Asserting on raw HTML is brittle for reasons that say nothing about the
+    page: Jinja escapes an apostrophe to ``&#39;``, and a sentence wrapped
+    across two source lines carries a newline the reader never sees. Both bit
+    the first cut of these tests, which is its own small version of the lesson
+    — check what the reader sees, not what the template happens to emit.
+    """
+    import html as _html
+    import re as _re
+
+    out = _re.sub(r"<script.*?</script>", " ", body, flags=_re.S)
+    out = _re.sub(r"<style.*?</style>", " ", out, flags=_re.S)
+    out = _html.unescape(_re.sub(r"<[^>]+>", " ", out))
+    return _re.sub(r"\s+", " ", out)
+
+
+def test_the_explainers_are_said_once_not_once_per_path(client):
+    """Prose that repeats per card is what made this page unreadable."""
+    import re
+
+    from app.routes import promotions as P
+
+    text = _visible(client.get("/control/promotions").text)
+    for phrase in (P.DIMENSION_COPY["gate"], P.DIRECTION_COPY["with_trend"]):
+        norm = re.sub(r"\s+", " ", phrase)
+        assert text.count(norm) == 1, (
+            f"{norm[:45]!r} appears {text.count(norm)}x — repeated per path "
+            f"again, which is the 32-page regression"
+        )
+
+
+def test_every_path_is_listed_in_one_index(client):
+    """Find your path in one screen, without expanding anything.
+
+    The index links through the FILTER (``?setup=``) rather than to an anchor,
+    so clicking a path narrows the page to it instead of scrolling to a card
+    with twelve others still below.
+    """
+    import re
+
+    r = client.get("/control/promotions")
+    listed = set(re.findall(r'href="\?setup=([A-Z_]+)"', r.text))
+    assert {"LIQUIDITY_SWEEP_REVERSAL", "MEAN_REVERT"} <= listed
+    # …and the index lists every path, not just the filtered one.
+    filtered = client.get("/control/promotions?setup=MEAN_REVERT")
+    assert set(re.findall(r'href="\?setup=([A-Z_]+)"', filtered.text)) == listed
+
+
+def test_cards_are_collapsed_except_the_ones_that_carry_a_rule(client):
+    """The thing you changed is the thing you want open."""
+    import re
+
+    r = client.get("/control/promotions")
+    opened = set(re.findall(r'<details class="panel" id="p-([A-Z_]+)"[^>]*open', r.text))
+    allc = set(re.findall(r'<details class="panel" id="p-([A-Z_]+)"', r.text))
+    # The fixture arms exactly one rule.
+    assert opened == {"LIQUIDITY_SWEEP_REVERSAL"}
+    assert len(allc) > len(opened), "every card is expanded again"
+
+
+def test_setup_query_opens_one_path(client):
+    import re
+
+    r = client.get("/control/promotions?setup=MEAN_REVERT")
+    opened = set(re.findall(r'<details class="panel" id="p-([A-Z_]+)"[^>]*open', r.text))
+    assert "MEAN_REVERT" in opened
+
+
+def test_a_save_returns_to_the_card_it_changed(client):
+    """PRG, scoped to the path — not the top of a long page the operator then
+    has to search for the rule they just wrote."""
+    async def _set(rule):
+        return {"ok": True, "rule": dict(rule, inert=False), "master_enabled": True}
+
+    client.app.state.engine_api.set_dark_promotion = _set
+    r = client.post(
+        "/control/promotions/save",
+        data={"setup_class": "MEAN_REVERT", "direction": "any", "max_per_day": "25"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"] == "/control/promotions?setup=MEAN_REVERT"
+
+
+def test_the_guardrail_copy_survived_the_simplification(client):
+    """Shortening the page must not have removed why it can be trusted."""
+    text = _visible(client.get("/control/promotions").text)
+    for phrase in (
+        "Measuring does not stop",
+        "n, then campaigns, then the average",
+        "FAILED_AUCTION_RECLAIM",
+        "Drawn from",
+        "changes what paid subscribers receive",
+    ):
+        assert phrase in text, f"lost the guardrail copy: {phrase!r}"
+
+
+def test_the_filter_narrows_the_page_to_one_path(client):
+    """`?setup=` shows that path only — the index above it still lists all."""
+    import re
+
+    r = client.get("/control/promotions?setup=MEAN_REVERT")
+    cards = set(re.findall(r'<details class="panel" id="p-([A-Z_]+)"', r.text))
+    assert cards == {"MEAN_REVERT"}, f"filter did not narrow the cards: {cards}"
+    assert 'selected' in r.text
+
+
+def test_filtering_to_a_path_with_no_rows_says_so(client):
+    """"You picked a path with no rows" and "the book is empty" are different
+    answers, and only one of them is true — so the filter must not silently
+    fall back to showing everything."""
+    r = client.get("/control/promotions?setup=NOT_A_REAL_PATH")
+    assert r.status_code == 200
+    text = _visible(r.text)
+    assert "NO SUCH PATH" in text
+    assert "NOT_A_REAL_PATH" in text
+    # …and the index is still there so the reader can pick a real one.
+    assert "LIQUIDITY_SWEEP_REVERSAL" in text
+
+
+def test_the_index_counts_are_measured_on_the_whole_book_not_the_filter(client):
+    """A selector applied to its own counts makes every option read
+    "n = whatever I picked" (#90/#91)."""
+    import re
+
+    def counts(body):
+        return dict(re.findall(r'([A-Z_]+) \(n=(\d+)\)', body))
+
+    assert counts(client.get("/control/promotions").text) == \
+           counts(client.get("/control/promotions?setup=MEAN_REVERT").text)
