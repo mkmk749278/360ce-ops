@@ -37,6 +37,17 @@ async def pairs_page(request: Request, tab: str = "promoting"):
             "promoting_count": data.get("promoting_count", len(data.get("promoting") or [])),
             "updated_at": data.get("updated_at"),
             "ignition": data.get("ignition") or {},
+            # Dynamic retention (engine `src/mover_retention.py`). Read off the
+            # engine's own report, never recomputed here — a second scorer in
+            # the display layer would be a mirror, and the fix for a drifting
+            # mirror is not a second mirror.
+            #
+            # `None` (absent) and `{}` (present but empty) are DIFFERENT and the
+            # template must not pool them: absent means the engine predates the
+            # lane, empty means it is running and holds nothing. Different
+            # causes, different next moves — "blank needs a cause before it gets
+            # a caption".
+            "retention": data.get("retention"),
             "error": error,
         },
     )
