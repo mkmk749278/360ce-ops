@@ -152,6 +152,17 @@
       <tr>
         <td><strong>{{ p.symbol }}</strong>
           {% if p.get('promotion_source') %}<br><span class="muted" style="font-size:0.85em">{{ p.get('promotion_source')|replace('MOVER_','')|lower }}</span>{% endif %}
+          {# Top gainer or top loser. The engine promotes on |24h| and stores
+             the ABSOLUTE move, so this is the only place the sign appears.
+             Tri-state: an em-dash means no reading, never "loser". #}
+          {% if p.get('promotion_gainer') is not none %}
+            <br><span style="font-size:0.85em;color:{{ '#3fb950' if p.get('promotion_gainer') else '#f85149' }}">
+              {{ 'top gainer' if p.get('promotion_gainer') else 'top loser' }}
+              {% if p.get('promotion_change_pct') is not none %}{{ '{:+.1f}'.format(p.get('promotion_change_pct')) }}%{% endif %}
+            </span>
+          {% elif p.get('promotion_source') %}
+            <br><span class="muted" style="font-size:0.85em" title="the detector could not report the 24h move — not the same as 0%">— kind unknown</span>
+          {% endif %}
         </td>
         <td>{{ p.minutes_left }}</td>
         <td>

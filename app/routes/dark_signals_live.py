@@ -1042,7 +1042,7 @@ _DARK_COLS = [
     # (2026-08-13). Engine schema 3; a row written before it reads blank, and
     # `-1.0` means the pair was not a held mover at all. The two are different
     # facts and a spreadsheet is exactly where they would get pooled.
-    "promotion_age_sec",
+    "promotion_age_sec", "promotion_change_pct",
     "entry", "stop_loss", "tp1",
     # The rest of the ladder. Without it a spreadsheet cannot reprice a leg, and
     # re-deriving one from an R multiple is exactly the invented denominator

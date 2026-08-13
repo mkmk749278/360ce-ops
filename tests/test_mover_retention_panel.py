@@ -399,3 +399,44 @@ def test_the_dark_feed_export_carries_it_too():
     from app.routes.dark_signals_live import _DARK_COLS
 
     assert "promotion_age_sec" in _DARK_COLS
+
+
+# --------------------------------------------------------------------------- #
+# Top gainer vs top loser — the distinction the promotion path discards
+# --------------------------------------------------------------------------- #
+
+def test_a_top_gainer_and_a_top_loser_are_labelled_apart():
+    """The engine promotes on |24h %| and stores abs(change_pct), so this is
+    the only surface carrying the sign. On the delivered book buying a gainer
+    and shorting a loser differed by +1.944%/trade — they are not the same
+    kind of pair and must not render as one."""
+    text = _visible(_page(_payload([
+        _row("UPUSDT", promotion_gainer=True, promotion_change_pct=31.4),
+        _row("DOWNUSDT", promotion_gainer=False, promotion_change_pct=-27.9),
+    ])))
+    assert "top gainer" in text and "+31.4%" in text
+    assert "top loser" in text and "-27.9%" in text
+
+
+def test_no_reading_reads_unknown_and_never_loser():
+    """`None` is not `False`. A detector that could not report the move must
+    not make every unmeasurable pair render as a top loser — that is a bool
+    standing in for a tri-state, in the flattering-to-nobody direction."""
+    text = _visible(_page(_payload([
+        _row("QQQUSDT", promotion_gainer=None, promotion_change_pct=None),
+    ])))
+    assert "kind unknown" in text
+    assert "top loser" not in text
+    assert "top gainer" not in text
+
+
+def test_an_engine_without_the_stamp_does_not_invent_a_kind():
+    """Older engines send neither key. Absent must behave like unknown, not
+    like a gainer — Jinja yields Undefined for a missing key, which is neither
+    None nor a value, and the first cut of the exit-mechanism control fell past
+    both branches on exactly that."""
+    row = _row("OLDUSDT")
+    row.pop("promotion_gainer", None); row.pop("promotion_change_pct", None)
+    text = _visible(_page(_payload([row])))
+    assert "top gainer" not in text and "top loser" not in text
+    assert "kind unknown" in text
