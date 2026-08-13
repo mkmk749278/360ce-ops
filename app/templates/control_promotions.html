@@ -9,6 +9,80 @@
   rule here is what stops a named slice of that population being diverted.
 </p>
 
+{# ---- Path retirement: the same decision pointing the other way ---------- #}
+{% if retirement is none %}
+<section class="card">
+  <h2>Path retirement <span class="muted">NOT REPORTED</span></h2>
+  <p class="muted">
+    This engine build predates the retirement mechanism, so every path delivers
+    on its own merits and nothing is being held back. That is not the same as
+    "nothing is retired" — there is no gate to report.
+  </p>
+</section>
+{% elif retirement.get('error') %}
+<section class="card">
+  <h2>Path retirement <span class="muted">UNREADABLE</span></h2>
+  <div class="error">{{ retirement.get('error') }}</div>
+  <p class="muted">
+    A fault, not a quiet state: the engine could not report which paths are
+    retired, so nothing below can say whether one is.
+  </p>
+</section>
+{% else %}
+<section class="card">
+  <h2>Path retirement
+    <span class="muted">live → dark: a (path, side) that stops reaching subscribers</span>
+  </h2>
+  <div class="flash">
+    <strong>{% if retirement.get('enabled') %}ACTIVE{% else %}OFF{% endif %}</strong>
+    — {{ retirement.get('count', 0) }} retirement(s) configured.
+    {% if retirement.get('enabled') %}
+      Rows matching them are diverted to the dark feed instead of the queue:
+      subscribers do not receive them, and they keep being measured.
+    {% else %}
+      The switch is off, so every configured retirement is inert and these
+      paths deliver exactly as before.
+    {% endif %}
+  </div>
+  {% if retirement.get('retired') %}
+  <table class="data-table">
+    <thead><tr><th>Path</th><th>Side</th><th>Effect</th></tr></thead>
+    <tbody>
+      {% for r in retirement.get('retired') %}
+      <tr>
+        <td><strong>{{ r.setup_class }}</strong></td>
+        <td>{% if r.side == '*' %}<span class="muted">both</span>{% else %}{{ r.side }}{% endif %}</td>
+        <td>
+          {% if retirement.get('enabled') %}
+            <span style="color:#f85149">diverted to dark</span>
+          {% else %}
+            <span class="muted">inert — switch is off</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nothing is retired — every path delivers on its own merits.</p>
+  {% endif %}
+  <p class="muted">
+    <strong>Why divert rather than disable.</strong> A retired path keeps
+    stamping into the dark feed, so the decision can be re-read on fresh
+    evidence instead of frozen at the moment it was taken. A path that never
+    emits can never earn its way back — that is the absorbing state that cost
+    this engine 23 days of a starved feed, and it is why retirement is a
+    routing decision and not a verdict.
+    {% if not retirement.get('is_default') %}
+      <br>This list has been changed from the signed-off default.
+    {% endif %}
+    Edit it on <a href="/control/tunables">Control → Tunables</a>
+    (<code>retired_paths</code>, and <code>path_retirement_enabled</code> to
+    disarm the whole mechanism).
+  </p>
+</section>
+{% endif %}
+
 {% if flash %}
 <div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
   {{ flash.text }}

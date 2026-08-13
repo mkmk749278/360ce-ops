@@ -677,3 +677,112 @@ def test_the_index_counts_are_measured_on_the_whole_book_not_the_filter(client):
 
     assert counts(client.get("/control/promotions").text) == \
            counts(client.get("/control/promotions?setup=MEAN_REVERT").text)
+
+
+# --------------------------------------------------------------------------- #
+# Path retirement — the same decision pointing the other way (live -> dark)
+# --------------------------------------------------------------------------- #
+
+_RETIRED = {
+    "enabled": True, "count": 2, "is_default": True,
+    "retired": [
+        {"setup_class": "MOVER_TREND_PULLBACK", "side": "SHORT"},
+        {"setup_class": "VOLUME_SURGE_BREAKOUT", "side": "*"},
+    ],
+    "default": [
+        {"setup_class": "MOVER_TREND_PULLBACK", "side": "SHORT"},
+        {"setup_class": "VOLUME_SURGE_BREAKOUT", "side": "*"},
+    ],
+}
+
+
+def _promo_page(retirement="present", rows=None):
+    """Render /control/promotions with a chosen path_retirement block."""
+    snap = {
+        "rules": [], "master_enabled": True, "dark_lane_enabled": True,
+        "directions": ["ANY", "LONG", "SHORT", "WITH_TREND"], "any_token": "*",
+    }
+    if retirement == "present":
+        snap["path_retirement"] = _RETIRED
+    elif retirement == "off":
+        snap["path_retirement"] = dict(_RETIRED, enabled=False)
+    elif retirement == "empty":
+        snap["path_retirement"] = {"enabled": True, "count": 0, "retired": [],
+                                   "is_default": False, "default": []}
+    elif retirement == "error":
+        snap["path_retirement"] = {"error": "boom"}
+    # "absent" -> no key
+
+    from app.main import app
+
+    with TestClient(app) as client:
+        client.post("/login", data={"password": os.environ["OPS_AUTH_TOKEN"]})
+        app.state.data_volume.dark_signals = lambda: {"schema": 2, "rows": rows or []}
+        app.state.data_volume.dark_signals_provenance = lambda: {
+            "exists": True, "mtime": 1_786_500_000.0, "age_sec": 30.0
+        }
+
+        async def _promos():
+            return snap
+
+        app.state.engine_api.dark_promotions = _promos
+        r = client.get("/control/promotions")
+        assert r.status_code == 200, r.status_code
+        return r.text
+
+
+def test_an_engine_without_the_mechanism_says_so():
+    """"No gate exists" and "a gate exists and retires nothing" are different
+    facts, and only one of them means a path could be being held back."""
+    t = _visible(_promo_page("absent"))
+    assert "NOT REPORTED" in t
+    assert "predates" in t
+    assert "ACTIVE" not in t
+
+
+def test_an_unreadable_retirement_block_is_a_fault():
+    t = _visible(_promo_page("error"))
+    assert "UNREADABLE" in t and "boom" in t
+    assert "NOT REPORTED" not in t
+
+
+def test_the_retired_pairs_render_with_their_side():
+    t = _visible(_promo_page("present"))
+    assert "MOVER_TREND_PULLBACK" in t
+    assert "VOLUME_SURGE_BREAKOUT" in t
+    assert "diverted to dark" in t
+
+
+def test_a_wildcard_side_reads_both_not_a_star():
+    """`*` is our token, not a word. A reader should not have to know it."""
+    t = _visible(_promo_page("present"))
+    assert "both" in t
+
+
+def test_the_switch_being_off_makes_every_entry_inert_on_screen():
+    """A configured-but-disarmed retirement is the state most likely to be
+    misread as working — it looks identical to an armed one in the list."""
+    t = _visible(_promo_page("off"))
+    assert "OFF" in t
+    assert "inert" in t
+    assert "diverted to dark" not in t
+
+
+def test_nothing_retired_is_stated_rather_than_left_blank():
+    t = _visible(_promo_page("empty"))
+    assert "Nothing is retired" in t
+
+
+def test_the_page_explains_why_it_diverts_rather_than_disables():
+    """Copy is part of the measurement. Without this a reader assumes a retired
+    path is switched off, and the whole reversibility argument is invisible."""
+    t = _visible(_promo_page("present"))
+    assert "earn its way back" in t
+    assert "re-read on fresh evidence" in t
+
+
+def test_a_changed_list_is_flagged_against_the_signed_off_default():
+    t = _visible(_promo_page("present"))
+    assert "changed from the signed-off default" not in t
+    t2 = _visible(_promo_page("empty"))
+    assert "changed from the signed-off default" in t2

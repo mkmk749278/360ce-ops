@@ -197,6 +197,14 @@ def _build_context(
         "flash": request.session.pop(_FLASH, None),
         "n_rows": len(rows),
         "open_setup": open_setup,
+        # Path retirement — the same decision pointing the other way. Read off
+        # the engine's own snapshot, never recomputed here; a second copy of
+        # the retired list in ops would drift from the one the scanner
+        # enforces, and the drift is invisible until a path nobody retired
+        # stops delivering. `None` (absent) means the engine predates the
+        # mechanism, which is NOT the same as "nothing is retired".
+        "retirement": (snapshot or {}).get("path_retirement")
+                      if isinstance(snapshot, dict) else None,
     }
 
 
