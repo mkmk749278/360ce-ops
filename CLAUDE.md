@@ -1474,3 +1474,56 @@ posts *no allow-lists at all*, and because an empty allow-list is fail-closed
 engine-side, the owner would get a rule saved, armed, and promoting nothing. A
 control that appears to work and does nothing, this time wearing the shape of a
 working promotion.
+
+## Arranging `/control` — and the tile that must not read the switch (2026-08-10, #161–#163)
+
+77 tunables sat between the safety switches and the mode toggle, so on a phone the
+kill switch and the positions table were several screens below a wall of knobs. A
+control surface that is correct and unreachable in an emergency is the *"a panel
+nobody can reach is exactly as useful as no panel"* rule arriving at the one page
+where the delay costs money.
+
+- **Section order is the safety argument**: safety · mode · positions · tunables ·
+  danger · audit, with jump nav, collapsible categories, a filter, and a `changed`
+  badge answering the question the page could not — *what did I change?*
+- **An anchor can be correct and still land wrong.** Every jump-nav pill scrolled
+  its target **behind two stacked sticky bars**, so all the pills "looked the
+  same". `--sticky-h` is *measured at runtime*, because `header nav` wraps on a
+  phone: a hardcoded offset would have been right on desktop and wrong on the
+  device the complaint came from. **Measure the chrome you are compensating for.**
+- **A status tile reads the mechanism's own diag, never the switch that is
+  supposed to drive it.** The strip named five switches and omitted the only one
+  that moves a real stop order; when it was added, sourcing it from
+  `trail_governor_enabled` would have shown **green all day** on exactly the
+  failure that was live — the governor inert behind a bad timeframe with its
+  switch reading ON. This is the control doctrine's *"the engine is the source of
+  truth, so read it back"* applied to a **health** tile: a switch says what was
+  asked for, a diag says what is happening, and a tile that conflates them is
+  reassuring precisely when it is wrong.
+- Every tile links to the control that sets it, and the danger zone is framed
+  apart from the five reversible toggles — because "reversible" and "not" should
+  not be one visual class.
+
+## The mover lifecycle panels (2026-08-13, #173–#175)
+
+Three surfaces for engine #927/#928/#929 — how a promoted pair is kept, how a path
+is retired, and which *kind* of mover admitted a pair.
+
+- **`/pairs` → Promoting renders the retention verdict per row**, in four states
+  (NOT REPORTED · UNREADABLE · MEASURING ONLY · ENFORCING) because an engine that
+  predates the mechanism, an unreadable payload, a measuring lane and an enforcing
+  one have four different next moves. A missing burst ratio renders `—`, never
+  `0.0` — the detector returning "I could not compute this" is not a quiet market.
+- **Time-to-first-candidate is stated as a caveat, not a column average.** A pair
+  released before it ever produced has no such time, so averaging the ones that do
+  describes only the survivors.
+- **The gainer/loser label is tri-state**: `top gainer +31.4%` / `top loser
+  −27.9%` / `— kind unknown`. **A bool would be wrong here** — it renders every
+  pair the detector could not measure as a top loser, a reading nobody has evidence
+  for. And an engine predating the stamp sends *neither* key, which Jinja yields as
+  `Undefined` — neither `none` nor a value, which is exactly what the
+  exit-mechanism control fell past on its first cut. Both cases are driven as real
+  requests in `tests/test_mover_retention_panel.py`.
+- **Every existing row reads blank, and that is correct.** The promotion evicts
+  itself long before most signals close, so there is no honest backfill; the column
+  has to exist before a window can accumulate behind it.
