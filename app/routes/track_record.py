@@ -321,6 +321,14 @@ def reduce_records(records: Any) -> list[dict]:
             # the third.
             "pair_admission": str(rec.get("pair_admission") or ""),
             "promotion_age_sec": rec.get("promotion_age_sec"),
+            # Which KIND of mover admitted the pair: signed 24h % at promotion,
+            # positive for a top gainer and negative for a top loser. The
+            # engine's promotion path stores abs(change_pct), so nothing else
+            # in this record carries the sign — and on this very book buying a
+            # gainer and shorting a loser differed by +1.944%/trade, 95% CI
+            # [+0.504, +3.333]. None means "not a held mover, or written before
+            # the stamp"; `pair_admission` is what tells those two apart.
+            "promotion_change_pct": rec.get("promotion_change_pct"),
             "entry": rec.get("entry"),
             "stop_loss": rec.get("stop_loss"),
             "pnl_pct": rec.get("pnl_pct"),
@@ -757,7 +765,7 @@ _TRADE_COLS = [
     # carried the field all along; only the column list did not.
     "signal_id",
     "closed_iso", "symbol", "direction", "setup", "regime", "outcome",
-    "pair_admission", "promotion_age_sec",
+    "pair_admission", "promotion_age_sec", "promotion_change_pct",
     "entry", "pnl_pct", "net_pct", "gross_usd", "fee_usd", "net_usd",
 ]
 
