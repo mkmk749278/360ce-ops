@@ -45,14 +45,153 @@
     Empty list + feed <strong>stalled</strong> = the detector is starved — ping CTE.
   </p>
   {% endif %}
+  {# ---- Dynamic retention (engine src/mover_retention.py) ---------------- #}
+  {% if retention is none %}
+  <div class="flash">
+    <strong>Retention: NOT REPORTED.</strong>
+    This engine build predates the dynamic-retention lane, so every promoted
+    pair is held for the flat TTL and nothing scores it. That is not the same
+    as a lane holding no pairs — see the panel that replaces this once the
+    engine reports.
+  </div>
+  {% elif retention.get('error') %}
+  <div class="flash flash-err">
+    <strong>Retention: UNREADABLE</strong> — <code>{{ retention.get('error') }}</code>.
+    A fault on our side or the engine's, not a quiet market: the lane could not
+    report at all, so the verdicts below (if any) are stale.
+  </div>
+  {% else %}
+  {% set rb = retention.get('bounds') or {} %}
+  {# Neither state is coloured. Enforcing is a deliberate owner setting, not a
+     fault, and red over a working state sends the reader to debug something
+     that is doing exactly what it was told — the /invalidations lesson, with
+     the sign flipped. The bold word and the sentence carry the distinction. #}
+  <div class="flash">
+    <strong>Retention:
+      {% if retention.get('enforcing') %}ENFORCING{% else %}MEASURING ONLY{% endif %}</strong>
+    · holding {{ retention.get('held') }} pair(s)
+    {% if retention.get('enforcing') %}
+      — verdicts below are <strong>acted on</strong>: a RELEASE drops the pair
+      early and an EXTEND keeps it past the flat TTL.
+    {% else %}
+      — verdicts below change nothing yet. Every pair is still held for the
+      flat {{ '{:.1f}'.format((rb.get('flat_ttl_sec') or 0) / 3600.0) }}h TTL; this
+      column is what the engine <em>would</em> do.
+    {% endif %}
+  </div>
+  <p class="muted">
+    Retention scores a pair on <strong>opportunity</strong> (is it still
+    producing candidates) and <strong>liveness</strong> (is the move still
+    trading above its own baseline) — and deliberately <strong>never on
+    outcomes</strong>. A dark row resolves up to six hours later, so
+    profitability is not knowable inside a promotion window; and a pair dropped
+    for bad outcomes stops producing candidates, so it can never earn its way
+    back. Verdicts:
+    <code>warmup</code> = too young to judge (under
+    {{ '{:.0f}'.format((rb.get('min_hold_sec') or 0) / 60.0) }} min) ·
+    <code>hold</code> = inside its window, behaving ·
+    <code>extend</code> = still producing past the flat TTL, keep it ·
+    <code>release</code> = give the slot back, for the named reason.
+    Release reasons: <code>no_candidates</code> (scanned
+    ≥{{ rb.get('min_scans_to_judge') }} times, produced nothing) ·
+    <code>move_spent</code> (back at its own baseline for
+    ≥{{ '{:.0f}'.format((rb.get('spent_for_sec') or 0) / 60.0) }} min) ·
+    <code>ttl</code> (hit the
+    {{ '{:.0f}'.format((rb.get('max_hold_sec') or 0) / 3600.0) }}h ceiling — a bound a
+    good score cannot talk its way past). A pair whose activity cannot be
+    measured is <strong>held, never dropped</strong>: absence of a reading is
+    not evidence a move is over.
+  </p>
+  {% set ttfc = retention.get('time_to_first_candidate') or {} %}
+  {% if ttfc.get('n_held') %}
+  <p class="muted">
+    <strong>Time to first candidate</strong> — the number the release floor
+    should be chosen from, and the reason it is not enforced yet. The
+    {{ '{:.0f}'.format((rb.get('min_hold_sec') or 0) / 60.0) }}-minute floor
+    above was <em>chosen without evidence</em>: nothing in the engine had ever
+    recorded how long a promoted pair takes to produce its first candidate, so
+    a floor set below this distribution would release pairs before their own
+    setup could form.
+    {% if ttfc.get('n_produced') %}
+      Of {{ ttfc.get('n_held') }} held pair(s), {{ ttfc.get('n_produced') }}
+      {{ 'has' if ttfc.get('n_produced') == 1 else 'have' }} produced —
+      median {{ '{:.0f}'.format((ttfc.get('median_sec') or 0) / 60.0) }} min,
+      slowest {{ '{:.0f}'.format((ttfc.get('max_sec') or 0) / 60.0) }} min.
+      {% if ttfc.get('first_after_min_hold') %}
+        <strong style="color:#f85149">{{ ttfc.get('first_after_min_hold') }}
+        produced only AFTER the floor would have released
+        {{ 'it' if ttfc.get('first_after_min_hold') == 1 else 'them' }}</strong>
+        — the floor is too low and this lane would be dropping pairs that were
+        about to work.
+      {% endif %}
+    {% else %}
+      None of the {{ ttfc.get('n_held') }} held pair(s) has produced a
+      candidate yet.
+    {% endif %}
+    Measured only on pairs that <em>have</em> produced, so it says when
+    producers produce and never how many produce — the pairs that never
+    produce contribute nothing to it by construction.
+  </p>
+  {% endif %}
+  {% if retention.get('counters') %}
+  <p class="muted">
+    Since the engine last restarted (so a low number is a young process, not a
+    quiet market):
+    {% for k, v in (retention.get('counters') | dictsort) %}
+      <code>{{ k }}</code>&nbsp;{{ v }}{% if not loop.last %} · {% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
+  {% endif %}
+
   {% if promoting %}
   <table class="data-table">
-    <thead><tr><th>Symbol</th><th>Held (min left)</th><th>24h vol (USD)</th><th>24h Δ%</th><th>Why not firing</th></tr></thead>
+    <thead><tr><th>Symbol</th><th>Held (min left)</th><th>Age</th><th>Verdict</th><th>Scans → cand. → enq.</th><th>Burst</th><th>24h vol (USD)</th><th>24h Δ%</th><th>Why not firing</th></tr></thead>
     <tbody>
       {% for p in promoting %}
       <tr>
-        <td><strong>{{ p.symbol }}</strong></td>
+        <td><strong>{{ p.symbol }}</strong>
+          {% if p.get('promotion_source') %}<br><span class="muted" style="font-size:0.85em">{{ p.get('promotion_source')|replace('MOVER_','')|lower }}</span>{% endif %}
+        </td>
         <td>{{ p.minutes_left }}</td>
+        <td>
+          {% if p.get('retention_age_sec') is not none %}
+            {{ '{:.1f}'.format(p.get('retention_age_sec') / 3600.0) }}h
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td>
+          {% if p.get('retention_verdict') == 'release' %}
+            <span style="color:#f85149">release</span>
+            <br><code style="font-size:0.85em">{{ p.get('retention_reason') }}</code>
+          {% elif p.get('retention_verdict') == 'extend' %}
+            <span style="color:#3fb950">extend</span>
+          {% elif p.get('retention_verdict') == 'warmup' %}
+            <span class="muted">warmup</span>
+          {% elif p.get('retention_verdict') %}
+            {{ p.get('retention_verdict') }}
+          {% else %}
+            {# Not scored. NOT the same as 'hold' — this pair has no retention
+               window, which on a reporting engine means the scorer and the
+               promoted set have desynced. Named, not blanked. #}
+            <span class="muted" title="no retention window for this pair">not scored</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if p.get('retention_scans') is not none %}
+            {{ p.get('retention_scans') }} → {{ p.get('retention_candidates') }} → {{ p.get('retention_reached_enqueue') }}
+            {% if p.get('retention_enqueued') or p.get('retention_dark') %}
+              <br><span class="muted" style="font-size:0.85em">{{ p.get('retention_enqueued') or 0 }} queued · {{ p.get('retention_dark') or 0 }} dark</span>
+            {% endif %}
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td>
+          {# An em-dash is 'the engine could not measure this', which is why the
+             pair is HELD rather than released. 0.00 here would read as a dead
+             move and is the opposite of what a missing reading means. #}
+          {% if p.get('retention_burst') is not none %}
+            {{ '{:.2f}'.format(p.get('retention_burst')) }}×
+          {% else %}<span class="muted" title="no activity reading — pair is held, not dropped">—</span>{% endif %}
+        </td>
         <td>{{ '{:,.0f}'.format(p.volume_24h_usd or 0) }}</td>
         <td>{{ '{:.1f}'.format(p.change_24h_pct or 0) }}%</td>
         <td>

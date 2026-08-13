@@ -1035,7 +1035,15 @@ async def dark_signals_live(
 
 _DARK_COLS = [
     "signal_id", "symbol", "side", "setup_class", "dark_gate", "confidence",
-    "regime", "context_key", "pair_admission", "entry", "stop_loss", "tp1",
+    "regime", "context_key", "pair_admission",
+    # WHERE IN THE HOLD the candidate fired, in seconds. `pair_admission` says a
+    # promoted mover produced the row and is silent on whether we caught the
+    # ignition or arrived in hour five of a finished move — the owner's question
+    # (2026-08-13). Engine schema 3; a row written before it reads blank, and
+    # `-1.0` means the pair was not a held mover at all. The two are different
+    # facts and a spreadsheet is exactly where they would get pooled.
+    "promotion_age_sec",
+    "entry", "stop_loss", "tp1",
     # The rest of the ladder. Without it a spreadsheet cannot reprice a leg, and
     # re-deriving one from an R multiple is exactly the invented denominator
     # this repo keeps refusing.

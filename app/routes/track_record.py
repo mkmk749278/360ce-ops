@@ -307,6 +307,20 @@ def reduce_records(records: Any) -> list[dict]:
             "direction": str(rec.get("direction", "")).upper(),
             "setup": str(rec.get("setup_class") or "UNKNOWN"),
             "regime": _regime(rec),
+            # How the pair entered the scan set, and WHERE IN ITS HOLD this
+            # signal fired. Promoted movers are the majority of the delivered
+            # book and nothing on this export said so; `promotion_age_sec` is
+            # the half that separates "we caught the ignition" from "we arrived
+            # in hour five of a finished move".
+            #
+            # Three states, never two. `None` = the engine that closed this row
+            # predates the stamp (2026-08-13) and there is no backfill — the
+            # promotion expires long before the signal closes. `-1.0` = the pair
+            # was not a held mover at all. `0.0` and up = a real reading. A
+            # spreadsheet is exactly where the first two would get averaged into
+            # the third.
+            "pair_admission": str(rec.get("pair_admission") or ""),
+            "promotion_age_sec": rec.get("promotion_age_sec"),
             "entry": rec.get("entry"),
             "stop_loss": rec.get("stop_loss"),
             "pnl_pct": rec.get("pnl_pct"),
@@ -743,6 +757,7 @@ _TRADE_COLS = [
     # carried the field all along; only the column list did not.
     "signal_id",
     "closed_iso", "symbol", "direction", "setup", "regime", "outcome",
+    "pair_admission", "promotion_age_sec",
     "entry", "pnl_pct", "net_pct", "gross_usd", "fee_usd", "net_usd",
 ]
 
