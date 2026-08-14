@@ -152,12 +152,26 @@
       <tr>
         <td><strong>{{ p.symbol }}</strong>
           {% if p.get('promotion_source') %}<br><span class="muted" style="font-size:0.85em">{{ p.get('promotion_source')|replace('MOVER_','')|lower }}</span>{% endif %}
-          {# Top gainer or top loser. The engine promotes on |24h| and stores
-             the ABSOLUTE move, so this is the only place the sign appears.
-             Tri-state: an em-dash means no reading, never "loser". #}
+          {# The sign of the 24h move at promotion. The engine promotes on |24h|
+             and stores the ABSOLUTE move, so this is the only place it appears.
+             Tri-state: an em-dash means no reading, never "loser".
+
+             **"Top gainer"/"top loser" is a claim only MOVER_TOP24H earns.**
+             That path admits on |24h| >= MOVER_PROMOTION_MIN_PCT, so the words
+             describe why the pair is here. MOVER_IGNITION admits on an intraday
+             burst and its 24h figure is incidental — a pair up 4.4% on the day
+             is not a "top gainer" in any sense, and the delivered-book split
+             behind these words was measured on |24h| >= 8% and says nothing
+             about a move that size. Two admission paths, two meanings; pooling
+             them under one label is how a page asserts a category its own
+             evidence does not cover. So the sign still renders for every pair —
+             it is real and it is useful — but the *claim* is dropped where it
+             was never earned. #}
           {% if p.get('promotion_gainer') is not none %}
-            <br><span style="font-size:0.85em;color:{{ '#3fb950' if p.get('promotion_gainer') else '#f85149' }}">
-              {{ 'top gainer' if p.get('promotion_gainer') else 'top loser' }}
+            {% set _top24h = (p.get('promotion_source') or '') == 'MOVER_TOP24H' %}
+            <br><span style="font-size:0.85em;color:{{ '#3fb950' if p.get('promotion_gainer') else '#f85149' }}"
+                  {% if not _top24h %}title="admitted on an intraday burst, not on the 24h leaderboard — the 24h move is shown because it is real, but this pair was not promoted for being a top mover"{% endif %}>
+              {% if _top24h %}{{ 'top gainer' if p.get('promotion_gainer') else 'top loser' }}{% else %}24h at promo{% endif %}
               {% if p.get('promotion_change_pct') is not none %}{{ '{:+.1f}'.format(p.get('promotion_change_pct')) }}%{% endif %}
             </span>
           {% elif p.get('promotion_source') %}
@@ -204,7 +218,20 @@
           {% else %}<span class="muted" title="no activity reading — pair is held, not dropped">—</span>{% endif %}
         </td>
         <td>{{ '{:,.0f}'.format(p.volume_24h_usd or 0) }}</td>
-        <td>{{ '{:.1f}'.format(p.change_24h_pct or 0) }}%</td>
+        {# ``change_24h_pct`` is the engine's ``volatility_24h``, which is
+           ABSOLUTE by design — the rank score normalises by it. Rendering it
+           under "24h Δ%" put an unsigned value beside the signed promotion
+           stamp in the same row (MUBARAKUSDT: "top loser −15.3%" next to
+           "15.3%"). Prefer the signed field; where an older engine does not
+           send it, say the value is a magnitude rather than implying a sign
+           we do not have. #}
+        <td>
+          {% if p.get('change_24h_signed_pct') is not none %}
+            {{ '{:+.1f}'.format(p.get('change_24h_signed_pct')) }}%
+          {% elif p.change_24h_pct %}
+            <span title="this engine reports the 24h move as a magnitude only — the sign is not available, so no direction is implied">{{ '{:.1f}'.format(p.change_24h_pct) }}%&nbsp;<span class="muted">|abs|</span></span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
         <td>
           {% if p.reject_reason == 'fired' %}
             <span style="color:#3fb950">✓ fired ({{ p.reject_path|replace('MOVER_','')|replace('_',' ')|lower }})</span>
@@ -254,7 +281,14 @@
         <td><strong>{{ r.symbol }}</strong></td>
         <td>{{ r.tier }}</td>
         <td>{{ '{:,.0f}'.format(r.volume_24h_usd or 0) }}</td>
-        <td>{{ '{:.1f}'.format(r.change_24h_pct or 0) }}%</td>
+        {# Same absolute-vs-signed split as the promoting table above. #}
+        <td>
+          {% if r.get('change_24h_signed_pct') is not none %}
+            {{ '{:+.1f}'.format(r.get('change_24h_signed_pct')) }}%
+          {% elif r.change_24h_pct %}
+            <span title="this engine reports the 24h move as a magnitude only — the sign is not available, so no direction is implied">{{ '{:.1f}'.format(r.change_24h_pct) }}%&nbsp;<span class="muted">|abs|</span></span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

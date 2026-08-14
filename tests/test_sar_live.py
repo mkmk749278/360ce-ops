@@ -1148,3 +1148,71 @@ def test_the_page_no_longer_claims_it_cannot_touch_capital():
     html = _gov_html(_gov_payload())
     assert "has touched anyone's capital" not in html
     assert "/signals/trail-governor" in html
+
+
+# --------------------------------------------------------------------------- #
+# One page, two mechanisms — the wording must follow the mechanism
+# --------------------------------------------------------------------------- #
+
+def test_the_confirm_row_does_not_call_a_chandelier_stop_a_flip():
+    """A SAR *reverses*; a chandelier stop is simply *touched*.
+
+    The engine names them apart (CLOSED_SAR_FLIP vs CLOSED_TRAIL_STOP) precisely
+    so a page can say which event happened. This row said "Confirmed flip" on
+    both pages, which is one word covering two events on the surface whose whole
+    job is telling mechanisms apart.
+    """
+    import re
+    from pathlib import Path
+
+    tpl = Path("app/templates/sar_live.html").read_text()
+    row = tpl[tpl.find("(@confirm)") - 600: tpl.find("(@confirm)") + 60]
+    assert "mech.has_direction" in row, (
+        "the confirm row must branch on the mechanism's own has_direction, "
+        "not assume a flip"
+    )
+    # And the directionless wording must exist for the chandelier to use.
+    assert "Confirmed close beyond the stop" in tpl
+
+
+def test_the_governor_mechanism_renders_a_label_not_a_raw_key():
+    """`executing.mechanism` is the engine's key (`sar` / `chandelier`).
+
+    Rendering it straight puts "chandelier" in front of a reader while this
+    module has held "ATR-trail (Chandelier)" all along — the strategy_catalog
+    label seam, one field over.
+    """
+    from pathlib import Path
+
+    tpl = Path("app/templates/sar_live.html").read_text()
+    assert "executing.mechanism_label" in tpl
+    # The raw key must not be what gets printed.
+    assert "{{ executing.mechanism or" not in tpl
+
+
+def test_an_unknown_mechanism_keeps_the_engines_word_and_is_badged():
+    """Never rename a mechanism we have no label for — badge it instead."""
+    from app.routes.sar_live import MECHANISM_FALLBACK
+
+    assert "chandelier" in MECHANISM_FALLBACK
+    assert MECHANISM_FALLBACK["chandelier"]["label"] == "ATR-trail (Chandelier)"
+
+    from pathlib import Path
+    tpl = Path("app/templates/sar_live.html").read_text()
+    assert "mechanism_known" in tpl, (
+        "an unlabelled mechanism must be visibly badged rather than silently "
+        "borrowing another mechanism's name"
+    )
+
+
+def test_the_risk_paragraph_carries_no_frozen_anecdote():
+    """A specific signal's numbers, hardcoded, told a SAR story on the ATR page.
+
+    The paragraph's argument is general and stays; the anecdote was frozen at
+    the first two arms ever opened and the table below it shows the live
+    distribution anyway.
+    """
+    from pathlib import Path
+
+    tpl = Path("app/templates/sar_live.html").read_text()
+    assert "MUUUSDT" not in tpl
