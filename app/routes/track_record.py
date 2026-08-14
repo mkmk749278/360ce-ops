@@ -341,6 +341,17 @@ def reduce_records(records: Any) -> list[dict]:
             "closed_at": closed,
             "closed_at_ts": closed.timestamp() if closed else None,
             "closed_iso": closed.isoformat() if closed else "",
+            # The ENTRY time. ``_open_time`` has resolved it from the engine's
+            # ``dispatch_timestamp`` / ``create_timestamp`` since this page was
+            # written, and the page has used it for the concurrency sweep — but
+            # it never reached the export, so every off-page analysis had to
+            # approximate entry from the close and then locate it by price.
+            # That is ambiguous for a scalp that round-trips through its own
+            # entry level, and it blocked two separate analyses (the
+            # gainer/loser split, and checking a day's signals against real
+            # candles). A field the engine writes and no reader surfaces —
+            # #817 with the arrow reversed, costing a reconstruction each time.
+            "entry_iso": opened.isoformat() if opened else "",
         })
     out.sort(key=lambda r: r.get("closed_at_ts") or 0.0, reverse=True)
     return out
@@ -764,7 +775,7 @@ _TRADE_COLS = [
     # tolerance) but it should never have rested on a price match. The row has
     # carried the field all along; only the column list did not.
     "signal_id",
-    "closed_iso", "symbol", "direction", "setup", "regime", "outcome",
+    "closed_iso", "entry_iso", "symbol", "direction", "setup", "regime", "outcome",
     "pair_admission", "promotion_age_sec", "promotion_change_pct",
     "entry", "pnl_pct", "net_pct", "gross_usd", "fee_usd", "net_usd",
 ]
