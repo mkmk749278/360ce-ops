@@ -945,3 +945,43 @@ class TestRoute:
             r = client.get("/track-record?window=all")
             assert r.status_code == 200
             assert f"newest {PER_TRADE_LIMIT}" in r.text
+
+
+def test_the_per_trade_export_carries_the_ENTRY_time_not_only_the_close():
+    """Without it, every off-page analysis has to guess where the trade started.
+
+    ``_open_time`` has resolved the entry from the engine's
+    ``dispatch_timestamp`` / ``create_timestamp`` since this page was written,
+    and the page already uses it for the concurrency sweep — it simply never
+    reached the export.  So reconstructing a trade meant approximating entry
+    from the close and then locating it by PRICE, which is ambiguous for a
+    scalp that round-trips through its own entry level: 7 of 13 rows in a
+    2026-08-14 check could not be located at all.
+
+    A field the engine writes and no reader surfaces (#817, arrow reversed).
+    """
+    from app.routes.track_record import _TRADE_COLS
+
+    assert "entry_iso" in _TRADE_COLS
+    # The close alone is not enough — both must ride, and entry comes first
+    # because a reader scanning the header should see the trade's own order.
+    assert _TRADE_COLS.index("entry_iso") == _TRADE_COLS.index("closed_iso") + 1
+
+
+def test_a_row_with_no_entry_stamp_renders_empty_not_the_close():
+    """Absence must not be silently filled with the wrong moment.
+
+    A record the engine never stamped has no entry time; borrowing the close
+    would make every such trade look instantaneous, which is worse than blank
+    because it is plausible.
+    """
+    from app.routes.track_record import reduce_records
+
+    rows = reduce_records([{
+        "signal_id": "x1", "symbol": "XUSDT", "direction": "LONG",
+        "outcome_label": "SL_HIT", "pnl_pct": -1.0,
+        "terminal_outcome_timestamp": 1_760_000_000.0,
+        # no dispatch_timestamp, no create_timestamp
+    }])
+    assert rows and rows[0]["entry_iso"] == ""
+    assert rows[0]["closed_iso"] != ""
