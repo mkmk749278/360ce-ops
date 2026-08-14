@@ -147,7 +147,8 @@
     <div class="badge">MEASUREMENT ONLY — other mechanism</div>
     <p class="small">
       The governor is on and running
-      <strong>{{ executing.mechanism or 'another mechanism' }}</strong>, not the one on this page.
+      <strong>{{ executing.mechanism_label or 'another mechanism' }}</strong>{% if executing.mechanism and not executing.mechanism_known %}
+      <span class="badge badge-warn" title="this page has no label for that mechanism key — the engine's own word is shown rather than another mechanism's name">UNKNOWN MECHANISM</span>{% endif %}, not the one on this page.
       Every arm below is a measurement; the executed one is on
       <a href="{{ other_path }}">{{ other_label }}</a>.
     </p>
@@ -441,7 +442,13 @@
         <td class="muted small">{% if summary.avg_r_level_risk is not none %}{{ "%+.3f"|format(summary.avg_r_level_risk) }}R{% else %}—{% endif %}</td>
       </tr>
       <tr>
-        <td>Confirmed flip, market out <span class="muted">(@confirm)</span></td>
+        {# A SAR *reverses*; a chandelier stop is simply *touched* — the engine
+           names them apart (CLOSED_SAR_FLIP vs CLOSED_TRAIL_STOP) and so must
+           this row, or one word covers two events and the page stops being able
+           to say what happened.  ``has_direction`` is the mechanism's own
+           answer to "do I have a side of my own", read from the ledger. #}
+        <td>{% if mech.has_direction %}Confirmed flip, market out{% else %}Confirmed close beyond the stop, market out{% endif %}
+          <span class="muted">(@confirm)</span></td>
         <td>{{ summary.n_pnl }}</td>
         <td>{% if summary.win_rate_confirm is not none %}{{ "%.0f"|format(summary.win_rate_confirm * 100) }}%{% else %}—{% endif %}</td>
         <td class="{% if summary.avg_pnl_confirm_pct is not none and summary.avg_pnl_confirm_pct > 0 %}pos{% elif summary.avg_pnl_confirm_pct is not none and summary.avg_pnl_confirm_pct < 0 %}neg{% endif %}">
@@ -511,9 +518,12 @@
   <h2 class="small">Was the {{ mech.short }} stop inside the risk the trade was sized for?</h2>
   <p class="muted small">
     When the {{ mech.short }} is onside at entry it governs and the signal's own SL is <strong>never used</strong>, so an
-    arm can end up carrying more risk than the evaluator sized the trade for. The first two live arms
-    did exactly that on one signal — MUUUSDT SHORT, designed SL 3.00%, 5m SAR at 1.60% and 15m SAR at
-    <strong>3.77%</strong>. R divides by the SL distance at entry, so a wider-stop arm mechanically
+    arm can end up carrying more risk than the evaluator sized the trade for — on either side of the
+    designed stop, and the table below is the live distribution rather than an anecdote. (This
+    paragraph used to name one signal's numbers from the first two arms ever opened. That is a
+    mechanism-specific story frozen at a moment, and it read as a SAR anecdote on the ATR-trail page;
+    the distribution answers the same question and stays true.)
+    R divides by the SL distance at entry, so a wider-stop arm mechanically
     produces bigger losses per stop-out: pooled, <em>"the exit timed badly"</em> and <em>"the exit
     risked more"</em> would arrive as one number wearing the other's name. Split here so they don't.
   </p>

@@ -972,6 +972,16 @@ async def executing_arm(request: Request, mechanism: str, lane: str) -> dict:
         if isinstance(r, dict)
     } - {""}
     out["mechanism"] = sorted(mechs)[0] if len(mechs) == 1 else ""
+    # The governed rows carry the engine's own *key* (``sar`` / ``chandelier``),
+    # not a label — so rendering it straight puts "chandelier" in front of a
+    # reader while this module has held "ATR-trail (Chandelier)" all along.
+    # Same seam as ``strategy_catalog``'s rule keys, and the fix is the same:
+    # look the key up, and where it is one this page has never heard of keep
+    # the engine's own word and BADGE it rather than renaming it to a
+    # mechanism's label we merely guessed at.
+    _known = MECHANISM_FALLBACK.get(out["mechanism"])
+    out["mechanism_label"] = _known["label"] if _known else out["mechanism"]
+    out["mechanism_known"] = _known is not None
     # Only the DELIVERED lane can be executed — a dark row reached nobody and
     # no position exists to govern.  Stated here rather than left to the
     # template, so the dark page cannot badge a row as live by omission.

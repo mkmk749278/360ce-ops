@@ -409,13 +409,55 @@ def test_a_top_gainer_and_a_top_loser_are_labelled_apart():
     """The engine promotes on |24h %| and stores abs(change_pct), so this is
     the only surface carrying the sign. On the delivered book buying a gainer
     and shorting a loser differed by +1.944%/trade — they are not the same
-    kind of pair and must not render as one."""
+    kind of pair and must not render as one.
+
+    Scoped to ``MOVER_TOP24H``: that is the path whose admission rule *is* the
+    24h leaderboard, so "top gainer"/"top loser" describes why the pair is
+    here.  See the ignition test below for why the claim stops there.
+    """
     text = _visible(_page(_payload([
-        _row("UPUSDT", promotion_gainer=True, promotion_change_pct=31.4),
-        _row("DOWNUSDT", promotion_gainer=False, promotion_change_pct=-27.9),
+        _row("UPUSDT", promotion_source="MOVER_TOP24H",
+             promotion_gainer=True, promotion_change_pct=31.4),
+        _row("DOWNUSDT", promotion_source="MOVER_TOP24H",
+             promotion_gainer=False, promotion_change_pct=-27.9),
     ])))
     assert "top gainer" in text and "+31.4%" in text
     assert "top loser" in text and "-27.9%" in text
+
+
+def test_an_ignition_promotion_shows_the_sign_but_claims_no_leaderboard():
+    """A burst-promoted pair is not a "top" anything, whatever its 24h reads.
+
+    ``MOVER_IGNITION`` admits on an intraday burst; the 24h figure is
+    incidental to why the pair is in the set.  Live on 2026-08-14 that put
+    ``top gainer +4.4%`` on IDUSDT and ``top loser -4.7%`` on EPICUSDT — six of
+    twelve held pairs asserting a leaderboard position off a sub-7% move, while
+    the delivered-book split those words came from was measured on |24h| >= 8%
+    and says nothing about a move that size.
+
+    The sign still renders — it is real and useful — but the *claim* does not.
+    """
+    text = _visible(_page(_payload([
+        _row("BURSTUSDT", promotion_source="MOVER_IGNITION",
+             promotion_gainer=True, promotion_change_pct=4.4),
+    ])))
+    assert "+4.4%" in text, "the signed move is real and must still render"
+    assert "top gainer" not in text
+    assert "top loser" not in text
+
+
+def test_the_two_admission_paths_do_not_borrow_each_others_wording():
+    """Both paths on one page: only the leaderboard one makes the claim."""
+    text = _visible(_page(_payload([
+        _row("TOPUSDT", promotion_source="MOVER_TOP24H",
+             promotion_gainer=True, promotion_change_pct=18.9),
+        _row("BURSTUSDT", promotion_source="MOVER_IGNITION",
+             promotion_gainer=True, promotion_change_pct=4.4),
+    ])))
+    assert text.count("top gainer") == 1, (
+        "exactly one row earned the leaderboard wording"
+    )
+    assert "+18.9%" in text and "+4.4%" in text
 
 
 def test_no_reading_reads_unknown_and_never_loser():
@@ -440,3 +482,56 @@ def test_an_engine_without_the_stamp_does_not_invent_a_kind():
     text = _visible(_page(_payload([row])))
     assert "top gainer" not in text and "top loser" not in text
     assert "kind unknown" in text
+
+
+# --------------------------------------------------------------------------- #
+# The 24h column: an absolute value must not render under a signed heading
+# --------------------------------------------------------------------------- #
+
+def test_the_24h_column_renders_the_signed_move_when_the_engine_sends_it():
+    """`change_24h_pct` IS `volatility_24h`, i.e. abs() — right for ranking,
+    wrong under a column headed "24h Δ%".
+
+    Live on 2026-08-14 the MUBARAKUSDT row read ``top loser -15.3%`` beside
+    ``15.3%``: the signed promotion stamp next to the unsigned current move,
+    both presented as the 24h change.
+
+    The row here carries NO promotion label, so the only thing that can put a
+    sign on the page is the column itself — otherwise this assertion is
+    satisfied by the label and passes against the very template it exists to
+    reject (which is exactly what its first cut did).
+    """
+    text = _visible(_page(_payload([
+        _row("DOWNUSDT", promotion_source=None, promotion_gainer=None,
+             promotion_change_pct=None,
+             change_24h_pct=15.3, change_24h_signed_pct=-15.3),
+    ])))
+    assert "-15.3%" in text, "the column must carry the sign"
+    assert "15.3%" in text and text.count("15.3%") == 1, (
+        "exactly one 24h reading, and it is the signed one"
+    )
+
+
+def test_an_engine_without_the_signed_field_says_the_value_is_a_magnitude():
+    """Three states, never two: absent is not 'no move', and it is not a sign.
+
+    An older engine sends only the absolute figure. Rendering it plain implies a
+    direction we do not have, so the page marks it |abs|.
+
+    Asserted on the ``|abs|`` marker rather than the substring "abs", which the
+    word "absolute" elsewhere on the page already satisfies — a substring
+    assertion that passes against the old template is not testing anything.
+    """
+    row = _row("OLDUSDT", change_24h_pct=12.0)
+    row.pop("change_24h_signed_pct", None)
+    html = _page(_payload([row]))
+    assert "|abs|" in html, "an unsigned reading must be marked as a magnitude"
+    assert "12.0%" in _visible(html)
+
+
+def test_zero_and_missing_are_distinguishable_in_the_24h_column():
+    """A pair that did not move and a pair with no reading are different."""
+    row = _row("FLATUSDT", change_24h_pct=0.0)
+    row.pop("change_24h_signed_pct", None)
+    text = _visible(_page(_payload([row])))
+    assert "—" in text, "no reading renders an em-dash, never 0.0%"
