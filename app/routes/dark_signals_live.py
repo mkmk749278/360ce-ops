@@ -185,7 +185,52 @@ def reduce_rows(payload: Any) -> list[dict]:
     # how 15 rows disappear into 2,418. They are read on /signals/price-action.
     out = [r for r in out if str(r.get("dark_gate") or "") != LANE_DARK_GATE]
     out.sort(key=lambda r: _f(r.get("emitted_at")) or 0.0, reverse=True)
+    flatten_entry_features(out)
     return out
+
+
+#: Prefix for the entry-time feature block the engine copies onto each dark row
+#: (engine schema 5). Prefixed rather than merged: a feature name and a dark-row
+#: column are two vocabularies maintained by two modules, and a collision would
+#: be silent in exactly the way this lane keeps paying for.
+EF_PREFIX = "ef_"
+
+#: Where the block is absent, and why. Its own column because "the lane is off",
+#: "this candidate was never stamped" and "the ring rotated it away" are three
+#: states with three different next moves — a blank needs a cause before it gets
+#: a caption.
+EF_ABSENT_COL = "ef_absent"
+
+
+def flatten_entry_features(rows: list[dict]) -> list[str]:
+    """Copy each row's nested feature block up under ``ef_``. Returns the column
+    names actually seen, sorted.
+
+    **Iterates the engine's keys, never a list kept here.** Ops attaches no
+    meaning to these names — it renders and exports whatever the engine wrote —
+    so a feature added engine-side appears the day it ships instead of being
+    silently dropped by a reader that only knows yesterday's vocabulary. That is
+    `MEASUREMENT_SUFFIXES` and the data-intake refusal copy wearing the same hat
+    for the third time: the fix for a drifting mirror is not a second mirror.
+
+    Why this exists at all: the outcome-joined entry-feature book is ~161 rows,
+    because only a DELIVERED signal has a closed-signal record to join. This
+    ledger holds ~1,400 rows that carry their own outcomes, and until the engine
+    copied the block onto them every candidate entry-quality rule was being
+    ranked on a tenth of the evidence — and on the one population a promotion
+    argument may not read.
+    """
+    seen: set[str] = set()
+    for row in rows:
+        block = row.get("entry_features")
+        row[EF_ABSENT_COL] = row.get("entry_features_absent")
+        if not isinstance(block, dict):
+            continue
+        for key, value in block.items():
+            col = f"{EF_PREFIX}{key}"
+            row[col] = value
+            seen.add(col)
+    return sorted(seen)
 
 
 def reduce_lane_rows(payload: Any) -> list[dict]:
@@ -1122,5 +1167,14 @@ async def dark_signals_export(
     # strategy the numbers beside each row were priced under.
     target = _resolve_target_pct(target_pct)
     attach_strategy(rows, strategy, target, _resolve_fee_pct(fee_pct))
-    data = [[r.get(c) for c in _DARK_COLS] for r in rows]
-    return csv_response("dark_signals_live", _DARK_COLS, data)
+    # The entry-time features, appended as their own columns. Derived from what
+    # the rows actually carry rather than from a list here, so a feature the
+    # engine adds is exported the day it ships — and a window written before the
+    # engine copied the block simply contributes no columns, which is visibly
+    # different from contributing empty ones.
+    ef_cols = sorted(
+        {c for r in rows for c in r if c.startswith(EF_PREFIX) and c != EF_ABSENT_COL}
+    )
+    cols = [*_DARK_COLS, EF_ABSENT_COL, *ef_cols]
+    data = [[r.get(c) for c in cols] for r in rows]
+    return csv_response("dark_signals_live", cols, data)

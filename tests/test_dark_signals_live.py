@@ -1022,3 +1022,66 @@ def test_a_row_done_on_both_arms_is_not_graded():
     row = _held_row(last_resolved_at=1.0)
     mark_freshness([row], now=1_700_000_060.0)
     assert "freshness" not in row
+
+
+# --------------------------------------------------------------------------- #
+# Entry features on the dark row (engine schema 5)
+# --------------------------------------------------------------------------- #
+
+
+class TestEntryFeaturesReachThePage:
+    """The outcome-joined entry-feature book is ~161 rows, because only a
+    DELIVERED signal has a closed-signal record to join. This ledger holds
+    ~1,400 rows carrying their own outcomes — so until the engine copied the
+    feature block onto them, every candidate entry-quality rule was ranked on a
+    tenth of the evidence, and on the one population a promotion argument may
+    not read.
+    """
+
+    def _row_with(self, block, absent=None):
+        row = _row()
+        row["entry_features"] = block
+        row["entry_features_absent"] = absent
+        return row
+
+    def test_the_block_is_flattened_under_its_own_prefix(self):
+        rows = reduce_rows(
+            _payload([self._row_with({"cvd_slope_aligned": 0.4, "level_dist_r": 1.2})])
+        )
+        assert rows[0]["ef_cvd_slope_aligned"] == 0.4
+        assert rows[0]["ef_level_dist_r"] == 1.2
+
+    def test_a_feature_ops_has_never_heard_of_still_arrives(self):
+        """Iterate the ENGINE's keys, never a list kept here.
+
+        A reader that only knows yesterday's vocabulary drops tomorrow's feature
+        silently — `MEASUREMENT_SUFFIXES` wearing the same hat for a third time.
+        Fails against any implementation that enumerates known feature names.
+        """
+        rows = reduce_rows(
+            _payload([self._row_with({"a_feature_invented_after_this_test": 7.0})])
+        )
+        assert rows[0]["ef_a_feature_invented_after_this_test"] == 7.0
+
+    def test_an_absent_block_carries_its_reason_rather_than_a_blank(self):
+        rows = reduce_rows(
+            _payload([self._row_with(None, absent="not_in_feature_ledger")])
+        )
+        assert rows[0]["ef_absent"] == "not_in_feature_ledger"
+        assert not any(
+            k.startswith("ef_") and k != "ef_absent" for k in rows[0]
+        ), "an absent block must contribute no feature columns, not empty ones"
+
+    def test_a_row_written_before_the_engine_copied_the_block_is_not_a_crash(self):
+        rows = reduce_rows(_payload([_row()]))
+        assert rows[0]["ef_absent"] is None
+
+    def test_the_prefix_cannot_collide_with_a_dark_row_column(self):
+        """Two vocabularies, two modules. The prefix is what keeps a feature
+        named `confidence` from overwriting the scored confidence beside it."""
+        from app.routes.dark_signals_live import EF_PREFIX, _DARK_COLS
+
+        rows = reduce_rows(_payload([self._row_with({"confidence": 1.0})]))
+        assert rows[0]["confidence"] == 70.0, "the dark row's own column survived"
+        assert rows[0]["ef_confidence"] == 1.0
+        assert not any(c.startswith(EF_PREFIX) for c in _DARK_COLS)
