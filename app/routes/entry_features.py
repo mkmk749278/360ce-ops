@@ -673,7 +673,25 @@ async def entry_features_export(request: Request, setup: str = Query("")):
         joined = [r for r in joined if str(r.get("setup_class") or "") == setup]
     cols = [
         "signal_id", "symbol", "side", "setup_class", "entry_trigger",
-        "tf_name", "entry_ref_name", "confidence", "entry_regime",
+        "tf_name", "entry_ref_name",
+        # THREE confidence columns, not one, and the distinction is the whole
+        # reason this export was misleading until 2026-08-15.
+        #
+        # `confidence` is the schema-<=2 spelling. The engine stamped it inside
+        # the EVALUATOR, and the scanner writes the composite score four times
+        # afterwards — so it held the evaluator's partial running total and read
+        # **8.0 on 161 of 161 rows**: a constant, exported under the name of the
+        # number every gate scores on. Every confidence split anyone drew from
+        # this file was a split on that constant. It is kept in the export
+        # because pre-schema-3 rows still carry it and dropping the column would
+        # make those rows look like they had no confidence rather than a
+        # differently-defined one — but nothing should rank on it.
+        #
+        # `confidence_final` is the score the gate chain actually read, annotated
+        # by the scanner where it becomes true. Absent on rows written before the
+        # fix: their own bucket, because a missing stamp is not a pass.
+        "confidence", "confidence_at_eval", "confidence_final",
+        "entry_regime",
         "sl_dist_pct", "profile_would_reject",
         # What the live gate did to this row. Exported because the promotion
         # question — would this rule have helped — is answered by joining
