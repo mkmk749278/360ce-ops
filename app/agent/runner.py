@@ -18,13 +18,13 @@ import os
 from app.config import load_settings
 from app.data_sources.engine_api import EngineApiClient
 from app.agent.detectors import (
-    PROBE_FAILED,
     ApiHealthDetector,
     BackgroundTaskDetector,
     CoreContainerDetector,
     DetectorResult,
     EngineStatusDetector,
     NakedPositionDetector,
+    RedisProbe,
     RedisStalenessDetector,
     SignalSilenceDetector,
     SigningHealthDetector,
@@ -41,6 +41,80 @@ log = logging.getLogger("agent.runner")
 # Docker helpers (direct subprocess — no engine exec, just host daemon)
 # ---------------------------------------------------------------------------
 
+#: How long a single docker probe may take before we give up on it.
+DOCKER_PROBE_TIMEOUT_S = float(os.getenv("AGENT_DOCKER_PROBE_TIMEOUT_S", "10"))
+
+#: How many times the redis idletime probe is tried within ONE cycle before
+#: it is declared failed.  See ``_redis_idletime`` for why this is not a
+#: relaxation of the alert.
+REDIS_PROBE_ATTEMPTS = max(1, int(os.getenv("AGENT_REDIS_PROBE_ATTEMPTS", "2")))
+
+
+async def _kill_probe(proc: asyncio.subprocess.Process | None) -> None:
+    """Kill a probe subprocess that outlived its deadline.
+
+    ``asyncio.wait_for`` cancels the *coroutine*, not the process: a timed-out
+    ``docker exec`` keeps running, and the ``redis-cli`` it started inside the
+    container with it.  So the probe that timed out *because the host was
+    busy* left another process behind to make the host busier — once a minute,
+    forever, on a box the engine's own API tunables describe as 1-vCPU
+    (``src/api/server.py``: "Tuned for a 1-vCPU VPS").  A monitoring agent
+    that degrades the thing it monitors is worse than no agent.
+
+    Output on these probes is a few bytes, so killing and reaping cannot
+    deadlock on a full pipe.
+    """
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        proc.kill()
+    except (ProcessLookupError, OSError):
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=5.0)
+    except Exception:
+        # Reaping failed too. Say so — a probe we cannot even kill is the
+        # shape of a wedged docker daemon, and that is worth a log line
+        # rather than a silent leak.
+        log.warning("could not reap timed-out docker probe pid=%s", proc.pid)
+
+
+async def _exec_capture(
+    argv: tuple[str, ...],
+    timeout: float = DOCKER_PROBE_TIMEOUT_S,
+) -> tuple[int | None, str, str, str]:
+    """Run ``argv``, returning ``(returncode, stdout, stderr, cause)``.
+
+    ``cause`` is ``""`` when the process ran to completion (whatever its exit
+    code), else ``"timeout"`` or ``"exception"``.  A completed run with a
+    non-zero code is a *result*, not a failure of the probe — the caller
+    decides what it means.
+    """
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        return (
+            proc.returncode,
+            stdout.decode(errors="replace"),
+            stderr.decode(errors="replace"),
+            "",
+        )
+    # asyncio.TimeoutError is TimeoutError on 3.11+, an OSError subclass —
+    # it must be caught ahead of the generic Exception below or a timeout
+    # reports as an exception and the child is still never killed.
+    except (asyncio.TimeoutError, TimeoutError):
+        await _kill_probe(proc)
+        return None, "", f"no response within {timeout:.0f}s", "timeout"
+    except Exception as exc:
+        await _kill_probe(proc)
+        return None, "", f"{type(exc).__name__}: {exc}", "exception"
+
+
 async def _docker_ps_statuses(container_prefix: str = "360scalp-v2") -> dict[str, str]:
     """Return {container_name: status_string} for containers matching prefix.
 
@@ -50,57 +124,80 @@ async def _docker_ps_statuses(container_prefix: str = "360scalp-v2") -> dict[str
     ``Created`` for two and a half hours and no detector so much as looked
     at them.
     """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "ps", "-a",
-            "--filter", f"name={container_prefix}",
-            "--format", "{{.Names}}\t{{.Status}}",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
-        result: dict[str, str] = {}
-        for line in stdout.decode().splitlines():
-            parts = line.strip().split("\t", 1)
-            if len(parts) == 2:
-                result[parts[0]] = parts[1]
-        return result
-    except Exception as exc:
-        log.warning("docker ps failed: %s", exc)
+    rc, stdout, stderr, cause = await _exec_capture((
+        "docker", "ps", "-a",
+        "--filter", f"name={container_prefix}",
+        "--format", "{{.Names}}\t{{.Status}}",
+    ))
+    if cause or rc != 0:
+        log.warning("docker ps failed: cause=%s rc=%s %s", cause or "-", rc, stderr.strip()[:200])
+        # Empty is how CoreContainerDetector recognises "we are blind", which
+        # it reports as docker_ps_unavailable rather than as every container
+        # being missing. Preserved deliberately.
         return {}
+    result: dict[str, str] = {}
+    for line in stdout.splitlines():
+        parts = line.strip().split("\t", 1)
+        if len(parts) == 2:
+            result[parts[0]] = parts[1]
+    return result
 
 
-async def _redis_idletime(container: str = "360scalp-v2-redis", key: str = "snapshot:tickers") -> str:
-    """Return OBJECT IDLETIME for key as a raw string (e.g. '12').
+async def _redis_idletime(
+    container: str = "360scalp-v2-redis",
+    key: str = "snapshot:tickers",
+    attempts: int = REDIS_PROBE_ATTEMPTS,
+) -> RedisProbe:
+    """Read OBJECT IDLETIME for ``key``, reporting HOW it failed if it did.
 
-    Returns the sentinel ``PROBE_FAILED`` when the probe itself could not
-    run — a stopped redis container, a docker error, a timeout.
+    Before 2026-07-27 every failure returned ``""`` and the detector read an
+    empty string as "nothing to report".  So the single condition this probe
+    exists to catch — redis not answering — was the one condition guaranteed
+    to read as all-clear.  Not-measured and measured-fine are different
+    states and must not share a return value.
 
-    Before 2026-07-27 every one of those returned ``""``, and the detector
-    read an empty string as "nothing to report" and passed.  So the single
-    condition this probe exists to catch — redis not answering — was the one
-    condition guaranteed to read as all-clear.  Not-measured and
-    measured-fine are different states and must not share a return value.
+    Since 2026-08-16 they do not share a return *shape* either: the cause,
+    the exit code and the vendor's own stderr ride out on ``RedisProbe`` and
+    into the alert, instead of being logged into a container the owner cannot
+    read from a phone.
+
+    **The retry is not a softened alert.**  It happens inside one cycle, so a
+    container that is genuinely down still pages on the cycle it went down —
+    ``docker exec`` against a stopped container fails immediately and fails
+    the same way twice.  What the retry removes is the single 10s deadline
+    miss on a busy host, which pages HIGH and clears on the next cycle: two
+    messages, no fault, on the channel that also has to carry a naked
+    position.  An alert that cries wolf is not a safe default in either
+    direction.
     """
-    try:
-        proc = await asyncio.create_subprocess_exec(
+    last: RedisProbe | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        rc, stdout, stderr, cause = await _exec_capture((
             "docker", "exec", container,
             "redis-cli", "OBJECT", "IDLETIME", key,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
-        out = stdout.decode().strip()
-        if proc.returncode != 0 or not out:
-            log.warning(
-                "redis idletime probe failed rc=%s stderr=%s",
-                proc.returncode, stderr.decode().strip()[:200],
+        ))
+        out = stdout.strip()
+        detail = stderr.strip()[:200]
+        if cause:
+            last = RedisProbe(ok=False, cause=cause, detail=detail, attempts=attempt)
+        elif rc != 0:
+            last = RedisProbe(
+                ok=False, cause="exec_error", returncode=rc,
+                detail=detail or "no stderr", attempts=attempt,
             )
-            return PROBE_FAILED
-        return out
-    except Exception as exc:
-        log.warning("redis idletime check failed: %s", exc)
-        return PROBE_FAILED
+        elif not out:
+            last = RedisProbe(
+                ok=False, cause="no_output", returncode=rc,
+                detail="exited 0 and printed nothing", attempts=attempt,
+            )
+        else:
+            return RedisProbe(ok=True, output=out, returncode=rc, attempts=attempt)
+        log.warning(
+            "redis idletime probe failed (attempt %s/%s): %s",
+            attempt, attempts, last.summary(),
+        )
+    assert last is not None  # the loop runs at least once
+    return last
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +261,9 @@ async def run() -> None:
         diag_positions: list[dict] = []
         tasks: list[str] = []
         container_statuses: dict[str, str] = {}
-        redis_idletime: str = PROBE_FAILED
+        redis_probe = RedisProbe(
+            ok=False, cause="not_run", detail="the cycle did not reach the probe",
+        )
         auto_mode: dict = {}
 
         try:
@@ -206,10 +305,15 @@ async def run() -> None:
             cycle_ok = False
 
         try:
-            redis_idletime = await _redis_idletime()
+            redis_probe = await _redis_idletime()
         except Exception as exc:
-            log.warning("redis idletime check failed: %s", exc)
-            redis_idletime = PROBE_FAILED
+            # _redis_idletime does not raise — it reports. This stays as the
+            # last line of defence so an unexpected raise cannot silently
+            # leave the previous cycle's probe in scope.
+            log.warning("redis idletime check raised: %s", exc)
+            redis_probe = RedisProbe(
+                ok=False, cause="exception", detail=f"{type(exc).__name__}: {exc}",
+            )
             cycle_ok = False
 
         # ---- Run detectors -------------------------------------------
@@ -223,7 +327,7 @@ async def run() -> None:
             (d4, {"pulse": pulse}),
             (d6, {"health": health}),
             (d7, {"pulse": pulse, "mode": auto_mode.get("mode") or pulse.get("mode", "off")}),
-            (d8, {"idletime_output": redis_idletime}),
+            (d8, {"probe": redis_probe}),
         ]:
             try:
                 results = detector.check(**args)

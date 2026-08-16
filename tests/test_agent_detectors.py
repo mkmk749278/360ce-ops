@@ -7,12 +7,12 @@ from __future__ import annotations
 import pytest
 
 from app.agent.detectors import (
-    PROBE_FAILED,
     ApiHealthDetector,
     BackgroundTaskDetector,
     CoreContainerDetector,
     EngineStatusDetector,
     NakedPositionDetector,
+    RedisProbe,
     RedisStalenessDetector,
     SignalSilenceDetector,
     SigningHealthDetector,
@@ -352,19 +352,23 @@ class TestSignalSilenceDetector:
 # D8 — RedisStalenessDetector
 # ---------------------------------------------------------------------------
 
+def _ok(output: str) -> RedisProbe:
+    return RedisProbe(ok=True, output=output, returncode=0)
+
+
 class TestRedisStalenessDetector:
     def test_fresh(self):
         d = RedisStalenessDetector(stale_sec=45)
-        assert d.check("10") == []
+        assert d.check(_ok("10")) == []
 
     def test_stale(self):
         d = RedisStalenessDetector(stale_sec=45)
-        results = d.check("120")
+        results = d.check(_ok("120"))
         assert len(results) == 1
         assert results[0].severity == "WARN"
         assert results[0].fingerprint == "redis_stale"
 
-    def test_empty_output_pages_it_does_not_pass(self):
+    def test_probe_failure_pages_it_does_not_pass(self):
         """This assertion used to read ``== []`` and that was the 2026-07-27 bug.
 
         ``docker exec`` against a stopped redis container produces no stdout,
@@ -372,25 +376,73 @@ class TestRedisStalenessDetector:
         condition it exists to catch was the one guaranteed to stay silent.
         """
         d = RedisStalenessDetector()
-        results = d.check("")
+        results = d.check(RedisProbe(ok=False, cause="no_output", returncode=0))
         assert len(results) == 1
         assert results[0].severity == "HIGH"
         assert results[0].fingerprint == "redis_unreachable"
 
-    def test_probe_failed_sentinel_pages(self):
-        d = RedisStalenessDetector()
-        results = d.check(PROBE_FAILED)
-        assert len(results) == 1
-        assert results[0].severity == "HIGH"
-        assert results[0].fingerprint == "redis_unreachable"
+    @pytest.mark.parametrize(
+        "probe, must_contain",
+        [
+            (
+                RedisProbe(ok=False, cause="timeout",
+                           detail="no response within 10s", attempts=2),
+                ["timeout", "no response within 10s", "2 attempts"],
+            ),
+            (
+                RedisProbe(ok=False, cause="exec_error", returncode=1,
+                           detail="Error response from daemon: container is not running"),
+                ["exec_error", "rc=1", "not running", "1 attempt"],
+            ),
+            (
+                RedisProbe(ok=False, cause="exception",
+                           detail="FileNotFoundError: docker"),
+                ["exception", "FileNotFoundError"],
+            ),
+            (
+                RedisProbe(ok=False, cause="not_run", detail="the cycle did not reach the probe"),
+                ["not_run"],
+            ),
+        ],
+    )
+    def test_the_alert_carries_the_probes_own_words(self, probe, must_contain):
+        """A counter is not a cause on a path that talks to another process.
 
-    def test_non_numeric(self):
-        d = RedisStalenessDetector()
-        assert d.check("(error) ERR") == []
+        The pre-2026-08-16 description was one fixed sentence naming two
+        causes and distinguishing neither, while ``rc`` and stderr went to a
+        container log the owner cannot read from a phone. Every one of these
+        cases is that same HIGH page with a different next move.
+        """
+        results = RedisStalenessDetector().check(probe)
+        assert len(results) == 1
+        assert results[0].fingerprint == "redis_unreachable"
+        for token in must_contain:
+            assert token in results[0].description, token
+        assert results[0].raw["cause"] == probe.cause
+
+    def test_non_numeric_is_its_own_state_not_all_clear(self):
+        """Ran, answered, unreadable — the branch that used to ``return []``.
+
+        Directly below a docstring saying not-measured and measured-fine must
+        not share a return value, a ``(error) …`` reply read as all-clear. It
+        is neither ``redis_unreachable`` (redis replied) nor ``redis_stale``
+        (there is no idle time to compare), so it gets its own fingerprint.
+        """
+        results = RedisStalenessDetector().check(_ok("(error) ERR wrong number of arguments"))
+        assert len(results) == 1
+        assert results[0].fingerprint == "redis_probe_unreadable"
+        assert results[0].severity == "WARN"
+        assert "wrong number of arguments" in results[0].description
+
+    def test_implausible_idletime_is_not_silently_healthy(self):
+        for value in ("-1", "999999"):
+            results = RedisStalenessDetector().check(_ok(value))
+            assert len(results) == 1, value
+            assert results[0].fingerprint == "redis_probe_unreadable", value
 
     def test_boundary_exact(self):
         d = RedisStalenessDetector(stale_sec=45)
         # Exactly at threshold — should NOT trigger (≤ stale_sec)
-        assert d.check("45") == []
+        assert d.check(_ok("45")) == []
         # One above — should trigger
-        assert len(d.check("46")) == 1
+        assert len(d.check(_ok("46"))) == 1

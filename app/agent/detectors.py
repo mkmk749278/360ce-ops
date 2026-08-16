@@ -10,20 +10,59 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 
-#: Sentinel a probe returns when it could not run at all, as distinct from
-#: running and finding nothing wrong.  A detector that treats "no data" as
-#: "no problem" is silent in exactly the outage it exists to catch — which is
-#: what happened on 2026-07-27, when a stopped redis container made the
-#: idletime probe return "" and RedisStalenessDetector read that as healthy.
-PROBE_FAILED = "PROBE_FAILED"
-
-
 @dataclass
 class DetectorResult:
     severity: Literal["HIGH", "WARN"]
     fingerprint: str
     description: str
     raw: dict = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RedisProbe:
+    """What the ``docker exec … redis-cli OBJECT IDLETIME`` probe actually did.
+
+    This replaced a bare ``PROBE_FAILED`` sentinel string on 2026-08-16.  The
+    sentinel could say *that* the probe failed and never *why*, so the HIGH
+    page it raised read "it is stopped, or docker exec failed" — two causes
+    named, neither distinguished, and four different next moves behind them:
+    a stopped container, a docker daemon error, a probe that blew its deadline
+    because the host was busy, and redis answering something we cannot parse.
+    The rejection was already in hand — ``_redis_idletime`` logged ``rc=`` and
+    the stderr tail — and then threw it away into a container log the owner
+    cannot read from a phone.
+
+    Same defect the trail governor's ``place_failed`` counter carried
+    (2026-08-10, CLAUDE.md): **a counter is not a cause on a path that talks
+    to another process.**  Keep the probe's own words and put them where the
+    page is.
+
+    ``ok=True`` means the probe ran and produced output; it says nothing about
+    whether that output is *good*.  Grading it is the detector's job.
+    """
+
+    ok: bool
+    output: str = ""
+    #: "" when ok. Otherwise "timeout" | "exec_error" | "no_output" |
+    #: "exception" | "not_run" — each has a different next move.
+    cause: str = ""
+    returncode: int | None = None
+    #: The probe's own words: stderr tail, or the exception text.
+    detail: str = ""
+    #: How many times the probe was tried in this cycle before giving up.
+    #: One timeout is not evidence redis is gone; two in a row is worth more.
+    attempts: int = 1
+
+    def summary(self) -> str:
+        """One line naming the cause — safe to put in an alert description."""
+        if self.ok:
+            return f"ok: {self.output!r}"
+        bits = [self.cause or "unknown"]
+        if self.returncode is not None:
+            bits.append(f"rc={self.returncode}")
+        if self.detail:
+            bits.append(self.detail)
+        return " · ".join(bits)
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +410,45 @@ class SignalSilenceDetector:
 # D8 — RedisStalenessDetector  (WARN)
 # ---------------------------------------------------------------------------
 
+#: One sentence per probe failure cause, naming the next move rather than
+#: restating the failure.  Keyed on ``RedisProbe.cause``; a cause this map has
+#: never heard of falls back to a neutral phrase and the raw ``summary()``
+#: still carries the probe's own words — the same rule the data-intake card
+#: follows, where copy looks a reason up instead of enumerating its own keys.
+_UNREACHABLE_CAUSE_COPY: dict[str, str] = {
+    "timeout": (
+        "docker exec did not return before the probe's deadline. That is as "
+        "often the host being too busy to start a process as it is redis "
+        "being gone"
+    ),
+    "exec_error": "docker exec exited non-zero, which is what a stopped container looks like",
+    "no_output": "docker exec exited cleanly and printed nothing",
+    "exception": "the probe itself raised",
+    "not_run": "the probe never ran this cycle",
+}
+
+
+def _unreadable(output: str, why: str) -> DetectorResult:
+    """Redis answered and we cannot grade the answer.
+
+    Deliberately WARN and a fingerprint of its own: this is **not**
+    ``redis_unreachable`` (redis replied) and **not** ``redis_stale`` (we have
+    no idle time to compare), and folding it into either would report a fault
+    that is not happening.
+    """
+    return DetectorResult(
+        severity="WARN",
+        fingerprint="redis_probe_unreadable",
+        description=(
+            "redis-cli answered the snapshot:tickers idletime probe with "
+            f"something that is not a usable idle time ({why}): {output[:120]!r}. "
+            "Redis is reachable — this is the probe or the key, not the "
+            "container. Snapshot freshness is UNGRADED until it clears."
+        ),
+        raw={"output": output[:200], "why": why},
+    )
+
+
 class RedisStalenessDetector:
     """Engine Redis snapshot:tickers key must be recently written.
 
@@ -383,30 +461,54 @@ class RedisStalenessDetector:
     def __init__(self, stale_sec: int = 45) -> None:
         self._stale = stale_sec
 
-    def check(self, idletime_output: str) -> list[DetectorResult]:
-        line = idletime_output.strip()
-        if line == PROBE_FAILED or not line:
-            # The probe could not run — redis container stopped, docker error,
-            # timeout. Pre-2026-07-27 this returned [] and a dead redis was
-            # indistinguishable from a healthy one. An unmeasurable dependency
-            # is a HIGH, not a shrug.
+    #: An idletime this large is not a stale snapshot writer, it is a reading
+    #: we do not believe — snapshot:tickers is rewritten every 15s, so a full
+    #: day of idleness means we are looking at the wrong key or the wrong box.
+    _IMPLAUSIBLE_SEC = 86400
+
+    def check(self, probe: RedisProbe) -> list[DetectorResult]:
+        if not probe.ok:
+            # The probe could not run. Pre-2026-07-27 this returned [] and a
+            # dead redis was indistinguishable from a healthy one. An
+            # unmeasurable dependency is a HIGH, not a shrug — and since
+            # 2026-08-16 it names WHICH way it failed, because "stopped" and
+            # "docker exec timed out on a busy host" are the same alert with
+            # different next moves.
             return [DetectorResult(
                 severity="HIGH",
                 fingerprint="redis_unreachable",
                 description=(
                     "Could not read snapshot:tickers idletime from the engine "
-                    "redis container — it is stopped, or docker exec failed. "
-                    "With redis down the engine cannot publish and the API "
-                    "serves frozen state."
+                    f"redis container — {_UNREACHABLE_CAUSE_COPY.get(probe.cause, 'the probe failed')}. "
+                    f"Probe said: {probe.summary()}. "
+                    f"Failed on {probe.attempts} attempt"
+                    f"{'' if probe.attempts == 1 else 's'} this cycle. "
+                    "Check for a container alert beside this one: if redis is "
+                    "genuinely down the engine cannot publish and the API "
+                    "serves frozen state; if it is not, this is the host, not "
+                    "redis."
                 ),
-                raw={"idletime_output": idletime_output},
+                raw={
+                    "cause": probe.cause,
+                    "returncode": probe.returncode,
+                    "detail": probe.detail,
+                    "attempts": probe.attempts,
+                },
             )]
+
+        line = probe.output.strip()
         try:
             idle_sec = int(line)
         except ValueError:
-            return []
-        if idle_sec < 0 or idle_sec > 86400:
-            return []
+            # Ran, answered, and the answer is not a number. This branch used
+            # to `return []` — all clear — one branch below a docstring saying
+            # not-measured and measured-fine must not share a return value.
+            # It is its own state: redis is answering (so this is not
+            # `redis_unreachable`) and we cannot grade it (so it is not
+            # health either).
+            return [_unreadable(line, "not an integer")]
+        if idle_sec < 0 or idle_sec > self._IMPLAUSIBLE_SEC:
+            return [_unreadable(line, f"outside 0..{self._IMPLAUSIBLE_SEC}s")]
         if idle_sec <= self._stale:
             return []
         return [DetectorResult(
