@@ -334,3 +334,24 @@ def test_ops_replay_agrees_with_the_engines_own_decide(
         f"ops replay disagrees with the engine: ops={sorted(ops_unmet)} "
         f"engine={sorted(engine_unmet)}"
     )
+
+
+def test_a_named_cause_for_a_missing_census_is_carried_through():
+    """"Not reported" and "not reported because the engine is down" send the
+    reader to different places.
+
+    In isolated mode the engine API replaces its own zeros with an explicit
+    `unavailable` rather than serving them under `source: "engine"` — otherwise
+    ops reads them as *reporting, nothing refused*, a benign caption for a
+    state nobody observed.
+    """
+    got = dp.engine_refusals(
+        _snap({"source": None, "unavailable": "the engine has not published"}),
+        "LIQUIDITY_SWEEP_REVERSAL",
+    )
+    assert got["state"] == "not_reported"
+    assert got["unavailable"] == "the engine has not published"
+
+    # An old engine sends no runtime block at all: still not_reported, and the
+    # page says no cause was reported rather than inventing one.
+    assert dp.engine_refusals(_snap(), "LSR")["unavailable"] is None

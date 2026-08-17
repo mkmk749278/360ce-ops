@@ -629,7 +629,20 @@ def engine_refusals(snapshot: Any, setup_class: str) -> dict:
     if isinstance(snapshot, dict):
         runtime = snapshot.get("runtime") or {}
     if not isinstance(runtime, dict) or not runtime.get("source"):
-        return {"state": "not_reported", "cell": {}, "near_misses": []}
+        # The engine names the cause when it has one — in isolated mode the API
+        # container replaces its own zeros with an explicit `unavailable`
+        # rather than serving them under `source: "engine"`. Carry that
+        # sentence through: "not reported" and "not reported *because the
+        # engine is down*" send the reader to different places.
+        return {
+            "state": "not_reported",
+            "cell": {},
+            "near_misses": [],
+            "unavailable": (
+                (runtime or {}).get("unavailable")
+                if isinstance(runtime, dict) else None
+            ),
+        }
 
     cell = (runtime.get("refusals") or {}).get(str(setup_class or "").upper()) or {}
     near = [

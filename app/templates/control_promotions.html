@@ -359,10 +359,16 @@
     {# The engine's own census. #}
     {% if ref.state == 'not_reported' %}
       <p class="small muted">
-        <strong>NOT REPORTED</strong> — this engine is not publishing a refusal
-        census. That is not "nothing was refused": an engine predating the
-        census and one refusing every candidate read identically here, which is
-        why the census exists. Check the engine deploy.
+        <strong>NOT REPORTED</strong> — no refusal census reached this page.
+        That is not "nothing was refused": an engine predating the census and
+        one refusing every candidate read identically here, which is why the
+        census exists.
+        {% if ref.unavailable %}
+          Cause reported by the engine API: <em>{{ ref.unavailable }}</em>.
+        {% else %}
+          No cause was reported — most likely an engine deploy predating the
+          census.
+        {% endif %}
       </p>
     {% elif ref.state == 'idle' %}
       <p class="small">
