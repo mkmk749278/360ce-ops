@@ -786,3 +786,108 @@ def test_a_changed_list_is_flagged_against_the_signed_off_default():
     assert "changed from the signed-off default" not in t
     t2 = _visible(_promo_page("empty"))
     assert "changed from the signed-off default" in t2
+
+
+# --------------------------------------------------------------------------- #
+# The "why is this promoting nothing" panel, rendered (2026-08-17)
+#
+# Render the page, don't only test the reducer: the defects this repo's panel
+# surfs keep finding are ones no unit test can see, because a paragraph and a
+# caption are not assertions.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def refusing_client(monkeypatch):
+    """A card whose rule matches nothing, with the engine reporting why."""
+    from app.main import app
+
+    rows = [
+        _row(symbol="C1", gate="execution:overextended", regime="RANGING"),
+        _row(symbol="C2", gate="execution:overextended", regime="RANGING", pnl=-2.0),
+    ]
+    snapshot = {
+        "schema": 1, "master_enabled": True, "dark_lane_enabled": True,
+        "utc_day": "2026-08-17", "any_token": "*",
+        "directions": ["any", "long", "short", "with_trend", "counter_trend"],
+        "rules": [{
+            "setup_class": "LIQUIDITY_SWEEP_REVERSAL", "enabled": True,
+            "gates": ["SETUP_COMPAT:REGIME_STRONG_TREND"], "regimes": ["*"],
+            "sessions": ["*"], "direction": "with_trend", "min_confidence": None,
+            "max_per_day": 25, "note": "", "inert": False, "promoted_today": 0,
+        }],
+        "runtime": {
+            "source": "engine",
+            "refusals": {"LIQUIDITY_SWEEP_REVERSAL": {
+                "total": 610,
+                "by_dimension": {"gate": 513, "direction": 194},
+                "sole_blocker": {"direction": 97},
+            }},
+            "near_misses": [{
+                "setup_class": "LIQUIDITY_SWEEP_REVERSAL", "symbol": "ZZZUSDT",
+                "side": "SHORT", "gate": "execution:overextended",
+                "regime": "RANGING", "session": "ASIA", "confidence": 71.0,
+                "unmet": ["gate", "direction"], "matched": [],
+                "detail": "trend_unknown",
+            }],
+            "near_miss_ring": 60, "near_miss_seen": 610,
+        },
+    }
+    with TestClient(app) as c:
+        c.post("/login", data={"password": os.environ["OPS_AUTH_TOKEN"]})
+        app.state.data_volume.dark_signals = lambda: {"schema": 2, "rows": rows}
+        app.state.data_volume.dark_signals_provenance = lambda: {
+            "exists": True, "mtime": 1_786_500_000.0, "age_sec": 30.0
+        }
+        app.state.data_volume.dark_sar_arms = lambda: {"rows": []}
+
+        async def _promos():
+            return snapshot
+
+        async def _prices():
+            return {}
+
+        app.state.engine_api.dark_promotions = _promos
+        app.state.binance_klines.fetch_all_prices = _prices
+        yield c
+
+
+def test_the_page_says_when_a_saved_rule_selects_nothing(refusing_client):
+    """The number the page never had. Every evidence table below it is
+    marginal; the rule is their intersection, and this one is empty."""
+    r = refusing_client.get("/control/promotions")
+    assert r.status_code == 200
+    assert "selects nothing" in r.text
+
+
+def test_the_page_names_the_condition_the_engine_refused_on(refusing_client):
+    r = refusing_client.get("/control/promotions")
+    assert "610" in r.text, "the engine's refusal count must be on screen"
+    assert "Only blocker" in r.text
+    assert "trend_unknown" in r.text, "the near-miss sample must render"
+    assert "ZZZUSDT" in r.text
+
+
+def test_the_page_distinguishes_the_engines_census_from_ops_replay(refusing_client):
+    """Two numbers of different standing must not read as one. The engine is
+    the record of decisions taken; ops' replay answers what a rule would
+    select over the stored ledger, which the counters cannot."""
+    r = refusing_client.get("/control/promotions")
+    assert "ops replaying the rule" in r.text
+    assert "Where the two disagree the" in r.text
+
+
+def test_the_page_says_marginal_counts_sum_past_the_candidate_count(refusing_client):
+    """A reader adding the Refused column and getting more than the total is
+    entitled to know that is by design, not a bug."""
+    r = refusing_client.get("/control/promotions")
+    assert "sums past the candidate" in r.text
+
+
+def test_a_silent_engine_renders_not_reported_rather_than_a_clean_zero(client):
+    """The `client` fixture's snapshot carries no runtime block — an engine
+    that predates the census, or an API container that never received the
+    engine's published one. Zero would be indistinguishable from a rule
+    refusing everything, which is the defect this panel repairs."""
+    r = client.get("/control/promotions")
+    assert "NOT REPORTED" in r.text

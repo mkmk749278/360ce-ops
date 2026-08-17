@@ -142,6 +142,18 @@ def _build_context(
                 dim: dp.condition_evidence(setup_rows, dimension=dim)
                 for dim in DIMENSIONS
             },
+            # Each table above is MARGINAL and the rule built from them is an
+            # INTERSECTION. `selection` is the joint count — what this rule
+            # actually keeps — and the per-dimension refusals that explain the
+            # rest. Without it a reader can tick the best-looking cell of each
+            # table and save a rule that matches nothing, with every number on
+            # the page still reading well-evidenced (2026-08-17).
+            "selection": dp.rule_selection(setup_rows, rule),
+            # The engine's own census, from the process that ran `decide`.
+            # Authority for what actually happened; `selection` above is ops
+            # reconstructing the predicate over the whole ledger, and the panel
+            # says which is which.
+            "refusals": dp.engine_refusals(snapshot, setup),
             "n_rows": len(setup_rows),
             # Collapsed by default. A path with a rule opens, because the thing
             # you changed is the thing you want to see — and so does the one
@@ -191,6 +203,7 @@ def _build_context(
         "filter_missing": filter_missing,
         "dimensions": DIMENSIONS,
         "dimension_copy": DIMENSION_COPY,
+        "refusal_copy": dp.DIMENSION_REFUSAL_COPY,
         "directions": directions,
         "direction_copy": DIRECTION_COPY,
         "any_token": (snapshot or {}).get("any_token", "*") if isinstance(snapshot, dict) else "*",
