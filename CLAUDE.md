@@ -1475,6 +1475,59 @@ engine-side, the owner would get a rule saved, armed, and promoting nothing. A
 control that appears to work and does nothing, this time wearing the shape of a
 working promotion.
 
+### Marginal evidence, conjunctive rule — the defect the page's own design had (2026-08-17)
+
+Owner: *"still no LSR or any dark feed signal that we enable is actually
+delivered to users, not came to live feed."* Two walls, and the page showed
+neither.
+
+**Every evidence table on this page is MARGINAL and the rule built from them is
+an INTERSECTION.** One table per gate, per regime, per session, each sorted by
+evidence with its cell count printed — every honesty rule this repo has, applied
+one dimension at a time. And a reader ticking the best-looking cell of each can
+save a rule whose conjunction matches **nothing**, with all of those numbers
+still reading well-evidenced. That is not a rendering bug; it is what a control
+built out of marginal tables does, and the fix is to publish the **joint** count
+beside them: *"over this path's N closed dark rows, the rule as saved selects
+M."* Zero is a legitimate answer and now says so on screen.
+
+Beside it, the engine's own refusal census (engine-side: `dark_promotion`
+counted `unmet:{setup_class}`, one integer over five dimensions, and threw the
+dimension list away). Rules the two panels carry:
+
+- **`by_dimension` and `sole_blocker` are different questions and both render.**
+  The first sums past the candidate count by design — a conjunction can fail on
+  three conditions at once — and the panel says so, or a reader adding the column
+  and overshooting reads it as a bug. The second is the actionable one: *relax
+  this and exactly this many rows promote.*
+- **Three states for the census, and the middle one is the point.**
+  `not_reported` (an engine predating it, **or** an API container that never got
+  the engine's published block) · `idle` (reporting, nothing refused — the rule
+  is not what is stopping the path, look upstream) · `refusing`. Collapsing
+  `not_reported` to zero makes "refused everything" and "never evaluated"
+  identical, which is the defect being repaired.
+- **Ops' replay is labelled as a replay.** `rule_unmet` is a second
+  implementation of the engine's conjunction, kept because the engine's counters
+  only cover candidates seen since its last restart while *"what would this rule
+  select"* is answerable over the whole ledger. It is a mirror, so it is pinned:
+  `tests/test_dark_promotion_refusals.py` drives the **real**
+  `dark_promotion.decide` over the same rows and asserts they agree, and the
+  daily cap is deliberately not replayed — that is a fact about a running process
+  on a day, not about a row.
+- **The near-miss samples show the values the ENGINE stamped**, not the rule's —
+  the rule is already on the page and the stamps are not. A `with_trend` rule
+  against rows labelled `RANGING` is obvious in one sample and invisible in every
+  total, because both trend conditions *abstain* on a label naming no trend.
+
+**And the counters had to cross a process boundary to get here.** `decide` runs
+at the divert site in the engine container; this page is served by the API one,
+which loads the registry off the shared volume and has never evaluated a
+candidate — so `counters` was `{}` and every rule's `promoted_today` was `0`,
+permanently. The trail-governor `INDEX COLD` defect, and sharper: zero is also
+what a correctly armed rule reads before it fires, so the wrong number was
+indistinguishable from the right one until the rule started working. The engine
+publishes the runtime half to Redis and the handler prefers it.
+
 ## Arranging `/control` — and the tile that must not read the switch (2026-08-10, #161–#163)
 
 77 tunables sat between the safety switches and the mode toggle, so on a phone the

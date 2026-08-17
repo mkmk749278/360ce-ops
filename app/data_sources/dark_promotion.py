@@ -410,3 +410,245 @@ def rule_state(snapshot: Any, rule: Optional[dict]) -> tuple[str, str]:
             "promote are killed by the gate upstream and never reach it.",
         )
     return ("live", "LIVE — matching candidates are enqueued for real.")
+
+
+# --------------------------------------------------------------------------- #
+# Why a rule promoted nothing
+#
+# Added 2026-08-17, for the owner's *"still no LSR or any dark feed signal that
+# we enable is actually delivered to users"*. Two walls stood between an armed
+# rule and a subscriber and the page showed neither:
+#
+#   1. `dark_promotion.decide` refused every candidate, and the engine's only
+#      counter was one integer per path. Engine-side fix: a per-dimension
+#      refusal census, published in the snapshot's `runtime` block.
+#   2. The rows that DID promote were taken by the router's second layer —
+#      already measured (`promoted_dropped` + reason), already on this page.
+#
+# What follows renders the first, plus the number the page never had: what the
+# whole conjunction selects. Every dimension's evidence is offered MARGINALLY,
+# one table each, while the rule built from those tables is an INTERSECTION —
+# so the best-looking cell of each can combine into a rule matching nothing,
+# and until now the page could not say so.
+# --------------------------------------------------------------------------- #
+
+ANY_TOKEN = "*"
+
+#: What each refusal dimension means, and what the owner's next move is. COPY,
+#: not a mirror of the engine's list: the panel iterates the ENGINE's payload
+#: and looks each dimension up here, so a dimension ops has never heard of
+#: renders under its raw name badged `unclassified` rather than being dropped.
+#: Iterating these keys instead would be silent by construction on the next
+#: dimension the engine adds — `MEASUREMENT_SUFFIXES` wearing a seventh hat.
+DIMENSION_REFUSAL_COPY: dict[str, str] = {
+    "gate": (
+        "The candidate was diverted at a gate this rule does not list. A path "
+        "is usually diverted at several different gates — tick the ones you "
+        "mean."
+    ),
+    "regime": "The regime stamped at entry is not in the rule's allow-list.",
+    "session": (
+        "The market-context session is not in the rule's allow-list. A blank "
+        "session matches nothing but the wildcard."
+    ),
+    "direction": (
+        "The side failed the direction condition. `with_trend` / "
+        "`counter_trend` ABSTAIN when the regime names no trend — a RANGING "
+        "or VOLATILE label is neither, so both refuse it."
+    ),
+    "confidence": "Scored confidence is below the rule's floor.",
+    "daily_cap": (
+        "The rule MATCHED and had already spent its blast-radius cap for the "
+        "UTC day. This is the rule working and throttled, not misconfigured."
+    ),
+}
+
+
+def _trend_of(regime: Any) -> Optional[str]:
+    """Port of the engine's `dark_promotion.trend_of`.
+
+    Substring-based for the same reason it is there: the regime vocabulary
+    belongs to the engine's detector and a label list kept in ops would be
+    silent on the next one. `None` for a range — and `None` is not "no", it is
+    the abstain that makes both trend conditions refuse.
+    """
+    token = str(regime or "").strip().upper()
+    if not token:
+        return None
+    up = "UP" in token or "BULL" in token or "MARKUP" in token
+    down = "DOWN" in token or "BEAR" in token or "MARKDOWN" in token
+    if up and not down:
+        return "UP"
+    if down and not up:
+        return "DOWN"
+    return None
+
+
+def _matches(allowed: Any, value: Any) -> bool:
+    tokens = [str(t or "").strip() for t in (allowed or []) if str(t or "").strip()]
+    if not tokens:
+        return False
+    if ANY_TOKEN in tokens:
+        return True
+    return str(value or "").strip().upper() in [
+        t if t == ANY_TOKEN else t.upper() for t in tokens
+    ]
+
+
+def rule_unmet(row: dict, rule: Optional[dict]) -> Optional[list[str]]:
+    """Which of the rule's conditions this row fails. ``None`` when no rule.
+
+    **This is ops reconstructing the engine's predicate, and the page says so.**
+    The engine's own census (snapshot `runtime.refusals`) is the authority for
+    what actually happened; this exists because that census only covers
+    candidates seen since the engine last restarted, while the question the
+    owner is asking — *what would this rule have selected* — is answerable over
+    the whole ledger and only here.
+
+    `tests/test_dark_promotion_refusals.py` drives the real
+    `dark_promotion.decide` when the engine repo is present and asserts the two
+    agree row for row, so this cannot drift silently. The daily cap is
+    deliberately NOT reproduced: it is a fact about a running process on a
+    given day, not about a row.
+    """
+    if not isinstance(rule, dict):
+        return None
+    unmet: list[str] = []
+    if not _matches(rule.get("gates"), row.get("dark_gate")):
+        unmet.append("gate")
+    if not _matches(rule.get("regimes"), row.get("regime")):
+        unmet.append("regime")
+    if not _matches(rule.get("sessions"), session_of(row)):
+        unmet.append("session")
+
+    side = str(row.get("side") or "").strip().upper()
+    direction = str(rule.get("direction") or "any").strip().lower()
+    if direction == "long" and side != "LONG":
+        unmet.append("direction")
+    elif direction == "short" and side != "SHORT":
+        unmet.append("direction")
+    elif direction in ("with_trend", "counter_trend"):
+        trend = _trend_of(row.get("regime")) or _trend_of(row.get("regime_15m"))
+        if trend is None:
+            unmet.append("direction")
+        else:
+            aligned = (trend == "UP" and side == "LONG") or (
+                trend == "DOWN" and side == "SHORT"
+            )
+            if aligned is not (direction == "with_trend"):
+                unmet.append("direction")
+
+    floor = rule.get("min_confidence")
+    if floor is not None:
+        try:
+            if float(row.get("confidence") or 0.0) < float(floor):
+                unmet.append("confidence")
+        except (TypeError, ValueError):
+            unmet.append("confidence")
+    return unmet
+
+
+def rule_selection(
+    rows: list[dict], rule: Optional[dict], *, fee_pct: float = 0.0
+) -> dict:
+    """What the whole conjunction selects, and which condition costs the rest.
+
+    The number this page never had. Each dimension's evidence table is
+    marginal; the rule is an intersection. On the owner's book the two can
+    differ by everything — a gate cell reading n=97 and a regime cell reading
+    n=120 can intersect at zero, and every table above would still look
+    well-evidenced.
+
+    So: `n_selected` with its own summary (measured on the rows the rule keeps,
+    never on the whole ledger), the marginal refusal count per dimension, and
+    `sole_blocker` — the rows that failed on exactly one condition, i.e. what
+    relaxing that one condition would add. Sorted by evidence, never by edge.
+    """
+    closed = [r for r in rows if str(r.get("status") or "") in _CLOSED]
+    if not isinstance(rule, dict):
+        return {
+            "has_rule": False,
+            "n_rows": len(rows),
+            "n_closed": len(closed),
+            "selected": summarize([], fee_pct=fee_pct),
+            "n_selected": 0,
+            "by_dimension": {},
+            "sole_blocker": {},
+            "baseline": summarize(closed, fee_pct=fee_pct),
+        }
+
+    selected: list[dict] = []
+    by_dimension: dict[str, int] = {}
+    sole_blocker: dict[str, int] = {}
+    for row in closed:
+        unmet = rule_unmet(row, rule) or []
+        if not unmet:
+            selected.append(row)
+            continue
+        for dim in unmet:
+            by_dimension[dim] = by_dimension.get(dim, 0) + 1
+        if len(unmet) == 1:
+            sole_blocker[unmet[0]] = sole_blocker.get(unmet[0], 0) + 1
+
+    return {
+        "has_rule": True,
+        "n_rows": len(rows),
+        "n_closed": len(closed),
+        "selected": summarize(selected, fee_pct=fee_pct),
+        "n_selected": len(selected),
+        "n_refused": len(closed) - len(selected),
+        # Marginal: a row failing three conditions is counted in all three, so
+        # these sum past `n_refused` by design. Stated on the panel.
+        "by_dimension": dict(
+            sorted(by_dimension.items(), key=lambda kv: (-kv[1], kv[0]))
+        ),
+        # The actionable half: relax this one condition and exactly this many
+        # closed rows join the selection.
+        "sole_blocker": dict(
+            sorted(sole_blocker.items(), key=lambda kv: (-kv[1], kv[0]))
+        ),
+        "baseline": summarize(closed, fee_pct=fee_pct),
+    }
+
+
+def engine_refusals(snapshot: Any, setup_class: str) -> dict:
+    """The engine's own refusal census for this path, in three states.
+
+    `not_reported` — an engine that predates the census, or (in isolated mode)
+    an API container that never received the engine's published block. NOT the
+    same as zero: a rule refusing everything and a rule nobody has evaluated
+    read identically otherwise, which is the whole reason this shipped.
+
+    `idle` — the engine is reporting and has refused nothing for this path. The
+    benign case, and it means something specific: no candidate has reached the
+    decision, so the gate upstream or the dark lane is where to look next.
+
+    `refusing` — with the per-dimension counts.
+    """
+    runtime = {}
+    if isinstance(snapshot, dict):
+        runtime = snapshot.get("runtime") or {}
+    if not isinstance(runtime, dict) or not runtime.get("source"):
+        return {"state": "not_reported", "cell": {}, "near_misses": []}
+
+    cell = (runtime.get("refusals") or {}).get(str(setup_class or "").upper()) or {}
+    near = [
+        m for m in (runtime.get("near_misses") or [])
+        if str(m.get("setup_class") or "").upper() == str(setup_class or "").upper()
+    ]
+    return {
+        "state": "refusing" if cell.get("total") else "idle",
+        "cell": {
+            "total": int(cell.get("total") or 0),
+            "by_dimension": dict(cell.get("by_dimension") or {}),
+            "sole_blocker": dict(cell.get("sole_blocker") or {}),
+        },
+        # Newest first — a sample is read from the top.
+        "near_misses": list(reversed(near)),
+        "source": runtime.get("source"),
+        "generated_at": runtime.get("generated_at"),
+        # The ring's bound against the unbounded count, so the newest few
+        # cannot read as the whole population.
+        "ring": runtime.get("near_miss_ring"),
+        "seen": runtime.get("near_miss_seen"),
+    }

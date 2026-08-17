@@ -339,6 +339,155 @@
   </table>
   {% endif %}
 
+  {# ── Why this rule promoted nothing ──────────────────────────────────────
+     Two panels, deliberately not merged. The first is what the ENGINE did —
+     the process that ran `decide`. The second is ops replaying the rule over
+     the whole ledger to answer "what would it select", which the engine's
+     counters cannot, since they only cover candidates seen since its last
+     restart. Where they disagree the engine is right, and the copy says so.
+
+     This exists because the tables below are MARGINAL and the rule they build
+     is an INTERSECTION: the owner ticked the best-looking cell of each and
+     saved a rule that matched nothing, with every number on the page still
+     reading well-evidenced (owner-caught 2026-08-17). #}
+  {% set sel = card.selection %}
+  {% set ref = card.refusals %}
+  {% if card.rule %}
+  <fieldset>
+    <legend>Why this rule is or is not promoting</legend>
+
+    {# The engine's own census. #}
+    {% if ref.state == 'not_reported' %}
+      <p class="small muted">
+        <strong>NOT REPORTED</strong> — this engine is not publishing a refusal
+        census. That is not "nothing was refused": an engine predating the
+        census and one refusing every candidate read identically here, which is
+        why the census exists. Check the engine deploy.
+      </p>
+    {% elif ref.state == 'idle' %}
+      <p class="small">
+        <strong>No candidate has reached the decision.</strong> The engine is
+        reporting and has refused nothing for this path, so the rule is not
+        what is stopping it — look upstream, at whether the dark lane is
+        producing rows for this path at all.
+      </p>
+    {% else %}
+      <p class="small">
+        The engine has refused <strong>{{ ref.cell.total }}</strong> candidate(s)
+        on this path since it started.
+        {% if ref.cell.sole_blocker %}
+          Of those, these failed on <strong>one condition only</strong> —
+          relaxing it promotes exactly that many:
+          {% for dim, n in ref.cell.sole_blocker.items() %}
+            <code>{{ dim }}</code> <strong>{{ n }}</strong>{{ ", " if not loop.last }}
+          {% endfor %}.
+        {% else %}
+          None failed on a single condition alone, so no one edit unblocks them.
+        {% endif %}
+      </p>
+      <table class="tbl small">
+        <thead><tr>
+          <th>Condition</th><th>Refused</th><th>Only blocker</th><th>What it means</th>
+        </tr></thead>
+        <tbody>
+        {# Iterate the ENGINE's payload and look the sentence up — never ops'
+           own key list, which would be silent on the next dimension. #}
+        {% for dim, n in ref.cell.by_dimension.items() %}
+          <tr>
+            <td><code>{{ dim }}</code></td>
+            <td>{{ n }}</td>
+            <td>{{ ref.cell.sole_blocker.get(dim, 0) or '—' }}</td>
+            <td class="muted">
+              {% if refusal_copy.get(dim) %}{{ refusal_copy[dim] }}
+              {% else %}<span class="badge">unclassified</span>
+                Reported by the engine; ops has no description for it yet.
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      <p class="small muted">
+        A rule is a conjunction, so a candidate failing three conditions is
+        counted in all three — the "Refused" column sums past the candidate
+        count by design. Read <strong>Only blocker</strong> for what one edit
+        would change.
+      </p>
+
+      {% if ref.near_misses %}
+      <details>
+        <summary class="small">Recent refused candidates ({{ ref.near_misses | length }}
+          of {{ ref.seen }} seen)</summary>
+        <div style="overflow-x:auto">
+        <table class="tbl small">
+          <thead><tr>
+            <th>Symbol</th><th>Side</th><th>Gate</th><th>Regime</th>
+            <th>Session</th><th>Conf</th><th>Failed on</th><th>Detail</th>
+          </tr></thead>
+          <tbody>
+          {% for m in ref.near_misses[:20] %}
+            <tr>
+              <td><code>{{ m.symbol }}</code></td>
+              <td>{{ m.side }}</td>
+              <td><code>{{ m.gate or '—' }}</code></td>
+              <td>{{ m.regime or '—' }}</td>
+              <td>{{ m.session or '—' }}</td>
+              <td>{{ m.confidence | pct }}</td>
+              <td>{% for d in m.unmet %}<code>{{ d }}</code>{{ " " }}{% endfor %}</td>
+              <td class="muted">{{ m.detail or '—' }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        </div>
+        <p class="small muted">
+          These are the values the ENGINE stamped, not the values the rule asks
+          for — the rule is already on this page and the stamps are not. A
+          bounded ring of the newest {{ ref.ring }}; {{ ref.seen }} refusals
+          seen in total.
+        </p>
+      </details>
+      {% endif %}
+    {% endif %}
+
+    {# Ops' own replay over the whole ledger. #}
+    {% if sel.has_rule %}
+    <p class="small">
+      <strong>Over this path's {{ sel.n_closed }} closed dark rows, the rule as
+      saved selects {{ sel.n_selected }}.</strong>
+      {% if sel.n_selected %}
+        Those rows: n = {{ sel.selected.n_scored }},
+        {{ sel.selected.campaigns }} campaigns,
+        avg {{ sel.selected.avg_pct | pct }}%
+        (whole path: {{ sel.baseline.n_scored }} at
+        {{ sel.baseline.avg_pct | pct }}%).
+      {% else %}
+        <span class="badge">selects nothing</span>
+        Every table below is measured one dimension at a time; the rule is the
+        intersection of all of them, and this one is empty. Widen whichever
+        condition the "Only blocker" column names.
+      {% endif %}
+    </p>
+    {% if sel.sole_blocker %}
+      <p class="small muted">
+        On the ledger, relaxing one condition would add:
+        {% for dim, n in sel.sole_blocker.items() %}
+          <code>{{ dim }}</code> +{{ n }}{{ ", " if not loop.last }}
+        {% endfor %}.
+      </p>
+    {% endif %}
+    <p class="small muted">
+      This paragraph is <strong>ops replaying the rule</strong> over the stored
+      ledger, not a record of a decision the engine took — it answers "what
+      would this select", which the engine's counters cannot, because they only
+      cover candidates seen since it last restarted. Where the two disagree the
+      engine is right. The daily cap is not replayed: it is a fact about a
+      running process on a given day, not about a row.
+    </p>
+    {% endif %}
+  </fieldset>
+  {% endif %}
+
   <form method="post" action="/control/promotions/save" class="promo-form">
     <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
 
