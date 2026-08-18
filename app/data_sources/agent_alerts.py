@@ -99,6 +99,63 @@ class AgentAlertsReader:
         alerts.sort(key=lambda a: 0 if a["severity"] == "HIGH" else 1)
         return {"alerts": alerts, "error": None}
 
+    async def heartbeat(self) -> dict[str, Any]:
+        """What the agent did on its last cycle — or why we cannot tell.
+
+        A monitoring agent is the one process whose failure is silent by
+        construction: a dead pager sends no message, so "no alerts" and "no
+        agent" render identically on ``/alerts``. The agent stamps
+        ``agent:cycle`` after every cycle (``app/agent/heartbeat.py``); this
+        reads it.
+
+        Three outcomes, never two. ``error`` is *we could not ask*, an absent
+        key is *the agent has not stamped one*, and a value is the cycle. The
+        middle one is genuinely ambiguous — an agent predating this feature and
+        a stopped one both leave no key — so this returns the ambiguity rather
+        than resolving it, and the page says which evidence separates them.
+        """
+        from app.agent.heartbeat import KEY as _HEARTBEAT_KEY
+
+        try:
+            client = self._get_client()
+            raw = await client.get(_HEARTBEAT_KEY)
+        except Exception as exc:
+            log.warning("agent heartbeat read failed: %s", exc)
+            return {"present": False, "error": str(exc), "age_sec": None}
+
+        state = _load(raw)
+        if not state:
+            return {"present": False, "error": None, "age_sec": None}
+
+        age: float | None = None
+        stamped = state.get("at")
+        if stamped:
+            try:
+                from datetime import datetime, timezone
+
+                when = datetime.fromisoformat(str(stamped))
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - when).total_seconds()
+            except ValueError:
+                # A stamp we cannot parse is not a fresh one, and it is not a
+                # missing one either. Leave age None and let the raw value
+                # render — the reader can see it is malformed.
+                age = None
+
+        return {
+            "present": True,
+            "error": None,
+            "age_sec": age,
+            "at": stamped,
+            "cycle_ok": state.get("cycle_ok"),
+            "alerts_firing": state.get("alerts_firing"),
+            "detectors": state.get("detectors"),
+            "redis_probe": state.get("redis_probe"),
+            "redis_probe_ok": state.get("redis_probe_ok"),
+            "poll_interval_s": state.get("poll_interval_s"),
+        }
+
 
 def _load(raw: str | None) -> dict | None:
     if not raw:

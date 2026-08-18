@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+{% block title %}Liveness · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Liveness — where does “alive” stop?</h1>
+
+{% include "_system_verdict.html" %}
+
+<p class="muted">
+  Eight hops between the engine process and this page. A single green light
+  cannot say which one broke, and on 2026-08-18 that was exactly the problem:
+  the dashboard had stopped answering, the only alert firing named the wrong
+  container, and there was no surface joining the two.
+  <strong>Every broken link below names the repo that owns its fix</strong> —
+  that was the only part of the old alert the reader actually needed.
+</p>
+
+<table class="data-table">
+  <thead>
+    <tr><th>#</th><th>Link</th><th>State</th><th>What it says</th><th>Fixed in</th></tr>
+  </thead>
+  <tbody>
+  {% for s in chain %}
+    <tr id="{{ s.key }}">
+      <td class="mono muted">{{ loop.index }}</td>
+      <td><strong>{{ s.label }}</strong>
+        <div class="muted small">{{ s.why }}</div></td>
+      <td>
+        {% if s.state == 'ok' %}<span class="badge badge-ok">up</span>
+        {% elif s.state == 'broken' %}<span class="badge badge-bad">broken</span>
+        {% elif s.state == 'degraded' %}<span class="badge badge-warn">caveat</span>
+        {% else %}<span class="badge badge-warn">unknown</span>{% endif %}
+      </td>
+      <td>{{ s.detail }}
+        {%- if s.evidence %}<div class="muted small"><pre class="mono small">{{ s.evidence }}</pre></div>{% endif %}
+      </td>
+      <td class="muted small mono">{{ s.owner }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<div class="card">
+  <h2><code>unknown</code> is not <code>up</code></h2>
+  <p class="muted small">
+    A link ops could not measure gets its own badge and is never counted as
+    passing. “We could not ask” and “we asked and it is fine” have different
+    next moves, and a check that renders green when it did not run is worse
+    than no check at all, because it is a claim. This table renders whether or
+    not anything failed, for the same reason — a row that appears only when it
+    trips teaches you its absence means “fine”, when it equally means the check
+    stopped running.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Engine pulse <span class="muted">the engine's own clock, not ops'</span></h2>
+  {% if api.error %}
+    <p><span class="badge badge-bad">NO ANSWER</span>
+      ops could not reach <code>{{ request.app.state.settings.engine_api_base }}</code>:
+      <span class="mono small">{{ api.error }}</span></p>
+    <p class="muted small">
+      This is ops' own round trip and it is the one number on these pages
+      measured on ops' clock — a surface may not grade its own liveness on a
+      clock it supplies, so everything else here comes from Docker, redis or
+      the engine. Check the <strong>api container</strong> row above before
+      concluding the engine is down: in isolated mode they fail separately, and
+      an engine that is trading fine behind a dead api container looks exactly
+      like this.
+    </p>
+  {% else %}
+    <div class="kv-grid">
+      <div class="kv"><span class="muted">Round trip (ops' clock)</span><strong class="mono">{{ api.latency_ms }} ms</strong></div>
+      <div class="kv"><span class="muted">Engine uptime</span><strong class="mono">{{ api.pulse.uptime_seconds|duration }}</strong></div>
+      <div class="kv"><span class="muted">Mode</span><strong class="mono">{{ api.pulse.mode or '—' }}</strong></div>
+      <div class="kv"><span class="muted">Scanning</span><strong class="mono">{{ api.pulse.scanning_pairs if api.pulse.scanning_pairs is not none else '—' }} pairs</strong></div>
+      <div class="kv"><span class="muted">Signals today</span><strong class="mono">{{ api.pulse.signals_today if api.pulse.signals_today is not none else '—' }}</strong></div>
+      <div class="kv"><span class="muted">Open positions</span><strong class="mono">{{ api.pulse.open_positions if api.pulse.open_positions is not none else '—' }}</strong></div>
+    </div>
+    {% if (api.pulse.uptime_seconds or 0) < 3600 %}
+    <p class="muted small">
+      <span class="badge badge-warn">YOUNG PROCESS</span>
+      The engine has been up {{ api.pulse.uptime_seconds|duration }}. Every
+      counter above is measured since that boot, so a low signal count here
+      describes a young process and not a quiet market. Check the restart count
+      on <a href="/system">Containers</a> before reading any of it as a market
+      fact.
+    </p>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>The monitoring agent — the process whose death is silent</h2>
+  <p class="muted small">
+    A dead pager sends no message, so on <a href="/alerts">Alerts</a> “nothing
+    is wrong” and “nothing is watching” render identically. The agent stamps
+    what it just did after every cycle; this reads that stamp. Its
+    healthchecks.io dead-man's switch is deliberately <em>not</em> pinged on a
+    cycle that had failures, so on that channel a degraded agent and a dead one
+    share a symptom too — which is why this carries <code>cycle_ok</code>
+    separately from freshness.
+  </p>
+  {% if agent.error %}
+    <p><span class="badge badge-warn">UNREADABLE</span>
+      <span class="mono small">{{ agent.error }}</span>
+      <span class="muted">— that is the ops Redis, not the agent. The agent may
+      be running fine and unable to publish.</span></p>
+  {% elif not agent.present %}
+    <p><span class="badge badge-warn">NO HEARTBEAT</span>
+      Nothing has been stamped. Two causes, and this page cannot tell them
+      apart: the agent is not running, or it is running a build from before the
+      heartbeat shipped. The <code>360ce-ops-agent</code> row on
+      <a href="/system">Containers</a> separates them — a running container with
+      no heartbeat is an old build; an absent one is the real fault.</p>
+  {% else %}
+    <div class="kv-grid">
+      <div class="kv"><span class="muted">Last cycle</span>
+        <strong class="mono">{{ agent.age_sec|duration }} ago</strong>
+        {%- if agent.age_sec and agent.age_sec > agent_stale_sec %}
+        <span class="badge badge-bad">stale</span>{% endif %}</div>
+      <div class="kv"><span class="muted">That cycle</span>
+        <strong>{% if agent.cycle_ok %}<span class="badge badge-ok">clean</span>
+          {%- else %}<span class="badge badge-warn">had failures</span>{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Poll interval</span><strong class="mono">{{ agent.poll_interval_s or '—' }}s</strong></div>
+      <div class="kv"><span class="muted">Conditions firing</span><strong class="mono">{{ agent.alerts_firing if agent.alerts_firing is not none else '—' }}</strong></div>
+    </div>
+    {% if agent.redis_probe %}
+    <p class="muted small">
+      Its redis probe last cycle:
+      <code>{{ agent.redis_probe }}</code>{% if not agent.redis_probe_ok %}
+      — carried here on <em>every</em> cycle rather than only while an alert is
+      firing, because a probe that fails and recovers is a pattern, and a
+      pattern is invisible in a series of unrelated pages.{% endif %}
+    </p>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

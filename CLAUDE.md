@@ -1580,3 +1580,121 @@ is retired, and which *kind* of mover admitted a pair.
 - **Every existing row reads blank, and that is correct.** The promotion evicts
   itself long before most signals close, so there is no honest backfill; the column
   has to exist before a window can accumulate behind it.
+
+## `/system` — the box itself, and the alert that named the wrong container (2026-08-18)
+
+Owner: *"add state of every container in ops panel … this is happening
+repeatedly and we don't know engine is live or not since there is [no] reply
+from engine for dashboard command. Add everything which need to know about
+system, it liveness container health etc."*
+
+The alert he was getting, over and over, each followed by a recovery:
+
+> **HIGH — redis_unreachable.** Could not read `snapshot:tickers` idletime from
+> the engine redis container — docker exec exited cleanly and printed nothing.
+> Probe said: `no_output · rc=0 · exited 0 and printed nothing`.
+
+**Every word after the fingerprint was true and the fingerprint was wrong, and
+the two symptoms were one event.** `docker exec` exited **0** — it cannot do
+that against a stopped container (that is `exec_error`), and `redis-cli` exits
+non-zero when it cannot reach the server. So rc=0 is *positive evidence redis
+answered*, and what it answered was nil, which `redis-cli` prints as nothing at
+all when stdout is not a TTY. **The key was missing, not the container.**
+
+And a missing key is an **engine** fault. Every `snapshot:*` key carries a TTL
+of twice its write interval (360-v2 `src/api/snapshot_store.py`:
+`snapshot:tickers` is written every ~15s with a 60s TTL), so an absent key means
+the SnapshotWriter missed several cycles. In isolated mode the api container
+reads those keys and nothing else — **so the same stall that expired the key is
+exactly what made the dashboard stop answering.** The owner had both halves and
+no surface joining them, while the one alert firing sent him to the wrong box.
+
+`RedisStalenessDetector` now splits `no_output`+rc=0 into `snapshot_key_missing`
+(still HIGH — the engine has stopped publishing) whose description names the
+engine container. Every other failure keeps `redis_unreachable`; the property
+the old test protected — *a probe failure never reads as all-clear* — survives
+intact, and that test now asserts both halves rather than being deleted.
+
+### The pages
+
+Its own top-level nav group, and **guest-readable, all three** — there is no
+write surface here and nothing on it is subscriber data, and the page you most
+want to be able to hand somebody at 3am must not be the one behind the
+strictest gate. Control of the stack is not here and never will be: this is an
+X-ray.
+
+* **`/system`** — every container in **both** stacks, from Docker's own state.
+  **Read `Restarts` first.** The engine carries `autoheal=true` and a
+  healthcheck that tests *work* (scanner-heartbeat freshness), so a wedged scan
+  loop restarts the container — and a restart takes every snapshot key past its
+  TTL. A *loop* of them is invisible in every other number: uptime reads small
+  and healthy, status reads `Up`, and the count is the only thing that says it
+  has happened forty times. **Neither repo rendered it anywhere.** Beside it,
+  the last healthcheck's own output — the evidence behind an autoheal restart,
+  which lived only in a container log.
+* **`/system/liveness`** — the eight hops from engine process to this page, each
+  with **the repo that owns its fix**. That was the only part of the old alert
+  the reader actually needed.
+* **`/system/redis`** — reachability and key census, measured separately and
+  never pooled again, plus TTL per key. Expired and evicted are rendered apart:
+  expired is a key reaching its own TTL (a stalled writer), evicted is redis
+  reclaiming memory under `maxmemory` (a healthy writer, a small cap).
+
+### Rules these pages carry
+
+- **`unknown` is not `ok`, and it outranks convenience.** Every probe that could
+  not run says so under its own name. A check that renders green when it did not
+  run is worse than no check, because it is a claim.
+- **The roster is declared; the census is scanned.** `docker ps` can only show
+  what exists, so a container that vanished is invisible in it — `ROSTER` says
+  what should be there and anything running and undeclared renders under its raw
+  name badged `unexpected`. The `is_tradfi_perp` rule, both halves.
+- **The redis key list is scanned, not mirrored.** The engine owns its key
+  schema; `OPS_DEPENDS_ON` is a fact about *ops* (which page breaks when a key
+  is absent), not a second copy of `snapshot_store.py`.
+- **Every roster entry carries a written impact.** `container_down` with no
+  consequence beside it does not tell the owner whether to get out of bed.
+- **The agent publishes its own heartbeat** (`app/agent/heartbeat.py` →
+  `agent:cycle`). A monitoring agent is the one process whose failure is silent
+  by construction: a dead pager sends no message, so on `/alerts` "nothing is
+  wrong" and "nothing is watching" render identically. It carries `cycle_ok`
+  separately from freshness, because the healthchecks.io dead-man's switch is
+  deliberately *not* pinged on a failed cycle — so on that channel a degraded
+  agent and a dead one share a symptom too.
+
+### Three defects found by RENDERING it, none by a test
+
+All three are the same shape, and it is the shape this whole change was built to
+repair — **committed by the repair, one layer up**:
+
+- **A dead docker socket convicted redis.** Every probe on these pages is a
+  `docker exec`, so when the *daemon* is unreachable the PING fails for a reason
+  that has nothing to do with redis. The first cut read *"Redis reachable —
+  broken"* on a box with no socket at all. `blind` is now checked before any
+  redis verdict, and key absence is explicitly ungraded until reachability is
+  established — **that ordering is the repair**.
+- **…and then the Redis template did it again.** `build_chain` was already
+  blind-aware; the page asked `redis.reachable` itself and printed *"NO ANSWER —
+  this one **is** the container"* beside it. Fixed structurally rather than
+  locally: the route passes `link` (the chain keyed by step) and the card
+  renders that verdict. **A card that asks its own question of the raw payload
+  will disagree with the table beside it** — one writer, one reader.
+- **A step computed twice, the first answer discarded.** `redis_container` was
+  set by the container sweep and then overwritten by the PING branch. A test
+  caught that one. PING is strictly better evidence than a container status — a
+  container can read `Up` with a wedged server inside it — so the sweep call was
+  simply deleted.
+
+A fourth was found by **reading the diff**, and it is the shape this file names
+five times already: `_run` discarded stdout on a non-zero exit while
+`_inspect_all`'s own comment said *"the stdout is parsed regardless of the exit
+code"*. `docker inspect a b c` exits 1 when **any** name is missing and still
+prints the ones it found — so one absent container would have read as *blind to
+all nine*, which is precisely the state the roster exists to surface. **A
+docstring asserting a property the code beneath it does not have**, for the
+sixth time in these two repos.
+
+And one from Jinja: **a payload key must not collide with a dict method.**
+`redis.keys` resolved to the dict's own `.keys` *method* before the item of that
+name, so the template iterated a builtin and 500'd. Renamed `key_rows`. The nav
+test's "drive every destination as a real request" is what caught it.

@@ -422,6 +422,8 @@ _UNREACHABLE_CAUSE_COPY: dict[str, str] = {
         "being gone"
     ),
     "exec_error": "docker exec exited non-zero, which is what a stopped container looks like",
+    # Deliberately absent from this map: ``no_output`` with rc=0. It never
+    # reaches this alert any more — see ``_snapshot_key_missing`` below.
     "no_output": "docker exec exited cleanly and printed nothing",
     "exception": "the probe itself raised",
     "not_run": "the probe never ran this cycle",
@@ -449,6 +451,62 @@ def _unreadable(output: str, why: str) -> DetectorResult:
     )
 
 
+def _snapshot_key_missing(probe: RedisProbe, key: str) -> DetectorResult:
+    """redis answered, and what it said was *nothing* — the key is not there.
+
+    This is the 2026-08-18 defect. The owner was paged HIGH, repeatedly and
+    with a recovery between each, reading::
+
+        redis_unreachable — Could not read snapshot:tickers idletime from the
+        engine redis container … Probe said: no_output · rc=0 · exited 0 and
+        printed nothing.
+
+    Every word after the fingerprint was true and the fingerprint was wrong.
+    ``docker exec`` exited **0**, which it cannot do against a stopped
+    container (that is ``exec_error``), and ``redis-cli`` exits non-zero when
+    it cannot reach the server. So rc=0 is *positive evidence that redis
+    answered* — and ``redis-cli`` prints a nil bulk reply as nothing at all
+    when stdout is not a TTY. The empty output means the KEY was absent, not
+    the container.
+
+    Which makes it an **engine** fault, and a serious one. Every ``snapshot:*``
+    key carries a TTL of twice its write interval (360-v2
+    ``src/api/snapshot_store.py``: ``snapshot:tickers`` is written every ~15s
+    with a 60s TTL), so an absent key means the SnapshotWriter missed several
+    cycles in a row. In isolated mode the api container reads those keys and
+    nothing else — so the same stall that expires the key is exactly what makes
+    the dashboard stop answering, which is the second symptom the owner
+    reported and had no way to connect to the first.
+
+    Still HIGH: the engine has stopped publishing and every engine-backed page
+    is going empty. What changes is that the alert now names the container that
+    can actually be fixed, and says what to look at.
+    """
+    return DetectorResult(
+        severity="HIGH",
+        fingerprint="snapshot_key_missing",
+        description=(
+            f"Redis is UP and answering — and the key '{key}' is not there. "
+            "redis-cli exited 0 with an empty reply, which is a nil result for "
+            "a missing key; a stopped container or an unreachable server both "
+            "exit non-zero, so this is not a redis fault. Every snapshot key "
+            "carries a TTL of twice its write interval, so an absent key means "
+            "the ENGINE's SnapshotWriter has missed several cycles. While this "
+            "stands the api container has nothing to serve and every "
+            "engine-backed ops page reads empty. Look at the engine container "
+            "(restart count, healthcheck) on Ops → System, not at redis."
+        ),
+        raw={
+            "cause": probe.cause,
+            "returncode": probe.returncode,
+            "detail": probe.detail,
+            "attempts": probe.attempts,
+            "key": key,
+            "points_at": "360scalp-v2-engine",
+        },
+    )
+
+
 class RedisStalenessDetector:
     """Engine Redis snapshot:tickers key must be recently written.
 
@@ -466,7 +524,14 @@ class RedisStalenessDetector:
     #: day of idleness means we are looking at the wrong key or the wrong box.
     _IMPLAUSIBLE_SEC = 86400
 
+    #: The key the probe reads. Named here so the alert can say which one.
+    _KEY = "snapshot:tickers"
+
     def check(self, probe: RedisProbe) -> list[DetectorResult]:
+        if not probe.ok and probe.cause == "no_output" and probe.returncode == 0:
+            # Redis answered and the key was absent. Two facts, one of which
+            # used to be reported as the other — see _snapshot_key_missing.
+            return [_snapshot_key_missing(probe, self._KEY)]
         if not probe.ok:
             # The probe could not run. Pre-2026-07-27 this returned [] and a
             # dead redis was indistinguishable from a healthy one. An

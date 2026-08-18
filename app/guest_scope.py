@@ -117,6 +117,16 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/sar-exit",
         "/sar-exit/export.csv",
         "/sar-exit/export.json",
+        # -- system ---------------------------------------------------------
+        # Guest-readable on purpose, and it is the one tier decision on this
+        # page worth stating. There is no write surface here, nothing on it is
+        # subscriber data, and it is the surface somebody diagnosing a dead box
+        # needs first — the page you most want to be able to hand over at 3am
+        # must not be the one behind the strictest gate. Control of the stack
+        # (restart, deploy) is not here and never will be: this is an X-ray.
+        "/system",
+        "/system/liveness",
+        "/system/redis",
         # -- diagnostics ----------------------------------------------------
         "/truth",
         "/truth/raw.json",
