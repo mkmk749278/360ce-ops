@@ -457,6 +457,12 @@ DIMENSION_REFUSAL_COPY: dict[str, str] = {
         "or VOLATILE label is neither, so both refuse it."
     ),
     "confidence": "Scored confidence is below the rule's floor.",
+    "error": (
+        "`decide` raised on the candidate and answered \"stay dark\" — the "
+        "fail-closed default. Counted rather than silent, because otherwise a "
+        "candidate erroring on every evaluation reads as \"nothing was "
+        "refused\". Ours to fix; check the engine's fail-open telemetry."
+    ),
     "daily_cap": (
         "The rule MATCHED and had already spent its blast-radius cap for the "
         "UTC day. This is the rule working and throttled, not misconfigured."
