@@ -15,21 +15,33 @@
 </p>
 
 <div class="card">
-  <h2>Read <strong>Restarts</strong> first</h2>
+  <h2>Read <strong>Uptime</strong> against its stack-mates, not <strong>Restarts</strong></h2>
   <p class="muted small">
     The engine carries <code>autoheal=true</code> and a healthcheck that tests
     <em>work</em> — scanner-heartbeat freshness, not just process-up — so a
     wedged scan loop makes the container unhealthy and the autoheal sidecar
     restarts it. That is the design and it is usually right. But a restart takes
     every <code>snapshot:*</code> key past its TTL, which empties this
-    dashboard, and a <em>loop</em> of them is invisible in every other number on
-    this page: uptime reads small and healthy, status reads <code>Up</code>, and
-    the count is the only thing that says it has happened forty times.
-    Neither repo rendered it anywhere before 2026-08-18.
+    dashboard — so a <em>loop</em> of restarts is the thing to catch.
   </p>
   <p class="muted small">
-    A count that is non-zero is not itself a fault — a deploy restarts things.
-    A count that is <em>climbing between two loads of this page</em> is.
+    <strong>The restart counter cannot catch it, and this page said otherwise
+    for an hour.</strong> Docker's <code>RestartCount</code> counts restarts made
+    by the container's <em>restart policy</em>. Autoheal issues a manual restart,
+    which does not increment it; a <code>compose</code> recreate builds a new
+    container, which starts the count over. On the first live read of this page
+    the engine had plainly restarted on its own — up 1h48m beside an api,
+    signing and watchdog all up 5h16m — and its count read <strong>0</strong>.
+  </p>
+  <p class="muted small">
+    Uptime is blind to neither, because a restart always resets it. What uptime
+    alone cannot say is whether the <em>whole stack</em> went down together — an
+    ordinary deploy — or one container went down by itself. So the stack's start
+    times are grouped: a container alone in its minute while a stack-mate has
+    been up longer is badged <span class="badge badge-warn">restarted alone</span>,
+    and that badge appearing twice in a row on the engine is the autoheal loop.
+    <code>RestartCount</code> stays in the table as what it honestly is — the
+    policy-restart count — rather than as the headline.
   </p>
 </div>
 
@@ -89,7 +101,13 @@
         {% elif c.restart_count == 0 %}0
         {% else %}<strong>{{ c.restart_count }}</strong>{% endif %}
       </td>
-      <td class="mono">{{ c.uptime_sec|duration }}</td>
+      <td class="mono">{{ c.uptime_sec|duration }}
+        {%- if c.restarted_alone %}
+        <div><span class="badge badge-warn">restarted alone</span></div>
+        <div class="muted small">{{ c.stack_mates_older }} stack-mate{{ '' if c.stack_mates_older == 1 else 's' }}
+          up longer (oldest {{ c.oldest_mate_uptime_sec|duration }}) — this one went down by itself</div>
+        {%- endif %}
+      </td>
       <td class="mono">{{ c.cpu_pct or '—' }}</td>
       <td class="mono">{{ c.mem_usage or '—' }}<div class="muted small">{{ c.mem_pct or '' }}</div></td>
       <td class="muted small mono">{{ c.image or '—' }}</td>
@@ -170,6 +188,14 @@
           <div class="muted small">{{ d.why }}</div></td>
         {% if d.error %}
         <td colspan="4" class="muted small">could not stat: {{ d.error }}</td>
+        {% elif d.shares_with %}
+        {#- One filesystem rendered three times reads as three volumes with
+            three independent headrooms. It is one, and the engine filling it
+            takes the audit log and this dashboard with it. Matched on the
+            device id, never on the figures happening to be equal. -#}
+        <td colspan="4" class="muted small">same filesystem as
+          <strong>{{ d.shares_with }}</strong> — one volume, one headroom, not a
+          second allowance</td>
         {% else %}
         <td class="mono">{{ d.used|size }}</td>
         <td class="mono">{{ d.free|size }}</td>

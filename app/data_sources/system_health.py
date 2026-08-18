@@ -478,18 +478,74 @@ def _container_row(entry: RosterEntry | None, name: str,
     }
 
 
+#: Start times inside one minute are treated as the same event. A `compose up`
+#: brings a stack up over a few seconds, so second-granularity would read an
+#: ordinary deploy as six independent restarts; a minute is coarse enough to
+#: absorb that and far finer than the thing being detected.
+_COHORT_BUCKET_SEC = 60
+
+
+def _mark_restart_cohorts(rows: list[dict[str, Any]]) -> None:
+    """Flag a container that restarted WITHOUT its stack-mates.
+
+    Added within the hour of the first live read, because that read showed the
+    number this page tells you to look at first cannot answer the question it
+    was pointed at. On the box: engine up 1h48m, api / signing / watchdog up
+    5h16m, redis up 3 weeks — the engine had plainly restarted on its own —
+    and its ``RestartCount`` read **0**.
+
+    Docker's ``RestartCount`` counts restarts made by the container's *restart
+    policy*. Autoheal issues ``POST /containers/{id}/restart``, which is a
+    manual restart and does not increment it; and a `compose` recreate makes a
+    new container, which starts the count over. So the counter is blind to
+    exactly the two events worth catching, and reads 0 through both.
+
+    Uptime is not blind to either — a restart always resets it. What uptime
+    alone cannot say is whether the whole stack went down together (a deploy,
+    expected) or one container went down by itself (autoheal, or a crash under
+    ``restart: always``). Grouping the stack's start times answers that with no
+    invented threshold: a container alone in its bucket restarted alone.
+    """
+    by_stack: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if row.get("uptime_sec") is None:
+            continue
+        by_stack.setdefault(row["stack"], []).append(row)
+
+    for stack_rows in by_stack.values():
+        buckets: dict[int, list[dict[str, Any]]] = {}
+        for row in stack_rows:
+            key = int(row["uptime_sec"] // _COHORT_BUCKET_SEC)
+            buckets.setdefault(key, []).append(row)
+        # One container up on its own while ANY sibling has been up longer.
+        # "Alone in its bucket" is not enough by itself: on a stack of one,
+        # or where every container started at a different minute because the
+        # host was slow, that would fire on a healthy deploy.
+        newest_alone = [b for b in buckets.values() if len(b) == 1]
+        for group in newest_alone:
+            row = group[0]
+            older = [r for r in stack_rows
+                     if r is not row and r["uptime_sec"] > row["uptime_sec"] + _COHORT_BUCKET_SEC]
+            if not older:
+                continue
+            row["restarted_alone"] = True
+            row["stack_mates_older"] = len(older)
+            row["oldest_mate_uptime_sec"] = max(r["uptime_sec"] for r in older)
+
+
 async def collect_containers() -> dict[str, Any]:
     inspect_map, inspect_probe = await _inspect_all()
     ps_map, ps_probe = await _docker_ps()
     stats_map, stats_probe = await _docker_stats()
 
     blind = not inspect_map and not ps_map
-    rows = [
+    rows: list[dict[str, Any]] = [
         _container_row(ROSTER_BY_NAME[e.name], e.name,
                        inspect_map.get(e.name), ps_map.get(e.name),
                        stats_map.get(e.name))
         for e in ROSTER
     ]
+    _mark_restart_cohorts(rows)
     # Running and undeclared. Not a fault — but a stray container on this box is
     # something the owner should see under its own name rather than not at all.
     unexpected = [
@@ -508,6 +564,7 @@ async def collect_containers() -> dict[str, Any]:
         "absent": [r["name"] for r in rows if not r["present"]],
         "not_running": [r["name"] for r in rows if r["present"] and r["verdict"] not in {"running", "starting"}],
         "unhealthy": [r["name"] for r in rows if r["verdict"] == "unhealthy"],
+        "restarted_alone": [r["name"] for r in rows if r.get("restarted_alone")],
         "probes": {
             "inspect": inspect_probe.summary(),
             "ps": ps_probe.summary(),
@@ -633,6 +690,12 @@ def collect_host(engine_data_dir: str) -> dict[str, Any]:
     except OSError:
         out["loadavg"] = None
 
+    #: Three mounts, and on this box all three are the SAME filesystem — the
+    #: first live read rendered 35.0 GiB / 144.3 GiB three times, which reads
+    #: as three volumes with three independent headrooms. It is one, and the
+    #: engine filling it takes the audit log and the dashboard with it. The
+    #: device id says so; a repeated number does not.
+    seen_devices: dict[int, str] = {}
     for label, path, why in (
         ("Engine data volume", engine_data_dir,
          "every ledger, the closed-signal record and the SQLite user store"),
@@ -641,6 +704,7 @@ def collect_host(engine_data_dir: str) -> dict[str, Any]:
     ):
         try:
             usage = shutil.disk_usage(path)
+            device = os.stat(path).st_dev
         except OSError as exc:
             out["disks"].append({
                 "label": label, "path": path, "why": why,
@@ -651,8 +715,13 @@ def collect_host(engine_data_dir: str) -> dict[str, Any]:
             "label": label, "path": path, "why": why,
             "total": usage.total, "used": usage.used, "free": usage.free,
             "used_pct": round(usage.used / usage.total * 100, 1) if usage.total else None,
+            # The first path on a device owns the reading; the rest name it and
+            # do not repeat the figures.
+            "shares_with": seen_devices.get(device),
             "error": None,
         })
+        seen_devices.setdefault(device, label)
+    out["distinct_filesystems"] = len(seen_devices)
     return out
 
 

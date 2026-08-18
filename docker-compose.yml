@@ -78,6 +78,29 @@ services:
       # tokens the web app registers. Same named volume, same /data path.
       - ops-data:/data
       - /var/run/docker.sock:/var/run/docker.sock
+    # The image's own HEALTHCHECK fetches http://localhost:8000/healthz, which
+    # is right for the `ops` web service and impossible here: this service
+    # overrides the command to `python -m app.agent.runner` and serves no HTTP.
+    # So the agent reported UNHEALTHY by construction — `failing streak 14`
+    # eight minutes after a deploy on 2026-08-18, with a urllib connection
+    # traceback as its last output — and nothing restarted, because this
+    # container is not autoheal-labelled.
+    #
+    # That is worse than a false alarm. A health signal that can never be true
+    # is a dead instrument: red on it means nothing, so red on it gets ignored,
+    # on the one container whose failure is otherwise silent. It sat in
+    # `docker ps` unread until /system rendered the healthcheck's own output.
+    #
+    # Replaced with the agent's real liveness — the heartbeat it stamps after
+    # every cycle. start_period covers the first poll interval, so a fresh
+    # container is `starting` rather than failing while it waits for its first
+    # cycle to complete.
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.agent.healthcheck"]
+      interval: 60s
+      timeout: 10s
+      start_period: 150s
+      retries: 3
     depends_on:
       - 360ce-ops-redis
 
