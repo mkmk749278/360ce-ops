@@ -1694,6 +1694,39 @@ all nine*, which is precisely the state the roster exists to surface. **A
 docstring asserting a property the code beneath it does not have**, for the
 sixth time in these two repos.
 
+### The first live read found two more, one of them in the guidance itself
+
+Within the hour of deploying, reading the real box corrected the page's own
+headline:
+
+- **`RestartCount` cannot see an autoheal restart, and this page told the owner
+  to read it first.** On the box the engine was up 1h48m beside an api, signing
+  and watchdog all up 5h16m and a redis up three weeks — it had plainly
+  restarted on its own — and its count read **0**. Docker increments
+  `RestartCount` for restarts made by the container's *restart policy*;
+  autoheal issues a manual restart, which does not, and a `compose` recreate
+  builds a new container, which starts the count over. **Blind to both events
+  worth catching.** Uptime is blind to neither, but alone it cannot separate a
+  whole-stack deploy from one container going down by itself — so the stack's
+  start times are bucketed by the minute and a container alone in its bucket
+  *while a stack-mate has been up longer* is badged `restarted alone`. Both
+  halves of that condition are load-bearing: the longest-running container is
+  always alone at the far end and is the one thing that demonstrably did not
+  restart. This is the *"check the direction of every recommendation, not only
+  its premise"* rule — the premise (restarts empty the snapshot keys) was
+  right and the instrument named for it was the wrong one.
+- **One filesystem rendered three times.** `/engine-data`, `/data` and `/` all
+  read `35.0 GiB / 144.3 GiB` because they are the same device — three rows
+  implying three independent headrooms over one volume, where the engine
+  filling it takes the audit log and the dashboard with it. Matched on
+  `st_dev`, never on the figures happening to be equal: two genuinely separate
+  volumes at the same usage would otherwise be collapsed into one.
+
+Both were invisible to the suite and to the local render, because the local box
+has no docker and no such mounts. **Read the rendered page against production,
+not only against a fixture** — the 2026-08-06 panel-surf lesson, arriving one
+hour after deploy instead of a week later.
+
 And one from Jinja: **a payload key must not collide with a dict method.**
 `redis.keys` resolved to the dict's own `.keys` *method* before the item of that
 name, so the template iterated a builtin and 500'd. Renamed `key_rows`. The nav

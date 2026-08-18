@@ -477,3 +477,88 @@ class TestTimestampParsing:
         therefore worse than a blank."""
         assert sh._parse_iso(stamp) is None
         assert sh._age_sec(None) is None
+
+
+class TestRestartCohorts:
+    """The first live read showed the number this page led with cannot answer
+    the question it was pointed at.
+
+    On the box: engine up 1h48m beside an api, signing and watchdog all up
+    5h16m and a redis up three weeks — the engine had plainly restarted on its
+    own — and its ``RestartCount`` read **0**. Docker counts restart-*policy*
+    restarts there; autoheal issues a manual restart, which does not increment
+    it, and a compose recreate starts the count over. Blind to both events
+    worth catching.
+    """
+
+    @staticmethod
+    def _rows(*pairs):
+        return [{"name": n, "stack": "engine", "uptime_sec": u} for n, u in pairs]
+
+    def test_a_container_that_restarted_alone_is_flagged(self):
+        rows = self._rows(
+            ("360scalp-v2-engine", 6480),      # 1h48m
+            ("360scalp-v2-api", 18960),        # 5h16m
+            ("360scalp-v2-signing", 18962),
+            ("360scalp-v2-watchdog", 18965),
+        )
+        sh._mark_restart_cohorts(rows)
+        by_name = {r["name"]: r for r in rows}
+        assert by_name["360scalp-v2-engine"].get("restarted_alone") is True
+        assert by_name["360scalp-v2-engine"]["stack_mates_older"] == 3
+        for other in ("360scalp-v2-api", "360scalp-v2-signing", "360scalp-v2-watchdog"):
+            assert not by_name[other].get("restarted_alone"), other
+
+    def test_an_ordinary_deploy_flags_nothing(self):
+        """`compose up` brings a stack up over a few seconds. Second
+        granularity would read that as six independent restarts, which is why
+        the bucket is a minute."""
+        rows = self._rows(
+            ("360scalp-v2-engine", 300),
+            ("360scalp-v2-api", 303),
+            ("360scalp-v2-signing", 306),
+            ("360scalp-v2-watchdog", 310),
+        )
+        sh._mark_restart_cohorts(rows)
+        assert not any(r.get("restarted_alone") for r in rows)
+
+    def test_the_oldest_container_is_never_flagged(self):
+        """Alone in its bucket is not enough on its own: the longest-running
+        container in a stack is always alone at the far end, and it is the one
+        thing that demonstrably did not restart."""
+        rows = self._rows(("a", 100), ("b", 5000), ("c", 5002))
+        sh._mark_restart_cohorts(rows)
+        by_name = {r["name"]: r for r in rows}
+        assert by_name["a"].get("restarted_alone") is True
+        assert not by_name["b"].get("restarted_alone")
+
+    def test_stacks_are_not_compared_against_each_other(self):
+        """The ops containers redeploy on a different schedule from the
+        engine's. Pooling them would flag every ops deploy as an engine fault."""
+        rows = [
+            {"name": "360scalp-v2-engine", "stack": "engine", "uptime_sec": 18000},
+            {"name": "360ce-ops", "stack": "ops", "uptime_sec": 40},
+        ]
+        sh._mark_restart_cohorts(rows)
+        assert not any(r.get("restarted_alone") for r in rows)
+
+    def test_a_container_with_no_uptime_is_skipped_not_flagged(self):
+        rows = [{"name": "gone", "stack": "engine", "uptime_sec": None},
+                {"name": "up", "stack": "engine", "uptime_sec": 9000}]
+        sh._mark_restart_cohorts(rows)
+        assert not any(r.get("restarted_alone") for r in rows)
+
+
+class TestOneFilesystemShownThreeTimes:
+    def test_paths_on_one_device_report_once(self):
+        """The first live read rendered `35.0 GiB / 144.3 GiB` three times —
+        three rows implying three independent headrooms over one volume, where
+        the engine filling it takes the audit log and the dashboard with it.
+        Matched on the device id, never on the figures happening to be equal."""
+        host = sh.collect_host("/")
+        assert host["distinct_filesystems"] >= 1
+        primary = [d for d in host["disks"] if not d.get("error") and not d.get("shares_with")]
+        shared = [d for d in host["disks"] if not d.get("error") and d.get("shares_with")]
+        assert len(primary) == host["distinct_filesystems"]
+        for d in shared:
+            assert d["shares_with"] in {p["label"] for p in primary}
