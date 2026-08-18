@@ -307,9 +307,15 @@ def _parse_iso(value: str | None) -> datetime | None:
                 break
         raw = f"{head}.{frac[:6]}{offset}"
     try:
-        return datetime.fromisoformat(raw)
+        parsed = datetime.fromisoformat(raw)
     except ValueError:
         return None
+    # Always aware. Docker stamps `Z` so this is defensive — but a naive
+    # datetime here subtracts against an aware `now()` and raises TypeError,
+    # which would 500 the one page you open when things are already broken.
+    # A page whose whole job is to answer during an outage must not have a
+    # shape of input that can take it down.
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
 def _age_sec(when: datetime | None) -> float | None:

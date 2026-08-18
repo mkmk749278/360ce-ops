@@ -450,3 +450,30 @@ class TestPartialInspect:
         found, probe = await sh._inspect_all()
         assert "360scalp-v2-engine" in found
         assert probe.cause == "exec_error"
+
+
+class TestTimestampParsing:
+    """Docker stamps RFC3339 with nanoseconds, which `fromisoformat` refuses,
+    and the page that must answer during an outage must have no input shape
+    that can take it down."""
+
+    @pytest.mark.parametrize("stamp", [
+        "2026-08-18T06:35:12.123456789Z",
+        "2026-08-18T06:35:12.123456789+00:00",
+        "2026-08-18T06:35:12.123456789-05:00",
+        "2026-08-18T06:35:12Z",
+        "2026-08-18T06:35:12.123456789",      # no zone at all
+    ])
+    def test_every_shape_yields_an_age_rather_than_raising(self, stamp):
+        when = sh._parse_iso(stamp)
+        assert when is not None, stamp
+        assert when.tzinfo is not None, "naive would TypeError against an aware now()"
+        assert isinstance(sh._age_sec(when), float)
+
+    @pytest.mark.parametrize("stamp", [None, "", "0001-01-01T00:00:00Z", "not a date"])
+    def test_an_unusable_stamp_is_none_never_an_age_of_zero(self, stamp):
+        """`0001-01-01` is Docker's own "never" for FinishedAt. An age computed
+        from it would render as two thousand years, which is a number and
+        therefore worse than a blank."""
+        assert sh._parse_iso(stamp) is None
+        assert sh._age_sec(None) is None
