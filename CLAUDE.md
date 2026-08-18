@@ -1727,6 +1727,41 @@ has no docker and no such mounts. **Read the rendered page against production,
 not only against a fixture** — the 2026-08-06 panel-surf lesson, arriving one
 hour after deploy instead of a week later.
 
+### A health signal that can never be true is a dead instrument
+
+Found the same way, one page-load later: `360ce-ops-agent` rendering
+**unhealthy, failing streak 14** with a urllib connection traceback as its last
+healthcheck output. Both ops services run the **same image**, and that image
+carries one `HEALTHCHECK` — fetch `http://localhost:8000/healthz`. Right for the
+`ops` web container; impossible for this one, which overrides the command to
+`python -m app.agent.runner` and serves no HTTP at all.
+
+Nothing restarted, because that container is not autoheal-labelled — and that is
+the actual defect rather than a mitigation. **Red that can never be anything but
+red is not a false alarm, it is a dead instrument**: it means nothing, so it gets
+ignored, on the one container whose failure is otherwise silent (a dead pager
+sends no message). It had been sitting in `docker ps` unread until `/system`
+rendered the healthcheck's own output — the status was always there, the
+*reason* was not.
+
+Replaced with the agent's real liveness, the heartbeat it stamps after every
+cycle. Two deliberate refusals, both of which would otherwise restart a working
+agent:
+
+- **A failed cycle is not a failed healthcheck.** A cycle that ran and reported
+  failures is the agent *working*; failing the container on it kills the one
+  process able to say what failed. `cycle_ok` is published and rendered, never a
+  restart condition.
+- **An unreachable alert store is not a dead agent.** It keeps detecting with
+  in-memory state, so that case *refuses to grade* rather than failing — the
+  same shape as `blind` refusing to convict redis, one layer down.
+
+And the guard is on the call site, not the method: `defining a check is not
+using it`, so a test parses the compose file and asserts the agent service
+overrides the image probe *and* declares a `start_period` (a fresh container has
+no heartbeat until its first cycle completes), with a second test asserting the
+image still probes `/healthz` so the web container cannot silently lose its own.
+
 And one from Jinja: **a payload key must not collide with a dict method.**
 `redis.keys` resolved to the dict's own `.keys` *method* before the item of that
 name, so the template iterated a builtin and 500'd. Renamed `key_rows`. The nav
