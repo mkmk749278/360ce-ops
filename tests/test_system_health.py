@@ -505,9 +505,43 @@ class TestRestartCohorts:
         sh._mark_restart_cohorts(rows)
         by_name = {r["name"]: r for r in rows}
         assert by_name["360scalp-v2-engine"].get("restarted_alone") is True
-        assert by_name["360scalp-v2-engine"]["stack_mates_older"] == 3
+        assert by_name["360scalp-v2-engine"]["deploy_cohort_size"] == 3
         for other in ("360scalp-v2-api", "360scalp-v2-signing", "360scalp-v2-watchdog"):
             assert not by_name[other].get("restarted_alone"), other
+
+    def test_a_container_OLDER_than_the_deploy_is_not_a_restart(self):
+        """The false positive the first cut shipped, caught by reading the live
+        page an hour later.
+
+        `360scalp-v2-redis` was up 21 days and got badged "went down by itself"
+        purely because `autoheal` had been up 25 — it was alone in its bucket
+        with an older stack-mate, which was the old rule. On a long-lived stack
+        that flags everything except the single oldest container. Redis and
+        autoheal are older than the deploy cohort because nothing changed under
+        them: that is history, not an event.
+        """
+        rows = self._rows(
+            ("360scalp-v2-engine", 8880),        # 2h28m — after the deploy
+            ("360scalp-v2-api", 21300),          # 5h55m ┐
+            ("360scalp-v2-signing", 21302),      #        ├ the deploy cohort
+            ("360scalp-v2-watchdog", 21305),     # 5h55m ┘
+            ("360scalp-v2-redis", 1897200),      # 21d 23h — predates it
+            ("360scalp-v2-autoheal", 2160000),   # 25d — predates it
+        )
+        sh._mark_restart_cohorts(rows)
+        by_name = {r["name"]: r for r in rows}
+        assert by_name["360scalp-v2-engine"].get("restarted_alone") is True
+        for untouched in ("360scalp-v2-redis", "360scalp-v2-autoheal",
+                          "360scalp-v2-api", "360scalp-v2-signing",
+                          "360scalp-v2-watchdog"):
+            assert not by_name[untouched].get("restarted_alone"), untouched
+
+    def test_no_identifiable_deploy_flags_nothing(self):
+        """When no two containers share a bucket there is no deploy to date the
+        stack against, so this refuses rather than guessing which one is odd."""
+        rows = self._rows(("a", 100), ("b", 5000), ("c", 90000))
+        sh._mark_restart_cohorts(rows)
+        assert not any(r.get("restarted_alone") for r in rows)
 
     def test_an_ordinary_deploy_flags_nothing(self):
         """`compose up` brings a stack up over a few seconds. Second
@@ -523,14 +557,14 @@ class TestRestartCohorts:
         assert not any(r.get("restarted_alone") for r in rows)
 
     def test_the_oldest_container_is_never_flagged(self):
-        """Alone in its bucket is not enough on its own: the longest-running
-        container in a stack is always alone at the far end, and it is the one
-        thing that demonstrably did not restart."""
+        """The longest-running container in a stack is the one thing that
+        demonstrably did not restart."""
         rows = self._rows(("a", 100), ("b", 5000), ("c", 5002))
         sh._mark_restart_cohorts(rows)
         by_name = {r["name"]: r for r in rows}
         assert by_name["a"].get("restarted_alone") is True
         assert not by_name["b"].get("restarted_alone")
+        assert not by_name["c"].get("restarted_alone")
 
     def test_stacks_are_not_compared_against_each_other(self):
         """The ops containers redeploy on a different schedule from the

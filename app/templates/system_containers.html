@@ -37,9 +37,14 @@
     Uptime is blind to neither, because a restart always resets it. What uptime
     alone cannot say is whether the <em>whole stack</em> went down together — an
     ordinary deploy — or one container went down by itself. So the stack's start
-    times are grouped: a container alone in its minute while a stack-mate has
-    been up longer is badged <span class="badge badge-warn">restarted alone</span>,
-    and that badge appearing twice in a row on the engine is the autoheal loop.
+    times are grouped: the largest group <em>is</em> the last deploy, and
+    anything younger than it came back afterwards on its own — badged
+    <span class="badge badge-warn">restarted alone</span>. That badge appearing
+    twice in a row on the engine is the autoheal loop. Containers <em>older</em>
+    than the deploy cohort are not flagged: redis and autoheal have been up for
+    weeks because nothing changed under them, which is history rather than an
+    event. The first cut of this rule flagged them, and reading this page an
+    hour after shipping it is what caught that.
     <code>RestartCount</code> stays in the table as what it honestly is — the
     policy-restart count — rather than as the headline.
   </p>
@@ -104,8 +109,9 @@
       <td class="mono">{{ c.uptime_sec|duration }}
         {%- if c.restarted_alone %}
         <div><span class="badge badge-warn">restarted alone</span></div>
-        <div class="muted small">{{ c.stack_mates_older }} stack-mate{{ '' if c.stack_mates_older == 1 else 's' }}
-          up longer (oldest {{ c.oldest_mate_uptime_sec|duration }}) — this one went down by itself</div>
+        <div class="muted small">younger than this stack's last deploy
+          ({{ c.deploy_cohort_size }} containers came up {{ c.deploy_uptime_sec|duration }} ago) —
+          so this one came back after it, on its own</div>
         {%- endif %}
       </td>
       <td class="mono">{{ c.cpu_pct or '—' }}</td>
