@@ -1,0 +1,35 @@
+{#- The headline, shared by all three System pages.
+
+    Derived from the same `chain` the liveness page tables out, never computed
+    a second time: a summary that disagrees with the table under it is the
+    defect this repo has paid for under three different names. Three states,
+    because "we could not measure this link" is not "this link is fine" — an
+    unknown renders as its own badge and never as green. -#}
+<div class="card">
+  {% if broken %}
+    <span class="badge badge-bad">SYSTEM DEGRADED</span>
+    <strong>{{ broken|length }} link{{ '' if broken|length == 1 else 's' }} broken:</strong>
+    {% for s in broken %}<a href="/system/liveness#{{ s.key }}">{{ s.label }}</a>{{ ', ' if not loop.last }}{% endfor %}.
+    {%- if unknown %}
+    <span class="muted">And {{ unknown|length }} more could not be measured — broken outranks
+    unknown here, so read the table before concluding the rest is fine.</span>
+    {%- endif %}
+  {% elif unknown %}
+    <span class="badge badge-warn">PARTLY BLIND</span>
+    Everything measurable is up, and
+    {{ unknown|length }} link{{ '' if unknown|length == 1 else 's' }} could not be measured:
+    {% for s in unknown %}<a href="/system/liveness#{{ s.key }}">{{ s.label }}</a>{{ ', ' if not loop.last }}{% endfor %}.
+    <span class="muted">An unmeasured link is not a passing one.</span>
+  {% elif degraded %}
+    <span class="badge badge-warn">RUNNING · {{ degraded|length }} caveat{{ '' if degraded|length == 1 else 's' }}</span>
+    {% for s in degraded %}{{ s.label }}: {{ s.detail }}{{ ' · ' if not loop.last }}{% endfor %}
+  {% else %}
+    <span class="badge badge-ok">ALL LINKS UP</span>
+    Every hop from the engine process to this page answered.
+  {% endif %}
+  <div class="muted small" style="margin-top:.4rem;">
+    Measured on this request — nothing on these three pages is cached, because
+    the question is whether the box is answering <em>now</em> and a cache
+    answers it with a memory of when it last did.
+  </div>
+</div>

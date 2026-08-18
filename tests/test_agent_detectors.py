@@ -374,12 +374,27 @@ class TestRedisStalenessDetector:
         ``docker exec`` against a stopped redis container produces no stdout,
         so the probe returned "" and the detector called it healthy. The one
         condition it exists to catch was the one guaranteed to stay silent.
+
+        **The property survives; the fingerprint moved (2026-08-18.)** The
+        premise in the paragraph above turned out to be wrong about *this*
+        case: ``docker exec`` against a stopped container exits **non-zero**,
+        so it lands in ``exec_error`` and is covered by the parametrised test
+        below. rc=0 with empty stdout is the opposite situation — redis
+        answering nil for a missing key — and that is now
+        ``snapshot_key_missing``, which points at the engine. Both still page
+        HIGH; neither reads as all-clear, which is the property this test was
+        written to protect. See ``tests/test_system_health.py`` for the split.
         """
         d = RedisStalenessDetector()
-        results = d.check(RedisProbe(ok=False, cause="no_output", returncode=0))
-        assert len(results) == 1
-        assert results[0].severity == "HIGH"
-        assert results[0].fingerprint == "redis_unreachable"
+        for probe, expected in (
+            (RedisProbe(ok=False, cause="no_output", returncode=0), "snapshot_key_missing"),
+            (RedisProbe(ok=False, cause="exec_error", returncode=1,
+                        detail="container is not running"), "redis_unreachable"),
+        ):
+            results = d.check(probe)
+            assert len(results) == 1
+            assert results[0].severity == "HIGH"
+            assert results[0].fingerprint == expected
 
     @pytest.mark.parametrize(
         "probe, must_contain",

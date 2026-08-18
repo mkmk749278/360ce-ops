@@ -29,6 +29,7 @@ from app.agent.detectors import (
     SignalSilenceDetector,
     SigningHealthDetector,
 )
+from app.agent import heartbeat
 from app.agent.alert_state import AlertStateStore
 from app.agent.notifier import Notifier
 from app.device_registry import DeviceRegistry
@@ -361,6 +362,23 @@ async def run() -> None:
             await notifier.ping_heartbeat()
         else:
             log.debug("Cycle had failures — skipping healthchecks.io ping")
+
+        # ---- Tier 3: the agent's own liveness, where ops can see it ---
+        # The dead-man's switch above is deliberately NOT pinged on a failed
+        # cycle, so on that channel a degraded agent and a dead one look the
+        # same. This one is published either way and carries `cycle_ok`, so
+        # `/system/liveness` can tell them apart. Best-effort by construction:
+        # a heartbeat that could break a detection cycle would be a monitoring
+        # surface that reduces monitoring.
+        await heartbeat.publish(
+            redis_client,
+            cycle_ok=cycle_ok,
+            alerts_firing=len(triggered_fingerprints),
+            detector_count=len(all_results),
+            redis_probe_summary=redis_probe.summary(),
+            redis_probe_ok=redis_probe.ok,
+            poll_interval_s=poll_interval,
+        )
 
         await asyncio.sleep(poll_interval)
 

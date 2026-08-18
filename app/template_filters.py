@@ -91,8 +91,49 @@ def secs(value: Any) -> str:
     return f"{out:.1f}"
 
 
+def duration(value: Any) -> str:
+    """An age or uptime in seconds, in units a human reads at a glance.
+
+    ``secs`` is right for a feed age, where the interesting range is a few
+    seconds and one decimal matters. A container uptime lives in the range of
+    hours to weeks, where ``1382.0541844088584`` is fourteen digits of noise
+    and ``23m`` is the answer. Different question, different filter — rendering
+    an uptime through ``secs`` is how a page stops being readable.
+    """
+    out = _as_float(value)
+    if out is None:
+        return EMDASH
+    out = abs(out)
+    if out < 60:
+        return f"{out:.0f}s"
+    if out < 3600:
+        return f"{out / 60:.0f}m"
+    if out < 86400:
+        hours, minutes = divmod(int(out // 60), 60)
+        return f"{hours}h {minutes:02d}m" if minutes else f"{hours}h"
+    days = int(out // 86400)
+    hours = int((out % 86400) // 3600)
+    return f"{days}d {hours}h" if hours else f"{days}d"
+
+
+def size(value: Any) -> str:
+    """Bytes, in binary units. ``None`` renders the em-dash like every other
+    filter here — a disk we could not stat is not a disk with zero bytes."""
+    out = _as_float(value)
+    if out is None:
+        return EMDASH
+    step = 1024.0
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(out) < step or unit == "TiB":
+            return f"{out:.0f} {unit}" if unit == "B" else f"{out:.1f} {unit}"
+        out /= step
+    return f"{out:.1f} TiB"
+
+
 def register(env) -> None:
     """Attach the filters to a Jinja environment."""
     env.filters["price"] = price
     env.filters["pct"] = pct
     env.filters["secs"] = secs
+    env.filters["duration"] = duration
+    env.filters["size"] = size

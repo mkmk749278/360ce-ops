@@ -33,7 +33,7 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 #: Prefixes whose literal pages must appear in the nav. A page outside these is
 #: not necessarily a fault (partials, exports, control POST targets), so the
 #: rule is scoped rather than global.
-NAV_OWNED_PREFIXES = ("/signals/",)
+NAV_OWNED_PREFIXES = ("/signals/", "/system")
 
 #: Registered paths that are deliberately not nav destinations.
 NAV_EXEMPT: set[str] = set()   # `{}` is a dict — this bit me writing the test.

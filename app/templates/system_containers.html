@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Containers · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Containers — what is running on the box</h1>
+
+{% include "_system_verdict.html" %}
+
+<p class="muted">
+  Every container in both stacks, from Docker's own state rather than inferred
+  from data a still-warm cache is serving. That is the one check that cannot be
+  fooled by stale data, because it reads none: on 2026-07-27 an interrupted
+  <code>compose</code> recreate left the engine <code>Exited (137)</code> and
+  redis <code>Created</code> for two and a half hours while every other detector
+  read engine health out of a frozen api cache.
+</p>
+
+<div class="card">
+  <h2>Read <strong>Restarts</strong> first</h2>
+  <p class="muted small">
+    The engine carries <code>autoheal=true</code> and a healthcheck that tests
+    <em>work</em> — scanner-heartbeat freshness, not just process-up — so a
+    wedged scan loop makes the container unhealthy and the autoheal sidecar
+    restarts it. That is the design and it is usually right. But a restart takes
+    every <code>snapshot:*</code> key past its TTL, which empties this
+    dashboard, and a <em>loop</em> of them is invisible in every other number on
+    this page: uptime reads small and healthy, status reads <code>Up</code>, and
+    the count is the only thing that says it has happened forty times.
+    Neither repo rendered it anywhere before 2026-08-18.
+  </p>
+  <p class="muted small">
+    A count that is non-zero is not itself a fault — a deploy restarts things.
+    A count that is <em>climbing between two loads of this page</em> is.
+  </p>
+</div>
+
+{% if containers.blind %}
+<div class="flash flash-err">
+  <strong>Blind — <code>docker</code> could not be asked.</strong>
+  {{ containers.blind_reason }}
+  <div class="muted">Reporting every container as absent would be a lie about
+  which thing broke, so nothing below is graded. Either the socket is not
+  mounted into this container, or the daemon is not answering — and the second
+  one is a much bigger finding than anything this page was built to show.</div>
+</div>
+{% else %}
+
+<table class="data-table">
+  <thead>
+    <tr>
+      <th>Container</th><th>State</th><th>Health</th><th>Restarts</th>
+      <th>Uptime</th><th>CPU</th><th>Memory</th><th>Image</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for c in containers.rows %}
+    <tr>
+      <td>
+        <span class="mono">{{ c.name }}</span>
+        {% if c.critical %}<span class="badge badge-muted" title="Down means the money path or the pager is affected, not just a page">core</span>{% endif %}
+        <div class="muted small">{{ c.role }}</div>
+      </td>
+      <td>
+        {% if c.verdict == 'running' %}<span class="badge badge-ok">running</span>
+        {% elif c.verdict == 'starting' %}<span class="badge badge-warn">starting</span>
+        {% elif c.verdict == 'unhealthy' %}<span class="badge badge-bad">unhealthy</span>
+        {% elif c.verdict == 'restarting' %}<span class="badge badge-bad">restarting</span>
+        {% elif c.verdict == 'stopped' %}<span class="badge badge-bad">stopped</span>
+        {% else %}<span class="badge badge-bad">absent</span>{% endif %}
+        <div class="muted small">{{ c.status_text or '—' }}</div>
+        {%- if c.exit_code is not none and c.verdict == 'stopped' %}
+        <div class="muted small">exit {{ c.exit_code }}{% if c.oom_killed %} · <strong>OOM-killed</strong>{% endif %}
+          {%- if c.stopped_for_sec %} · down {{ c.stopped_for_sec|duration }}{% endif %}</div>
+        {%- endif %}
+      </td>
+      <td>
+        {#- `none` and `starting` and `healthy` are three different facts. A
+            container with no healthcheck configured is not a passing one, and
+            rendering both as blank is how "nothing is testing the scan loop"
+            reads as "the scan loop is fine". -#}
+        {% if c.health is none %}<span class="muted" title="this container declares no healthcheck">not configured</span>
+        {% elif c.health == 'healthy' %}<span class="badge badge-ok">healthy</span>
+        {% elif c.health == 'starting' %}<span class="badge badge-warn">starting</span>
+        {% else %}<span class="badge badge-bad">{{ c.health }}</span>
+          <div class="muted small">failing streak {{ c.health_failing_streak }}</div>
+        {% endif %}
+      </td>
+      <td class="mono">
+        {% if c.restart_count is none %}—
+        {% elif c.restart_count == 0 %}0
+        {% else %}<strong>{{ c.restart_count }}</strong>{% endif %}
+      </td>
+      <td class="mono">{{ c.uptime_sec|duration }}</td>
+      <td class="mono">{{ c.cpu_pct or '—' }}</td>
+      <td class="mono">{{ c.mem_usage or '—' }}<div class="muted small">{{ c.mem_pct or '' }}</div></td>
+      <td class="muted small mono">{{ c.image or '—' }}</td>
+    </tr>
+    {%- if c.last_health and c.health not in (none, 'healthy') %}
+    <tr>
+      <td colspan="8" class="small">
+        <span class="muted">Last healthcheck (exit {{ c.last_health.exit_code }}):</span>
+        <pre class="mono small">{{ c.last_health.output or '(no output)' }}</pre>
+      </td>
+    </tr>
+    {%- endif %}
+    {%- if not c.present %}
+    <tr><td colspan="8" class="small muted">{{ c.impact }}</td></tr>
+    {%- endif %}
+  {% endfor %}
+  </tbody>
+</table>
+
+{% if not containers.stats_available %}
+<p class="muted small">
+  <span class="badge badge-warn">NO RESOURCE READING</span>
+  <code>docker stats</code> did not answer ({{ containers.probes.stats }}), so
+  the CPU and memory columns are blank rather than zero. The table above is
+  unaffected — each probe degrades on its own, because a busy daemon must not
+  be able to empty the census that says <em>why</em> it is busy.
+</p>
+{% endif %}
+
+{% if containers.unexpected %}
+<div class="card">
+  <h2>Running and undeclared <span class="muted">({{ containers.unexpected|length }})</span></h2>
+  <p class="muted small">
+    Not a fault — but a roster can only ever show what somebody already typed,
+    so anything else on this box renders here under its own name rather than
+    not at all. A list of what is present is silent by construction about what
+    is missing; that is what the roster above is for, and this is its other half.
+  </p>
+  <table class="data-table">
+    <thead><tr><th>Container</th><th>State</th><th>Uptime</th><th>Image</th></tr></thead>
+    <tbody>
+    {% for c in containers.unexpected %}
+      <tr>
+        <td class="mono">{{ c.name }} <span class="badge badge-muted">unexpected</span></td>
+        <td>{{ c.status_text or c.verdict }}</td>
+        <td class="mono">{{ c.uptime_sec|duration }}</td>
+        <td class="muted small mono">{{ c.image or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endif %}
+
+<div class="card">
+  <h2>Host — the resources all of them share</h2>
+  <p class="muted small">
+    Load average inside a container is the <em>host's</em>, because containers
+    share the kernel. It is the number that separates "redis is gone" from "the
+    box was too busy to start a <code>docker exec</code> before the probe's
+    deadline" — two causes that produce the same alert and have nothing else in
+    common.
+  </p>
+  <div class="kv-grid">
+    <div class="kv"><span class="muted">Load (1 / 5 / 15m)</span>
+      <strong class="mono">
+        {%- if host.loadavg %}{{ '%.2f / %.2f / %.2f'|format(host.loadavg[0], host.loadavg[1], host.loadavg[2]) }}{% else %}—{% endif %}
+      </strong></div>
+    <div class="kv"><span class="muted">CPUs</span><strong class="mono">{{ host.cpu_count or '—' }}</strong></div>
+  </div>
+  <table class="data-table">
+    <thead><tr><th>Volume</th><th>Used</th><th>Free</th><th>Total</th><th>%</th></tr></thead>
+    <tbody>
+    {% for d in host.disks %}
+      <tr>
+        <td>{{ d.label }}<div class="muted small mono">{{ d.path }}</div>
+          <div class="muted small">{{ d.why }}</div></td>
+        {% if d.error %}
+        <td colspan="4" class="muted small">could not stat: {{ d.error }}</td>
+        {% else %}
+        <td class="mono">{{ d.used|size }}</td>
+        <td class="mono">{{ d.free|size }}</td>
+        <td class="mono">{{ d.total|size }}</td>
+        <td class="mono">{% if d.used_pct and d.used_pct >= 90 %}<span class="badge badge-bad">{{ d.used_pct }}%</span>
+          {%- elif d.used_pct and d.used_pct >= 80 %}<span class="badge badge-warn">{{ d.used_pct }}%</span>
+          {%- else %}{{ d.used_pct }}%{% endif %}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{#- Three identical copies of one 200-character docker error is noise, and a
+    diagnostic footer nobody reads is the same as no footer. Grouped by what
+    the probe SAID, so a shared cause reads as one cause. -#}
+{%- set ns = namespace(seen=[]) %}
+{%- for label, summary in [('inspect', containers.probes.inspect),
+                           ('ps', containers.probes.ps),
+                           ('stats', containers.probes.stats)] %}
+  {%- if summary not in ns.seen %}{% set ns.seen = ns.seen + [summary] %}{% endif %}
+{%- endfor %}
+<p class="muted small">
+  Probes:
+  {%- for summary in ns.seen %}
+    {%- set names = [] %}
+    {%- if containers.probes.inspect == summary %}{% set names = names + ['inspect'] %}{% endif %}
+    {%- if containers.probes.ps == summary %}{% set names = names + ['ps'] %}{% endif %}
+    {%- if containers.probes.stats == summary %}{% set names = names + ['stats'] %}{% endif %}
+    {{ names|join(', ') }} — <span class="mono">{{ summary }}</span>{{ ';' if not loop.last else '.' }}
+  {%- endfor %}
+</p>
+{% endblock %}

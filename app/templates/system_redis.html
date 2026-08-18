@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Redis bridge · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Redis — the bridge between the engine and everything you read</h1>
+
+{% include "_system_verdict.html" %}
+
+<div class="card">
+  <h2>Why this page exists</h2>
+  <p class="muted small">
+    On 2026-08-18 the owner was paged HIGH, repeatedly and with a recovery
+    between each, reading: <em>“Could not read snapshot:tickers idletime from
+    the engine redis container … Probe said: no_output · rc=0 · exited 0 and
+    printed nothing.”</em> Every word after the fingerprint was true and the
+    fingerprint was wrong.
+  </p>
+  <p class="muted small">
+    <code>docker exec</code> exited <strong>0</strong>. It cannot do that
+    against a stopped container, and <code>redis-cli</code> exits non-zero when
+    it cannot reach the server — so rc=0 is <em>positive evidence redis
+    answered</em>. What it answered was nil, which <code>redis-cli</code> prints
+    as nothing at all when stdout is not a terminal. <strong>The key was
+    missing, not the container.</strong>
+  </p>
+  <p class="muted small">
+    And a missing key is an <strong>engine</strong> fault. Every
+    <code>snapshot:*</code> key carries a TTL of twice its write interval
+    (<code>snapshot:tickers</code>: written every ~15s, TTL 60s), so an absent
+    key means the SnapshotWriter missed several cycles. In isolated mode the api
+    container reads these keys and nothing else — which is why the same stall
+    that expired the key is what made the dashboard stop answering. Two symptoms,
+    one event, and no surface joined them until this one.
+  </p>
+  <p class="muted small">
+    So reachability and key presence are measured <strong>separately</strong>
+    below and are never pooled again.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Reachability <span class="muted">— measured on its own</span></h2>
+  {#- Rendered from the CHAIN's verdict, never re-derived here. The first cut
+      asked `redis.reachable` directly and printed "NO ANSWER · this one IS the
+      container" on a box whose docker socket was simply absent — every probe
+      on this page is a `docker exec`, so a dead daemon fails the PING for a
+      reason that has nothing to do with redis. That is the exact
+      misclassification this page exists to end, committed by the page. -#}
+  {% set r = link.redis_container %}
+  {% if r.state == 'ok' %}
+    <p><span class="badge badge-ok">PONG</span>
+      The engine's redis answered a <code>PING</code>. Nothing below about a
+      missing key is evidence against this.</p>
+  {% elif r.state == 'broken' %}
+    <p><span class="badge badge-bad">NO ANSWER</span>
+      <span class="mono small">{{ r.detail }}</span></p>
+    {% if r.evidence %}<p class="mono small muted">{{ r.evidence }}</p>{% endif %}
+    <p class="muted small">This one <em>is</em> redis or its container. A
+    <code>timeout</code> here is as often the host being too busy to start a
+    process as it is redis being gone — check load on
+    <a href="/system">Containers</a> before restarting anything.</p>
+  {% else %}
+    <p><span class="badge badge-warn">NOT MEASURED</span>
+      {{ r.detail }}</p>
+    {% if r.evidence %}<p class="mono small muted">{{ r.evidence }}</p>{% endif %}
+    <p class="muted small">Not the same as a failed PING, and it convicts
+    nothing. Everything below is ungraded for the same reason.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Keys ops depends on</h2>
+  <p class="muted small">
+    This list is a fact about <em>this repo</em> — which pages break when a key
+    is absent — not a copy of the engine's key schema. The engine owns that, and
+    a second copy here would drift; the census below is <strong>scanned from
+    redis</strong> rather than mirrored, so what is present is authoritative.
+    What a scan cannot show is what is <em>missing</em>, which is what this list
+    is for.
+  </p>
+  {% if link.snapshot_keys.state == 'unknown' %}
+    <p><span class="badge badge-warn">UNGRADED</span>
+      {{ link.snapshot_keys.detail }}</p>
+    <p class="muted small">Key absence is only evidence once reachability is
+    established — that ordering is the whole repair, so nothing below is
+    graded until the card above is green.</p>
+  {% elif redis.missing %}
+    <p><span class="badge badge-bad">{{ redis.missing|length }} MISSING</span>
+      The engine has stopped publishing these. Every page listed beside one is
+      reading empty right now.</p>
+    <table class="data-table">
+      <thead><tr><th>Absent key</th><th>What it takes down</th></tr></thead>
+      <tbody>
+      {% for m in redis.missing %}
+        <tr><td class="mono">{{ m.key }}</td><td class="muted small">{{ m.ops_needs }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small">
+      Next move is the <strong>engine</strong> container — restart count and
+      healthcheck on <a href="/system">Containers</a> — not redis.
+    </p>
+  {% else %}
+    <p><span class="badge badge-ok">ALL PRESENT</span>
+      All {{ ops_depends_on|length }} keys ops depends on are in redis.</p>
+  {% endif %}
+</div>
+
+{% if redis.key_rows %}
+<div class="card">
+  <h2>Every <code>snapshot:*</code> key <span class="muted">({{ redis.snapshot_key_count }})</span></h2>
+  <p class="muted small">
+    <strong>TTL is the one to read.</strong> It counts down toward the moment
+    the key evicts itself, so a low TTL on a key whose writer is healthy is
+    normal (it is rewritten every cycle) and a TTL that is <em>always</em> low
+    across the whole table is a writer running late. <code>−1</code> means no
+    TTL is set and <code>−2</code> that the key vanished between the scan and
+    the read — both are facts rather than errors, and pooling them into “no TTL”
+    loses which one happened. Idle time is seconds since the key was last
+    <em>accessed</em>, so a reader resets it: it grades traffic, not freshness.
+  </p>
+  <table class="data-table">
+    <thead><tr><th>Key</th><th>TTL (s)</th><th>Idle (s)</th><th>Ops reads it for</th></tr></thead>
+    <tbody>
+    {% for k in redis.key_rows %}
+      <tr>
+        <td class="mono">{{ k.key }}{% if not k.declared %}
+          <span class="badge badge-muted" title="present in redis, not on ops' dependency list">undeclared</span>{% endif %}</td>
+        <td class="mono">
+          {%- if k.vanished %}<span class="badge badge-warn">gone</span>
+          {%- elif k.persistent %}<span class="muted">no TTL</span>
+          {%- elif k.ttl is none %}—
+          {%- elif k.ttl <= 10 %}<span class="badge badge-warn">{{ k.ttl }}</span>
+          {%- else %}{{ k.ttl }}{% endif %}
+        </td>
+        <td class="mono">{{ k.idle_sec if k.idle_sec is not none else '—' }}</td>
+        <td class="muted small">{{ k.ops_needs or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% if redis.info_available %}
+<div class="card">
+  <h2>Server</h2>
+  <div class="kv-grid">
+    {% for label, key in [
+        ('Version', 'redis_version'), ('Uptime', 'uptime_in_seconds'),
+        ('Clients', 'connected_clients'), ('Memory used', 'used_memory_human'),
+        ('Max memory', 'maxmemory_human'), ('Eviction policy', 'maxmemory_policy'),
+        ('Evicted keys', 'evicted_keys'), ('Expired keys', 'expired_keys'),
+        ('Rejected connections', 'rejected_connections'),
+        ('Ops/sec', 'instantaneous_ops_per_sec')] %}
+    <div class="kv"><span class="muted">{{ label }}</span>
+      <strong class="mono">
+        {%- if key == 'uptime_in_seconds' %}{{ redis.info[key]|duration }}
+        {%- else %}{{ redis.info[key] if redis.info[key] is not none else '—' }}{% endif %}
+      </strong></div>
+    {% endfor %}
+  </div>
+  <p class="muted small">
+    <strong>Evicted keys</strong> and <strong>expired keys</strong> are not the
+    same event and the difference decides the fix. Expired is a key reaching its
+    own TTL — normal here, and what a stalled writer produces. Evicted is redis
+    reclaiming memory under <code>maxmemory</code>, which would drop keys whose
+    writer is perfectly healthy. A climbing eviction count with a healthy engine
+    means the memory cap, not the writer.
+  </p>
+</div>
+{% endif %}
+{% endblock %}
