@@ -1766,3 +1766,65 @@ And one from Jinja: **a payload key must not collide with a dict method.**
 `redis.keys` resolved to the dict's own `.keys` *method* before the item of that
 name, so the template iterated a builtin and 500'd. Renamed `key_rows`. The nav
 test's "drive every destination as a real request" is what caught it.
+
+
+## `/truth` — the report was never late, the bound was invented (2026-08-18)
+
+`/truth` read **STALE, 401 minutes past a 60-minute bound**, under the sentence
+*"the engine has not published a newer report"*. Every part of that was wrong,
+and it is `/invalidations` (2026-08-07, WRITER STALE) recurring one surface over.
+
+- The report is published **once a day** by a scheduled GitHub Action
+  (360-v2 `.github/workflows/vps-monitor.yml`, `cron 30 0 * * *`). Its last six
+  scheduled runs all succeeded — run 199 started 01:58:42Z and finished
+  02:05:10Z, which is exactly the `02:04` `generated_at` on screen.
+- `TRUTH_STALE_SEC` was **3600**, invented here. An hour, on a daily artifact,
+  so this page read red for ~23 hours out of every 24 by construction.
+- **The engine does not publish it.** The Action `docker exec`s into the engine
+  to collect and commits to `monitor-logs`, so an overdue report is a *workflow*
+  question and the copy pointed at the wrong container.
+
+**An alarming caption over a healthy subsystem is worse than a blank**, because
+a benign wrong caption makes a reader ignore a page while an alarming one sends
+the owner to debug something that works. Both halves of this file's
+`/invalidations` entry, ignored one page over — and repeated in two session
+reports before anybody ran the query that settles it, which was the publisher's
+own run history.
+
+The fix is the rule this repo already applies to `strategy_catalog`, `spec` and
+`mechanism`: **the cadence travels with the artifact.** The snapshot carries a
+`publication` block (`interval_sec` / `grace_sec` / `stale_after_sec` /
+`publisher` / `schedule`) written by the producer, and this page grades on it.
+A report predating the stamp falls back to a named default and **badges
+FALLBACK BOUND** — a silent fallback is a mirror nobody knows is a mirror.
+
+Three rules the block carries:
+
+- **Ops never invents the bound again.** `TRUTH_FALLBACK_STALE_SEC` is 28h and a
+  test asserts it can never drop below the cadence it is defaulting for.
+- **The grace is measured, not chosen.** GitHub delivered this nominally-00:30
+  cron at 01:57 / 01:58 / 02:04 / 02:06 / 03:07 / 03:09 over six days — 87 to
+  159 minutes late — so the 4h grace is set from that spread. A false "overdue"
+  on a daily artifact costs more than four hours of silence.
+- **An overdue report names its publisher**, so the reader goes to the workflow
+  run rather than to the engine.
+
+### …and the second look at `/system` caught a false positive
+
+Asked to read the System tab again, the `restarted alone` badge shipped an hour
+earlier was flagging `360scalp-v2-redis` — **up 21 days** — as *"went down by
+itself"*, purely because `autoheal` had been up **25**. The rule was "alone in
+its minute-bucket with any older stack-mate", which on a long-lived stack flags
+everything except the single oldest container. A test guarded the oldest;
+nothing guarded the second-oldest.
+
+Rewritten with no invented threshold: **the stack's largest start-cohort is the
+deploy**, and only containers *younger* than it are flagged. Anything older was
+not touched by that deploy — redis and autoheal carry no config that changed —
+and that is history, not an event. Where no bucket holds two containers there is
+no identifiable deploy, so it flags nothing rather than guessing. Replayed
+against the real live stack, only the engine flags.
+
+**Reading the rendered page is what found both.** Neither was visible to the
+suite: one was a number nobody had compared against its producer's schedule, and
+the other needed a stack with three weeks of uptime in it.

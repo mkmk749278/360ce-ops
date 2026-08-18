@@ -36,14 +36,30 @@ def _as_int(v: Any) -> int:
         return 0
 
 
-#: Beyond this, the snapshot is describing a window the reader is no longer in.
-#: The engine regenerates the report on its monitor cycle, so an hour is slack,
-#: not a schedule.
-TRUTH_STALE_SEC = 3600
+#: Used ONLY when the report predates the publication stamp (2026-08-18). The
+#: producer now declares its own cadence and this page reads that; see
+#: ``report_provenance``.
+#:
+#: What this constant used to be is the whole lesson. It was 3600 — an hour —
+#: on an artifact published **once a day** by a scheduled GitHub Action, so this
+#: page read STALE for ~23 hours out of every 24 while the workflow's last six
+#: runs had all succeeded. And the caption went further than the badge, naming a
+#: cause the page cannot observe: *"the engine has not published a newer
+#: report"*. The engine does not publish it at all.
+#:
+#: An alarming caption over a healthy subsystem is worse than a blank, because
+#: it sends the owner to debug something that works. This repo paid for exactly
+#: that on ``/invalidations`` (2026-08-07, WRITER STALE) and it recurred one
+#: surface over.
+TRUTH_FALLBACK_STALE_SEC = 24 * 3600 + 4 * 3600
+
+#: Retained under its old name for any caller still importing it; the value is
+#: the fallback, not an hour.
+TRUTH_STALE_SEC = TRUTH_FALLBACK_STALE_SEC
 
 
 def report_provenance(snapshot: Any, now_ts: float | None = None) -> dict:
-    """When the ENGINE generated this report, and how far back it looks.
+    """When this report was published, on whose schedule, and how far back it looks.
 
     This page rendered **no timestamp at all** until 2026-08-07, while serving a
     TTL-cached snapshot of the ``monitor-logs`` branch. On that day its
@@ -52,12 +68,24 @@ def report_provenance(snapshot: Any, now_ts: float | None = None) -> dict:
     they were on different clocks — so the two surfaces silently disagreed about
     the state of a live gate.
 
-    The clock is the engine's ``generated_at``, never ops' own: a surface may not
-    grade its own freshness on a clock it supplies (the rule ``/signals/sar-live``
-    already carries, and the one this page was missing entirely). ``lookback_hours``
-    rides along because the counters here are **cumulative over that window** —
-    a just-shipped change is invisible in them however fresh the report is, which
-    is a second, independent reason a number here can disagree with a live panel.
+    The clock is the report's own ``generated_at``, never ops' own: a surface may
+    not grade its own freshness on a clock it supplies (the rule
+    ``/signals/sar-live`` already carries, and the one this page was missing
+    entirely). ``lookback_hours`` rides along because the counters here are
+    **cumulative over that window** — a just-shipped change is invisible in them
+    however fresh the report is, which is a second, independent reason a number
+    here can disagree with a live panel.
+
+    **And the BOUND is the producer's too, from 2026-08-18.** Freshness needs a
+    cadence, and a reader holding its own copy of the cadence drifts from it the
+    first time the schedule changes — so the snapshot carries a ``publication``
+    block (360-v2 ``runtime_truth_report._publication_contract``) naming the
+    interval, the grace and the publisher, and this function reads it. Ops
+    inventing the number is what produced a one-hour bound on a daily artifact.
+
+    A report written before that stamp existed falls back to a named default and
+    says so, exactly as ``MECHANISM_FALLBACK`` and ``FALLBACK_SPEC`` do: a silent
+    fallback is a mirror nobody knows is a mirror.
     """
     out: dict[str, Any] = {
         "generated_at": None,
@@ -65,7 +93,14 @@ def report_provenance(snapshot: Any, now_ts: float | None = None) -> dict:
         "age_sec": None,
         "stale": None,
         "lookback_hours": None,
-        "bound_sec": TRUTH_STALE_SEC,
+        "bound_sec": TRUTH_FALLBACK_STALE_SEC,
+        # Named so the page can say WHOSE schedule it is being graded against,
+        # and can send an overdue reader to the workflow rather than the engine.
+        "publisher": None,
+        "schedule": None,
+        "interval_sec": None,
+        "bound_from_producer": False,
+        "next_due_sec": None,
     }
     if not isinstance(snapshot, dict) or snapshot.get("error"):
         return out
@@ -80,13 +115,35 @@ def report_provenance(snapshot: Any, now_ts: float | None = None) -> dict:
         return out
     if generated <= 0:
         return out
+    # The producer's own contract, when the report carries one.
+    publication = snapshot.get("publication")
+    if isinstance(publication, dict):
+        try:
+            bound = float(publication.get("stale_after_sec") or 0.0)
+        except (TypeError, ValueError):
+            bound = 0.0
+        if bound > 0:
+            out["bound_sec"] = bound
+            out["bound_from_producer"] = True
+        try:
+            interval = float(publication.get("interval_sec") or 0.0)
+            out["interval_sec"] = interval or None
+        except (TypeError, ValueError):
+            pass
+        out["publisher"] = publication.get("publisher") or None
+        out["schedule"] = publication.get("schedule") or None
+
     now = now_ts if now_ts is not None else time.time()
     out["generated_at"] = generated
     out["generated_at_iso"] = datetime.fromtimestamp(
         generated, tz=timezone.utc
     ).strftime("%Y-%m-%d %H:%M UTC")
     out["age_sec"] = max(0.0, now - generated)
-    out["stale"] = out["age_sec"] > TRUTH_STALE_SEC
+    out["stale"] = out["age_sec"] > out["bound_sec"]
+    # When the next one is due, so a fresh report reads as "on schedule" rather
+    # than as a number the reader has to compare against a cron in their head.
+    if out["interval_sec"]:
+        out["next_due_sec"] = max(0.0, out["interval_sec"] - out["age_sec"])
     return out
 
 

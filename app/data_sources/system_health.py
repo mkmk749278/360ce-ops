@@ -486,25 +486,33 @@ _COHORT_BUCKET_SEC = 60
 
 
 def _mark_restart_cohorts(rows: list[dict[str, Any]]) -> None:
-    """Flag a container that restarted WITHOUT its stack-mates.
+    """Flag a container that restarted AFTER its stack was last deployed.
 
-    Added within the hour of the first live read, because that read showed the
-    number this page tells you to look at first cannot answer the question it
-    was pointed at. On the box: engine up 1h48m, api / signing / watchdog up
-    5h16m, redis up 3 weeks — the engine had plainly restarted on its own —
-    and its ``RestartCount`` read **0**.
+    Added 2026-08-18 because ``RestartCount`` cannot see the events worth
+    catching: Docker increments it for restarts made by the container's restart
+    *policy*, while autoheal issues a manual restart (which does not) and a
+    `compose` recreate builds a new container (which starts the count over). On
+    the box the engine was up 1h48m beside three stack-mates up 5h16m — plainly
+    restarted on its own — and its count read 0.
 
-    Docker's ``RestartCount`` counts restarts made by the container's *restart
-    policy*. Autoheal issues ``POST /containers/{id}/restart``, which is a
-    manual restart and does not increment it; and a `compose` recreate makes a
-    new container, which starts the count over. So the counter is blind to
-    exactly the two events worth catching, and reads 0 through both.
+    **The first cut of this function cried wolf, and reading the live page an
+    hour later is what caught it.** It flagged any container alone in its
+    minute-bucket that had *any* older stack-mate — so `360scalp-v2-redis`, up
+    21 days, was badged "went down by itself" purely because `autoheal` had been
+    up 25. On a long-lived stack that rule eventually flags everything except
+    the single oldest container. A test guarded the oldest; nothing guarded the
+    second-oldest.
 
-    Uptime is not blind to either — a restart always resets it. What uptime
-    alone cannot say is whether the whole stack went down together (a deploy,
-    expected) or one container went down by itself (autoheal, or a crash under
-    ``restart: always``). Grouping the stack's start times answers that with no
-    invented threshold: a container alone in its bucket restarted alone.
+    The rule that needs no invented threshold: **the stack's largest
+    start-cohort is the deploy.** A `compose up` restarts most of the stack
+    within the same minute, so the modal bucket dates the last deployment.
+    Containers *younger* than it came back after that deploy — that is a
+    restart. Containers *older* than it were simply not touched by the deploy
+    (redis and autoheal carry no config that changed), which is history, not an
+    event.
+
+    When no bucket holds two containers there is no identifiable deploy, so this
+    flags nothing rather than guessing — a refusal, not a clamp.
     """
     by_stack: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
@@ -515,22 +523,25 @@ def _mark_restart_cohorts(rows: list[dict[str, Any]]) -> None:
     for stack_rows in by_stack.values():
         buckets: dict[int, list[dict[str, Any]]] = {}
         for row in stack_rows:
-            key = int(row["uptime_sec"] // _COHORT_BUCKET_SEC)
-            buckets.setdefault(key, []).append(row)
-        # One container up on its own while ANY sibling has been up longer.
-        # "Alone in its bucket" is not enough by itself: on a stack of one,
-        # or where every container started at a different minute because the
-        # host was slow, that would fire on a healthy deploy.
-        newest_alone = [b for b in buckets.values() if len(b) == 1]
-        for group in newest_alone:
-            row = group[0]
-            older = [r for r in stack_rows
-                     if r is not row and r["uptime_sec"] > row["uptime_sec"] + _COHORT_BUCKET_SEC]
-            if not older:
-                continue
+            buckets.setdefault(int(row["uptime_sec"] // _COHORT_BUCKET_SEC), []).append(row)
+
+        # The deploy cohort: most members wins; on a tie the more RECENT one,
+        # because that is the deployment a reader is asking about.
+        deploy_key = max(
+            (k for k, members in buckets.items() if len(members) >= 2),
+            key=lambda k: (len(buckets[k]), -k),
+            default=None,
+        )
+        if deploy_key is None:
+            continue
+        deploy_uptime = min(r["uptime_sec"] for r in buckets[deploy_key])
+
+        for row in stack_rows:
+            if row["uptime_sec"] >= deploy_uptime:
+                continue          # older than the deploy — it was never restarted
             row["restarted_alone"] = True
-            row["stack_mates_older"] = len(older)
-            row["oldest_mate_uptime_sec"] = max(r["uptime_sec"] for r in older)
+            row["deploy_cohort_size"] = len(buckets[deploy_key])
+            row["deploy_uptime_sec"] = deploy_uptime
 
 
 async def collect_containers() -> dict[str, Any]:
