@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Diag console · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Diagnostic console — named entries, not a command line</h1>
+
+<p class="muted">
+  Each button sends a <strong>catalog key</strong> to the engine. There is no
+  field here for a command, a path or a shell fragment, and adding one would
+  defeat the design. What a key may do is decided by the engine's own
+  <code>diag_catalog.py</code> — which refuses an unknown key and is asserted
+  there, per entry and by reading its syntax tree, to reach no order, no secret
+  and no kill switch. Ops cannot widen that from this page.
+</p>
+
+<div class="card">
+  <h2>Why this is safe to hand to a read-only session</h2>
+  <p class="muted small">
+    An IP-whitelisted, futures-only, no-withdraw Binance key defeats a
+    <em>stolen</em> key used from anywhere else. It does not apply to code
+    running <strong>on</strong> the whitelisted host, and futures permission is
+    not symbol-scoped — so the risk arbitrary execution here would carry is a
+    <strong>position</strong>, not a withdrawal. That is the reason this is a
+    fixed catalog: a leaked code costs disclosure and some disruption, never a
+    trade.
+  </p>
+  <p class="muted small">
+    Reads observe and return. Actions change something <em>reversible and off
+    the money path</em> — flush a ledger, drop a rebuildable cache, re-seed one
+    symbol. The kill switch, auto-execution mode, the position FSM and per-user
+    settings are not here and must not be: they live on
+    <code>/control</code> behind the owner's own login, which is the audit trail.
+    Every run on this page is audited with the tier that ran it.
+  </p>
+</div>
+
+{% if state == 'unreachable' %}
+  <div class="flash flash-err">
+    <strong>Could not ask the engine.</strong> <span class="mono">{{ error }}</span>
+    <div class="muted">This is a statement about the request, not about the
+    catalog — the entries may exist and be perfectly runnable.</div>
+  </div>
+{% elif state == 'not_reported' %}
+  <p><span class="badge badge-warn">NOT REPORTED</span>
+    This engine build does not offer a diagnostic catalog. It is not a claim
+    that nothing is runnable — the endpoint simply is not there yet.</p>
+{% elif state == 'empty' %}
+  <p><span class="badge badge-warn">EMPTY</span>
+    The engine offers a catalog with no entries in it, which is a deploy
+    question rather than a quiet one.</p>
+{% endif %}
+
+{% if result %}
+<div class="card">
+  <h2>Last run
+    {% if result.ok %}<span class="badge badge-ok">OK</span>
+    {% else %}<span class="badge badge-bad">FAILED</span>{% endif %}
+  </h2>
+  <div class="kv-grid">
+    <div class="kv"><span class="muted">Entry</span><strong class="mono">{{ result.key }}</strong></div>
+    <div class="kv"><span class="muted">Kind</span><strong class="mono">{{ result.kind or '—' }}</strong></div>
+    <div class="kv"><span class="muted">Took</span><strong class="mono">
+      {%- if result.took_sec is not none %}{{ result.took_sec }}s{% else %}&mdash;{% endif %}</strong></div>
+  </div>
+  {% if result.error %}
+    <p class="muted small"><strong>Reason:</strong> <span class="mono">{{ result.error }}</span></p>
+    {% if result.known %}
+      <p class="muted small">The engine knows: <span class="mono">{{ result.known|join(', ') }}</span></p>
+    {% endif %}
+  {% endif %}
+  {% if result.result %}
+    <pre class="mono small">{{ result.result | tojson(indent=2) }}</pre>
+  {% endif %}
+</div>
+{% endif %}
+
+{% for kind, heading in [('read', 'Reads — observe and return'), ('action', 'Actions — reversible, off the money path')] %}
+  {% set rows = entries | selectattr('kind', 'equalto', kind) | list %}
+  {% if rows %}
+  <div class="card">
+    <h2>{{ heading }} <span class="muted">({{ rows|length }})</span></h2>
+    <table class="data-table">
+      <thead><tr><th>Entry</th><th>What it does</th><th>Run</th></tr></thead>
+      <tbody>
+      {% for e in rows %}
+        <tr>
+          <td><strong>{{ e.label }}</strong><div class="muted small mono">{{ e.key }}</div></td>
+          <td class="small">{{ e.summary }}
+            {% if e.effect %}<div class="muted small"><strong>Changes:</strong> {{ e.effect }}</div>{% endif %}
+          </td>
+          <td>
+            {% if not e.enabled %}
+              {#- OFF, never absent. A vanished entry reads as a broken deploy;
+                  this reads as a decision somebody made and can reverse. -#}
+              <span class="badge badge-muted" title="DIAG_ACTIONS_ENABLED is off engine-side">OFF</span>
+            {% elif may_use('/diagnostics/console/run', 'POST') %}
+              <form method="post" action="/diagnostics/console/run">
+                <input type="hidden" name="key" value="{{ e.key }}">
+                {% if 'symbol' in e.needs %}
+                  <input type="text" name="symbol" placeholder="SYMBOL" required
+                         pattern="[A-Za-z0-9]+" maxlength="20" class="mono">
+                {% endif %}
+                <button type="submit" class="btn">Run</button>
+              </form>
+            {% else %}
+              <span class="muted small">not available to this session</span>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endfor %}
+{% endblock %}

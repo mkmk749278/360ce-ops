@@ -45,6 +45,7 @@ from app.routes import (
     dark_signals,
     data_export,
     data_intake,
+    diag_console,
     diag,
     emission_controller,
     exit_backtest,
@@ -171,6 +172,7 @@ app.include_router(pairs.router)
 app.include_router(system.router)
 app.include_router(diag.router)
 app.include_router(data_intake.router)
+app.include_router(diag_console.router)
 app.include_router(invalidations.router)
 app.include_router(performance.router)
 app.include_router(track_record.router)

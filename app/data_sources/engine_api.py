@@ -197,6 +197,28 @@ class EngineApiClient:
         """
         return await self._get("/internal/diag/host-resources")
 
+    async def diag_catalog(self) -> Any:
+        """What named diagnostics the engine offers. Data, not a mirror.
+
+        Ops keeps no list of what exists — that is the drifting-mirror defect
+        this repo has paid for under several names. An entry ops has never heard
+        of still renders, under the engine's own label.
+        """
+        return await self._get("/internal/diag/catalog")
+
+    async def diag_run(self, key: str, args: dict | None = None) -> Any:
+        """Run ONE named catalog entry.
+
+        The body carries a catalog KEY, never a command. Ops does not decide
+        what a key may do and cannot widen it: `360-v2/src/diag_catalog.py` owns
+        that, refuses unknown keys, and is asserted there (per entry, by AST) to
+        reach no order, secret or kill switch.
+        """
+        return await self._post(
+            "/internal/diag/catalog/run",
+            {"key": key, "args": dict(args or {})},
+        )
+
     async def data_intake(self) -> Any:
         """What the engine is actually reading from Binance.
 

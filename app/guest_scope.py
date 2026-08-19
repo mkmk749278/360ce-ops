@@ -4,12 +4,32 @@ A guest holds a temporary read-only code (``app/guest_access.py``). This module
 decides, per request, whether that code is allowed to see the thing being asked
 for. Three rules, applied in order, and the order is the design:
 
-1. **Method.** A guest may issue ``GET`` and ``HEAD``. Nothing else, ever. This
-   is structural: it covers every write route in the app today *and* every one
-   added tomorrow, without anybody remembering to update anything.
+1. **Method.** A guest may issue ``GET`` and ``HEAD`` freely. Every other
+   method is refused **unless** the matched route is named in
+   ``GUEST_ACTION_ROUTES`` — a short, explicit allow-list where each entry
+   carries a written reason. Anything not named there is refused, today and for
+   every route added tomorrow, without anybody remembering to update anything.
 2. **Route classification.** The matched route's *path template* must be
    classified ``guest``. Unclassified is denied.
 3. **Nothing else.** There is no third rule and no override.
+
+**Rule 1 used to read "GET and HEAD, nothing else, ever", and it was narrowed
+rather than deleted** (2026-08-19, owner-approved). The owner asked for a
+session that can *"diagnosis everything and fix every error within that allowed
+guest mode"*, which a pure-read tier cannot do. An invariant that blocks correct
+work gets deleted outright by whoever needs the work; one that states what it
+means survives — so the absolute became an allow-list of exactly the routes that
+were argued for, with the reason recorded beside each. The blanket refusal still
+covers everything else, and ``tests/test_guest_access.py`` fails if a mutating
+route reaches the guest set without being named here.
+
+**What makes an entry admissible.** Not "it seemed safe": the route's handler
+must be incapable of doing anything a guest may not already do. The diagnostic
+console qualifies because it forwards a *catalog key* to a fixed engine
+endpoint, and ``360-v2/src/diag_catalog.py`` — not this repo — decides what that
+key may do, refuses unknown keys, and is asserted there (by AST, per entry) to
+reach no order, secret or kill switch. A route that took a free-form target,
+path or command would not qualify however carefully it was written.
 
 **Why rule 2 exists at all, given rule 1.** "GET is safe" is false in this app,
 and it is false in the one place you would least expect: ``/exit-backtest/run-
@@ -38,8 +58,27 @@ from __future__ import annotations
 
 from starlette.routing import Match
 
-#: Methods a guest may issue. Rule 1 — structural, covers every future write.
+#: Methods a guest may issue anywhere. Rule 1 — structural, and it still covers
+#: every future write route, because the exception below is an allow-list.
 GUEST_METHODS = frozenset({"GET", "HEAD"})
+
+#: Route templates a guest may POST to, mapped to WHY. The map is the argument:
+#: an entry with no reason is one nobody had to justify, which is how a list
+#: grows past what it was approved for, so a blank reason fails CI.
+#:
+#: Admission bar (see the module docstring): the handler must be incapable of
+#: doing anything a guest may not already do. Free-form targets, paths or
+#: commands never qualify.
+GUEST_ACTION_ROUTES: dict[str, str] = {
+    "/diagnostics/console/run": (
+        "Runs ONE named entry from the engine's diagnostic catalog. The body "
+        "carries a catalog key, never a command; 360-v2/src/diag_catalog.py "
+        "owns what each key may do, refuses unknown keys, and is asserted "
+        "there (per entry, by AST) to reach no order, secret or kill switch. "
+        "The action half is separately switchable engine-side, so this grant "
+        "is revocable without touching ops."
+    ),
+}
 
 #: Route templates a guest session may reach. Everything registered and not in
 #: here is owner-only; see OWNER_ONLY below for the deliberate exclusions.
@@ -133,6 +172,8 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/truth/raw.md",
         "/alerts",
         "/diagnostics/data-intake",
+    "/diagnostics/console",
+    "/diagnostics/console/run",
         "/audit",
         # The export index and its whitelisted artifacts. `/data/raw/{...}`
         # serves ANY file on the engine volume and stays owner-only: a guest
@@ -243,12 +284,20 @@ def guest_may(app, scope) -> tuple[bool, str]:
     with no caption.
     """
     method = scope.get("method", "GET").upper()
-    if method not in GUEST_METHODS:
-        return False, f"read-only access cannot issue {method}"
     path = matched_route_path(app, scope)
+
+    if method not in GUEST_METHODS:
+        # The named exception, and nothing else. Resolved against the route
+        # TEMPLATE like every other decision here, so a crafted concrete path
+        # cannot be classified as something it is not.
+        if method == "POST" and path is not None and path in GUEST_ACTION_ROUTES:
+            return True, ""
+        return False, f"read-only access cannot issue {method}"
+
     if path is None:
         # No route matched — let it through to the app's own 404 rather than
-        # answering 403, which would tell a prober that the path exists.
+        # answering 403, which would tell a prober that the path exists. Only
+        # for a readable method: an unmatched write is refused above.
         return True, ""
     if path in GUEST_READ_ROUTES:
         return True, ""
@@ -282,6 +331,12 @@ def may_use(request, path: str, method: str = "GET") -> bool:
     """
     if getattr(request, "scope", {}).get("ops_role") != "guest":
         return True
-    if method.upper() not in GUEST_METHODS:
-        return False
+    m = method.upper()
+    if m not in GUEST_METHODS:
+        # Mirror `guest_may`'s narrowed rule 1 off the SAME table. If this
+        # stayed absolute it would hide a control the gate would have allowed —
+        # the 2026-08-07 defect with the sign flipped, and just as invisible,
+        # because a control that is silently absent reads as a page that has
+        # nothing to offer.
+        return m == "POST" and str(path) in GUEST_ACTION_ROUTES
     return str(path) in GUEST_READ_ROUTES
