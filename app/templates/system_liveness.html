@@ -71,7 +71,8 @@
     <p><span class="badge badge-warn">NO CYCLE YET</span> {{ loop.note }}</p>
   {% else %}
     <p>
-      {% if loop.state == 'hanging' %}<span class="badge badge-bad">CYCLE HANGING NOW</span>
+      {% if loop.state == 'hanging' %}<span class="badge badge-bad">LOOP WEDGED NOW</span>
+      {% elif loop.state == 'slow' %}<span class="badge badge-warn">CYCLE SLOW, LOOP ALIVE</span>
       {% elif loop.state == 'past_deadline' %}<span class="badge badge-bad">PAST THE DEADLINE</span>
       {% elif loop.state == 'pressure' %}<span class="badge badge-warn">UNDER PRESSURE</span>
       {% else %}<span class="badge badge-ok">WITHIN BOUNDS</span>{% endif %}
@@ -85,6 +86,13 @@
       <div class="kv"><span class="muted">Heartbeat age</span><strong class="mono">
         {%- if not loop.hang_reported %}not reported
         {%- elif loop.heartbeat_age_sec is not none %}{{ loop.heartbeat_age_sec }}s
+        {%- else %}&mdash;{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Beats on progress</span><strong class="mono">
+        {%- if loop.progress_heartbeat is none %}not reported
+        {%- elif loop.progress_heartbeat %}yes{% if loop.heartbeat_progress_writes is not none %} ({{ loop.heartbeat_progress_writes }} beats){% endif %}
+        {%- else %}<span class="badge badge-warn">OFF</span>{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Last cycle completed</span><strong class="mono">
+        {%- if loop.cycle_completed_age_sec is not none %}{{ loop.cycle_completed_age_sec }}s ago
         {%- else %}&mdash;{% endif %}</strong></div>
       <div class="kv"><span class="muted">Concurrent scans</span><strong class="mono">
         {{- loop.scan.max_concurrent_scans if loop.scan.max_concurrent_scans is not none else '—' }}</strong></div>
@@ -101,14 +109,30 @@
       <strong>Read &ldquo;Cycle in flight&rdquo; and &ldquo;Heartbeat age&rdquo; before
       any counter below them.</strong> Every other number on this card records a
       cycle at <em>completion</em>, and <code>healthcheck.py</code> kills the
-      container on <em>heartbeat age</em> &mdash; which the scanner touches once
-      per completed cycle. So a cycle hung past the deadline appears in none of
-      &ldquo;past the deadline&rdquo;, &ldquo;worst this boot&rdquo; or
-      &ldquo;last cycle&rdquo;. On 2026-08-19 this card read
+      container on <em>heartbeat age</em>. So a cycle hung past the deadline
+      appears in none of &ldquo;past the deadline&rdquo;, &ldquo;worst this
+      boot&rdquo; or &ldquo;last cycle&rdquo;. On 2026-08-19 this card read
       <em>0 past the deadline, last cycle 20.76s</em> while autoheal was
       restarting the engine on a failing streak of 3.
       <strong>A measurement that can only see finished work cannot see the work
       that is killing you.</strong>
+    </p>
+    <p class="muted small">
+      <strong>&ldquo;Cycle in flight&rdquo; and &ldquo;Heartbeat age&rdquo; are
+      two different questions, and they were one number until 2026-08-19.</strong>
+      The heartbeat used to be written only at the <em>end</em> of a cycle, so a
+      cycle slower than the deadline was a restart however healthily the loop was
+      advancing &mdash; and the restart re-seeded every pair over REST and rebuilt
+      the indicator caches cold, making the next cycle slower than the one that
+      tripped it. That is the loop that ran all of 2026-08-19, every ~15 minutes,
+      emptying the <code>snapshot:*</code> keys and the app feed each time.
+      The engine now beats when a <em>symbol finishes</em>, so a long cycle that
+      is still advancing reads <em>slow</em> and a loop that has stopped advancing
+      reads <em>wedged</em>. Only the second is restarted, and only the second is
+      something a restart can cure. If &ldquo;Beats on progress&rdquo; reads
+      <em>not reported</em> the engine predates this and the two are still one
+      number; if it reads <em>OFF</em> somebody set
+      <code>SCANNER_PROGRESS_HEARTBEAT=false</code>.
     </p>
     <p class="muted small">
       &ldquo;Concurrent scans&rdquo; beside &ldquo;Executor workers&rdquo; is the
@@ -130,8 +154,8 @@
   {% endif %}
 
   {% if loop.stages %}
-  {% if loop.state == 'hanging' and loop.in_flight_stages %}
-  <h3>What the hung cycle is stuck in</h3>
+  {% if loop.state in ('hanging', 'slow') and loop.in_flight_stages %}
+  <h3>Where the cycle still running has spent its time</h3>
   <table class="data-table">
     <thead><tr><th>Stage</th><th class="num">Accumulated so far</th></tr></thead>
     <tbody>
