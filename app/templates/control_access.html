@@ -3,12 +3,24 @@
 {% block content %}
 <h1>Read-only access</h1>
 <p class="muted">
-  Codes that open the <strong>measurement and diagnostic pages only</strong> —
+  Codes that open the <strong>measurement and diagnostic pages</strong> —
   the feed, every lane, every export, the truth report. A code cannot reach this
   control panel, the diag runner, the subscriber tables, the raw data volume or
-  the <code>/api/v1</code> token surface, and it cannot issue any write: a
-  read-only session is refused on every method except GET, and on every route not
-  explicitly classified as readable (<code>app/guest_scope.py</code>).
+  the <code>/api/v1</code> token surface. A read-only session is refused on every
+  method except GET, and on every route not explicitly classified as readable
+  (<code>app/guest_scope.py</code>).
+</p>
+<p class="muted small">
+  <strong>One deliberate exception, added 2026-08-19:</strong> a holder can run
+  named entries from the engine's <a href="/diagnostics/console">diagnostic
+  console</a>. Those are a fixed catalog, not commands &mdash; reads that only
+  observe, plus a few reversible actions (flush a ledger, drop a rebuildable
+  cache, re-seed one symbol). <strong>Nothing in that catalog can reach an
+  order, a key, the kill switch, auto-execution mode or per-user settings</strong>,
+  which is asserted in the engine per entry rather than promised. You can close
+  the action half at any time by setting <code>DIAG_ACTIONS_ENABLED=false</code>
+  engine-side, without revoking the code; every run is recorded in the audit log
+  with the tier that ran it.
 </p>
 <p class="muted small">
   A read-only holder still sees real trading data — every signal, position and
