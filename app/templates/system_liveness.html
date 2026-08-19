@@ -55,14 +55,18 @@
 <div class="card">
   <h2>Scan cycle <span class="muted">the number the healthcheck kills on</span></h2>
   <p class="muted small">
-    The scanner touches its heartbeat file <strong>once, at the end of a cycle</strong>,
-    and <code>healthcheck.py</code> fails when that file goes stale. Three consecutive
-    failures flip the container unhealthy and the autoheal sidecar restarts it — which
-    expires every <code>snapshot:*</code> key, so the dashboard stops answering and the
-    app feed reads empty. <strong>Cycle wall-time is heartbeat age</strong>, and until
-    2026-08-19 it was computed every cycle and rendered nowhere: measured at 9.2s to
-    402.5s against a 15s target, with a restart inside the measurement window and
-    docker's <code>RestartCount</code> still reading 0.
+    <code>healthcheck.py</code> fails when the scanner's heartbeat file goes stale.
+    Three consecutive failures flip the container unhealthy and the autoheal sidecar
+    restarts it — which expires every <code>snapshot:*</code> key, so the dashboard
+    stops answering and the app feed reads empty.
+    <strong>The scanner beats when a unit of work FINISHES</strong> (a symbol scanned),
+    so a stale heartbeat means the loop has stopped advancing — not merely that a cycle
+    ran long. Until 2026-08-19 the beat was written only at the <em>end</em> of a cycle,
+    which made cycle wall-time and heartbeat age one number and every slow cycle a
+    restart; that is the loop that ran all of that day. Cycle wall-time was also
+    computed every cycle and rendered nowhere: measured at 9.2s to 402.5s against a
+    15s target, with a restart inside the measurement window and docker's
+    <code>RestartCount</code> still reading 0.
   </p>
 
   {% if not loop.reported %}

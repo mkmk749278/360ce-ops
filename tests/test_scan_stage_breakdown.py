@@ -186,15 +186,25 @@ def test_a_hanging_cycle_outranks_every_completed_cycle_counter():
     On 2026-08-19 this card read "0 past the deadline, last cycle 20.76s" while
     autoheal was restarting the engine on a failing streak of 3. Every counter
     on it records a cycle at COMPLETION; `healthcheck.py` kills on heartbeat
-    age, touched once per completed cycle. A cycle hung past the deadline is
-    therefore invisible to all of them — the page read healthy precisely while
-    the container was being killed.
+    age, and on THIS engine that file is touched once per completed cycle. A
+    cycle hung past the deadline is therefore invisible to all of them — the
+    page read healthy precisely while the container was being killed.
+
+    The payload carries no `progress_heartbeat_enabled`, which is what makes
+    that last sentence true: on an engine without the progress beat, cycle
+    wall-time and heartbeat age ARE one number, so a long cycle is a restart and
+    the verdict stays pooled. The wording changed when the beat shipped (a
+    beating engine is told "slow, not wedged"); the reader must still be told
+    the container is going down here, so this asserts the CLAIM rather than the
+    old sentence.
     """
     scan = dict(_BASE, over_warn=0, over_kill=0, last_sec=20.76, worst_sec=113.47,
                 in_flight_sec=204.3, heartbeat_age_sec=210.9)
     out = reduce_loop_health(_payload(scan))
     assert out["state"] == "hanging", "a hang outranks a clean completed book"
-    assert "being killed right now" in out["note"]
+    assert out["progress_heartbeat"] is None, "the pooled verdict is the point here"
+    assert "being killed either way" in out["note"], "the reader must be told it is going down"
+    assert "only at the END of a cycle" in out["note"], "and why the two are one number"
     assert out["in_flight_sec"] == 204.3
 
 
@@ -248,7 +258,11 @@ def test_the_page_leads_with_the_hang_and_says_why(monkeypatch):
     with TestClient(app) as c:
         c.post("/login", data={"password": "test-token"}, follow_redirects=False)
         body = c.get("/system/liveness").text
-    assert "CYCLE HANGING NOW" in body
+    assert "LOOP WEDGED NOW" in body, (
+        "renamed from CYCLE HANGING NOW when `slow` arrived beside it — "
+        "'hanging' was the word that conflated a stopped loop with a slow one"
+    )
+    assert "CYCLE SLOW, LOOP ALIVE" not in body, "this engine cannot be graded slow"
     assert "cannot see the work" in body, "the reader must be told why"
     assert "204.3" in body and "Concurrent scans" in body
 
@@ -268,7 +282,7 @@ def test_a_hang_reports_the_stage_it_is_stuck_in():
     assert out["in_flight_stages"][0]["sec"] == 181.4
 
 
-def test_the_hung_stage_table_renders_only_while_hanging(monkeypatch):
+def test_the_stage_table_renders_on_a_cycle_that_is_still_running(monkeypatch):
     from fastapi.testclient import TestClient
 
     from app.main import app
@@ -283,5 +297,9 @@ def test_the_hung_stage_table_renders_only_while_hanging(monkeypatch):
     with TestClient(app) as c:
         c.post("/login", data={"password": "test-token"}, follow_redirects=False)
         body = c.get("/system/liveness").text
-    assert "What the hung cycle is stuck in" in body
+    assert "Where the cycle still running has spent its time" in body, (
+        "the table is keyed on `hanging` OR `slow` now: a slow cycle asks the "
+        "same question a wedged one does, and it is the population the answer "
+        "is most useful for. The heading no longer presumes the answer."
+    )
     assert "awaiting something that has not returned" in body

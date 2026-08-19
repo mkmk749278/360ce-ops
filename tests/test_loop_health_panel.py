@@ -11,6 +11,8 @@ states apart: an engine that does not report is NOT a healthy engine.
 """
 from __future__ import annotations
 
+import re
+
 from app.data_sources.system_health import reduce_loop_health
 
 
@@ -325,3 +327,45 @@ def test_a_wedged_verdict_with_no_beat_reported_never_prints_none():
     assert out["state"] == "hanging"
     assert "heartbeat is None" not in out["note"], "a missing value quoted as one"
     assert "the heartbeat is not reported" in out["note"]
+
+
+def test_every_state_the_reducer_can_emit_has_its_own_badge(monkeypatch):
+    """Derived, because the hand-checked version cost a CI round.
+
+    Adding `slow` beside `hanging` renamed two labels, and three assertions in
+    `test_scan_stage_breakdown.py` were still pinning the old strings — the rot
+    case this repo names: an assertion outliving its premise at the exact moment
+    somebody is changing the premise, which is the one moment nobody re-reads
+    it. The suite was still running locally when the push went out, and CI found
+    them.
+
+    So rather than a fourth hand-written label assertion: every state the
+    reducer can emit must render a badge of its own on the real page. A state
+    added without one falls through to WITHIN BOUNDS and reads healthy while it
+    is not — and a label renamed on one side of that pair fails here rather than
+    in whichever test happened to quote it.
+    """
+    cases = {
+        "ok": _beating(),
+        "pressure": _beating(cycles=20, over_warn=15, over_kill=0),
+        "past_deadline": _beating(over_kill=2),
+        "slow": _beating(in_flight_sec=200.0, heartbeat_age_sec=3.0),
+        "hanging": _beating(in_flight_sec=400.0, heartbeat_age_sec=300.0),
+    }
+    badges = {}
+    for state, payload in cases.items():
+        assert reduce_loop_health(payload)["state"] == state, (
+            f"fixture for {state!r} no longer produces it"
+        )
+        html = _render_liveness(monkeypatch, payload)
+        # Scoped to the scan-cycle card: the page carries a global status banner
+        # whose badge comes first in the document, and grading on that would
+        # have compared five identical strings and called them a pass.
+        card = html.split("the number the healthcheck kills on", 1)[-1]
+        found = re.findall(r'<span class="badge badge-\w+">([^<]+)</span>', card)
+        assert found, f"{state!r} rendered no badge at all"
+        badges[state] = found[0].strip()
+
+    assert len(set(badges.values())) == len(badges), (
+        f"two states share a badge, so the page cannot tell them apart: {badges}"
+    )
