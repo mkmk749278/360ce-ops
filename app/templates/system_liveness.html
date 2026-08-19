@@ -130,6 +130,27 @@
   {% endif %}
 
   {% if loop.stages %}
+  {% if loop.state == 'hanging' and loop.in_flight_stages %}
+  <h3>What the hung cycle is stuck in</h3>
+  <table class="data-table">
+    <thead><tr><th>Stage</th><th class="num">Accumulated so far</th></tr></thead>
+    <tbody>
+    {% for row in loop.in_flight_stages %}
+      <tr><td class="mono">{{ row.stage }}</td><td class="num mono">{{ row.sec | secs }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">
+    Partial sums for the cycle <strong>still running</strong>. The breakdown
+    below is captured when a cycle <em>completes</em>, so a hung cycle
+    contributes nothing to it &mdash; these are the only stages a hang can
+    report. A stage sitting far above the others here is the one holding the
+    cycle, and because the snapshot writer kept publishing throughout the
+    2026-08-19 hang, the event loop was <em>not</em> blocked: the scan is
+    awaiting something that has not returned.
+  </p>
+  {% endif %}
+
   <h3>Where a slow cycle went</h3>
   {% if loop.stages.state == 'not_reported' %}
     <p><span class="badge badge-warn">NOT REPORTED</span>
