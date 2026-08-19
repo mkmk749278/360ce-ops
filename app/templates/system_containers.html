@@ -170,6 +170,67 @@
 {% endif %}
 
 <div class="card">
+  <h2>Engine CPU &mdash; against its <em>quota</em>, which is the only reading that means anything</h2>
+  <p class="muted small">
+    Measured <strong>inside the engine container</strong> and published; this
+    dashboard runs on a different cgroup and a reading taken here would describe
+    this web process under the engine's name. A raw percentage alone answers
+    nothing &mdash; <strong>221% of a 250% quota is a process at its ceiling</strong>
+    whose scan loop cannot meet its deadline however well it is written, while
+    221% of an uncapped 4-core box is a busy machine with a core to spare. Same
+    number, opposite next move.
+  </p>
+
+  {% if not resources.reported %}
+    <p><span class="badge badge-warn">NOT REPORTED</span> {{ resources.note }}
+      {%- if resources.error %} <span class="mono small">{{ resources.error }}</span>{% endif %}</p>
+  {% else %}
+    <p>
+      {% if resources.state == 'at_ceiling' %}<span class="badge badge-bad">AT THE CEILING</span>
+      {% elif resources.state == 'tight' %}<span class="badge badge-warn">TIGHT</span>
+      {% elif resources.state == 'unknown' %}<span class="badge badge-warn">NOT MEASURED</span>
+      {% else %}<span class="badge badge-ok">HEADROOM</span>{% endif %}
+      {{ resources.note }}
+    </p>
+    <div class="kv-grid">
+      <div class="kv"><span class="muted">Cores in use</span><strong class="mono">
+        {%- if resources.cpu.cores_used is not none %}{{ resources.cpu.cores_used }}{% else %}&mdash;{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Quota</span><strong class="mono">{{ resources.cpu.quota_cores }} cores
+        {%- if resources.cpu.quota_is_host %} <span class="badge badge-muted">uncapped</span>{% endif %}</strong></div>
+      <div class="kv"><span class="muted">% of quota</span><strong class="mono">
+        {%- if resources.cpu.pct_of_quota is not none %}{{ resources.cpu.pct_of_quota }}%{% else %}&mdash;{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Host cores</span><strong class="mono">{{ resources.cpu.host_cores or '&mdash;' }}</strong></div>
+      <div class="kv"><span class="muted">Memory</span><strong class="mono">
+        {%- if resources.memory and resources.memory.used_mb is not none %}{{ resources.memory.used_mb }} MB
+          {%- if resources.memory.used_pct is not none %} ({{ resources.memory.used_pct }}%){% endif %}
+        {%- else %}&mdash;{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Sample window</span><strong class="mono">
+        {%- if resources.cpu.window_sec %}{{ resources.cpu.window_sec }}s{% else %}&mdash;{% endif %}</strong></div>
+    </div>
+    {% if resources.memory and resources.memory.reason %}
+      <p class="muted small">Memory: {{ resources.memory.reason }}</p>
+    {% endif %}
+
+    {% if resources.config %}
+    <h3>The config this process is actually running</h3>
+    <p class="muted small">
+      Read out of the module the scanner is using, <strong>not</strong> from a
+      <code>docker exec</code> one-shot &mdash; that prints what the image was
+      built with, which this system has already believed once and been wrong
+      about. A deploy that silently did not take is otherwise indistinguishable
+      from a fix that did not work.
+    </p>
+    <table class="data-table">
+      <thead><tr><th>Setting</th><th class="num">Running value</th></tr></thead>
+      <tbody>
+      {% for key, value in resources.config.items() %}
+        <tr><td class="mono">{{ key }}</td><td class="num mono">{{ value }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  {% endif %}
+
   <h2>Host — the resources all of them share</h2>
   <p class="muted small">
     Load average inside a container is the <em>host's</em>, because containers

@@ -182,6 +182,21 @@ class EngineApiClient:
         """
         return await self._get("/internal/diag/loop-health")
 
+    async def host_resources(self) -> Any:
+        """CPU/memory/disk headroom, and the config the engine is really using.
+
+        The owner's opening question of the 2026-08-19 stability session —
+        *"engine cpu 221% used is our vps not enough or what"* — had no answer
+        on any surface, because CPU only means something against the **quota**
+        and the quota was visible over SSH alone.
+
+        Read from the engine, never measured here. Ops runs in a different
+        container on a different cgroup, so a reading taken in this process
+        would describe this process while looking exactly like a reading of the
+        engine.
+        """
+        return await self._get("/internal/diag/host-resources")
+
     async def data_intake(self) -> Any:
         """What the engine is actually reading from Binance.
 
