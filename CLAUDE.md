@@ -924,11 +924,47 @@ Rules, each of which is a rule already in this file arriving at the auth layer:
   `/guest` for fifteen minutes; `/login` is a different route and unaffected. A
   throttle that can lock the owner out of his own kill switch is a worse failure
   than the one it prevents.
-- **Scope is fixed at read; there is no scope parameter.** A tier that can
-  *sometimes* write is one whose blast radius has to be re-derived at every call
-  site. Read-only is the only second tier that needs no such argument, and the
-  control doctrine above (owner-gated, audited, PRG-confirmed) is unchanged by
-  this because nothing here can write.
+- **Scope was fixed at read, and on 2026-08-19 it gained exactly one
+  exception — argued, bounded and counted.** The original rule read *"a tier
+  that can sometimes write is one whose blast radius has to be re-derived at
+  every call site"*, which is true and is precisely why the exception is a
+  **route allow-list rather than a scope parameter**: the blast radius is
+  re-derived once, per named route, in writing, instead of at every call site.
+
+  The owner asked for a session that can *"diagnosis everything and fix every
+  error within that allowed guest mode"*. A pure-read tier cannot, so
+  `GUEST_ACTION_ROUTES` names one route — the diagnostic console — with its
+  reason recorded beside it. What made it admissible is not that it seemed safe:
+  **its handler is incapable of doing anything a guest may not already do**,
+  because it forwards a catalog *key* and the engine decides what that key may
+  do. A route accepting a free-form target would not qualify however carefully
+  written, and `test_the_action_allowlist_cannot_grow_silently` bounds the list
+  at one so a second entry has to arrive with its own argument in the diff.
+
+  The owner's security premise is worth keeping straight, because it is right
+  about the threat it names and silent about this one: an IP-whitelisted,
+  futures-only, no-withdraw key defeats a **stolen** key used from anywhere
+  else, and says nothing about code running **on** the whitelisted host, where
+  futures permission is not symbol-scoped. The exposure arbitrary execution
+  would carry here is a **position**, not a withdrawal — which is the whole
+  reason this is a catalog and not a shell.
+
+- **The grep is not the check; acting on every hit is** (paid for the same day).
+  This file already says *"when a diff changes an invariant, grep the suite for
+  the invariant's old words and read every hit as a reviewer, not as an
+  author."* I ran that grep, found
+  `test_every_mutating_route_is_owner_only`, quoted its body — whose docstring
+  literally called an unlisted write route in the guest set *"a live
+  contradiction waiting for rule 1 to move"* — and then shipped without
+  touching it. CI caught it, which is the system working, but the guard existed
+  to be read and I read it and stopped.
+
+  Two hits beyond the test were still outstanding when CI failed, and the
+  second is the one that mattered: `/control/access` told the owner a code
+  *"cannot issue any write"* **at the moment he mints one**. A grant's own
+  description going stale is worse than a stale panel caption, because it is
+  the sentence a security decision is made from. Finish the grep before the
+  push: the list of hits is the checklist.
 
 ## The 2026-08-06 panel surf — what reading every page found
 

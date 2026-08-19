@@ -8,8 +8,15 @@ tests here are about the properties rather than the happy path:
   read it — the alternative is a deny-list, which is silent by construction on
   the next route and would hand tomorrow's page to every live code the day it
   ships.
-* **Writes are structurally impossible**, not merely unlisted: the method check
-  precedes the route lookup, so a guest cannot POST even to a route it may GET.
+* **Writes are refused unless explicitly argued for.** The method check used to
+  be absolute — "GET and HEAD, nothing else, ever" — and on 2026-08-19 it was
+  **narrowed, not deleted**: `guest_scope.GUEST_ACTION_ROUTES` names the routes
+  a guest may POST to, each with a written reason, and everything else is still
+  refused before the route lookup. The blanket property these tests protect is
+  unchanged in substance: a mutating route reaching the guest-readable set
+  without being named there fails CI. An invariant that blocks correct work
+  gets deleted outright by whoever needs it; one that states what it means
+  survives, so this states what it means.
 * **Revocation is immediate.** The session carries the grant id and the grant is
   re-read per request, so a cookie minted before the revoke dies on the next
   click. A test that only checked the login would pass on a build where a
@@ -111,18 +118,48 @@ def test_api_v1_is_never_guest_readable():
     assert not leaked, f"app-token surface exposed to guests: {leaked}"
 
 
-def test_every_mutating_route_is_owner_only():
-    """Derived, not listed: any route registering a non-GET method must be
-    owner-only. Rule 1 already blocks the request, but a write route sitting in
-    the readable set would be a live contradiction waiting for rule 1 to move."""
+def test_every_mutating_route_is_owner_only_unless_explicitly_allow_listed():
+    """Derived, not listed: a route registering a non-GET method must be
+    owner-only **or** named in ``GUEST_ACTION_ROUTES`` with a reason.
+
+    This test's previous docstring called an unlisted write route in the
+    readable set "a live contradiction waiting for rule 1 to move", and on
+    2026-08-19 rule 1 moved — the owner asked for a guest session that can run
+    engine diagnostics, so the absolute method ban became a one-route
+    allow-list. The guard is narrowed to match rather than deleted: the
+    property that matters is that a mutating route cannot reach guests
+    *silently*, and that survives intact.
+    """
     offenders = []
     for route in app.routes:
         methods = getattr(route, "methods", None) or set()
         path = getattr(route, "path", None)
         if path and (methods - {"GET", "HEAD", "OPTIONS"}):
-            if path in guest_scope.GUEST_READ_ROUTES and path not in guest_scope.PUBLIC_PATHS:
+            if (
+                path in guest_scope.GUEST_READ_ROUTES
+                and path not in guest_scope.PUBLIC_PATHS
+                and path not in guest_scope.GUEST_ACTION_ROUTES
+            ):
                 offenders.append((path, sorted(methods)))
-    assert not offenders, f"mutating routes in the guest-readable set: {offenders}"
+    assert not offenders, (
+        "mutating routes in the guest-readable set that nobody allow-listed: "
+        f"{offenders} — add them to GUEST_ACTION_ROUTES with a written reason, "
+        "or classify them owner-only. Do not delete this assertion."
+    )
+
+
+def test_the_action_allowlist_cannot_grow_silently():
+    """The narrowing is only safe while the exception stays small and argued.
+
+    Asserted as a number so adding a second route is a deliberate act with this
+    line in the diff, rather than something that slides in behind a feature.
+    """
+    assert len(guest_scope.GUEST_ACTION_ROUTES) <= 1, (
+        "the guest write allow-list has grown; each entry needs its own "
+        "argument, and this bound is the prompt to make it"
+    )
+    for path, reason in guest_scope.GUEST_ACTION_ROUTES.items():
+        assert reason.strip(), f"{path} has no written reason"
 
 
 def test_get_with_side_effects_is_owner_only():

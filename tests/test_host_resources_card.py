@@ -158,3 +158,35 @@ def test_a_missing_block_does_not_render_a_zero(monkeypatch):
         body = c.get("/system").text
     assert "NOT REPORTED" in body
     assert "the numbers are not being sent" in body
+
+
+def test_the_page_reconciles_its_two_cpu_readings(client_with_resources):
+    """Two numbers for one quantity on one page must not be left to disagree.
+
+    Measured live 2026-08-19: the card read 1.16-1.35 cores while the container
+    table beside it read 176-233% for the same engine, four samples in a row.
+    Neither is wrong — `docker stats --no-stream` is one ~1s instantaneous
+    sample and a scan cycle is bursty, while the card averages the cgroup
+    counter over its whole window — but a reader has no way to know that, and
+    "a summary that disagrees with the table under it" is the defect this repo
+    has paid for under three different names.
+
+    The memory figures come from the same cgroup and agree to a rounding
+    (858.6 MB / 28.0% against 854.5MiB / 27.82%), which is what establishes
+    both are reading this container and the CPU gap is method, not target.
+    """
+    body = client_with_resources.get("/system").text
+    assert "two different" in body and "will not match" in body
+    assert "--no-stream" in body, "name the instrument, not just the discrepancy"
+
+    # The table's own header is asserted against the TEMPLATE, not the body:
+    # this environment has no docker, so `containers.blind` is true and the
+    # table does not render at all. Asserting it in the body would have passed
+    # only where docker exists and silently covered nothing here — which is the
+    # shape of test this repo keeps paying for.
+    from pathlib import Path
+
+    tpl = Path("app/templates/system_containers.html").read_text()
+    assert "CPU <span" in tpl and "(instant)" in tpl, (
+        "the table column has to say which measurement it is"
+    )

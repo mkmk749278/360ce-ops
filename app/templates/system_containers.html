@@ -65,7 +65,7 @@
   <thead>
     <tr>
       <th>Container</th><th>State</th><th>Health</th><th>Restarts</th>
-      <th>Uptime</th><th>CPU</th><th>Memory</th><th>Image</th>
+      <th>Uptime</th><th>CPU <span class="muted small">(instant)</span></th><th>Memory</th><th>Image</th>
     </tr>
   </thead>
   <tbody>
@@ -207,6 +207,19 @@
       <div class="kv"><span class="muted">Sample window</span><strong class="mono">
         {%- if resources.cpu.window_sec %}{{ resources.cpu.window_sec }}s{% else %}&mdash;{% endif %}</strong></div>
     </div>
+    <p class="muted small">
+      <strong>This figure and the CPU column in the table above are two different
+      measurements and will not match.</strong> That column is
+      <code>docker stats --no-stream</code>: one instantaneous sample of roughly a
+      second, taken while the page loads, and a scan cycle is bursty &mdash; it
+      routinely reads 1.5&ndash;2&times; this one. The figure here is the container's own
+      cgroup CPU counter averaged over the whole sample window named beside it,
+      which is the number that answers <em>is the box big enough</em>; the
+      instantaneous one answers <em>what is it doing this second</em>. Neither is
+      wrong and neither is "the" CPU reading. The memory figures come from the
+      same cgroup and <em>do</em> agree, which is what confirms both are reading
+      this container rather than another.
+    </p>
     {% if resources.memory and resources.memory.reason %}
       <p class="muted small">Memory: {{ resources.memory.reason }}</p>
     {% endif %}
