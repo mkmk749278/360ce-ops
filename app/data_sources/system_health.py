@@ -1228,6 +1228,31 @@ def reduce_loop_health(payload: Any) -> dict[str, Any]:
     out["boot_over_warn"] = boot_warn
     out["boot_reported"] = "over_kill_boot" in scan
 
+    # A cycle that has NOT finished is graded first, because every counter
+    # below it records completion only. On 2026-08-19 this card read
+    # "0 past the deadline, last cycle 20.76s" while autoheal was restarting the
+    # engine on a failing streak of 3 — healthy-looking precisely while the
+    # container was being killed. `healthcheck.py` kills on heartbeat age, the
+    # heartbeat is touched once per COMPLETED cycle, so a hung cycle appears in
+    # none of over_warn / over_kill / worst_sec.
+    in_flight = scan.get("in_flight_sec")
+    beat_age = scan.get("heartbeat_age_sec")
+    out["in_flight_sec"] = in_flight
+    out["heartbeat_age_sec"] = beat_age
+    out["hang_reported"] = "in_flight_sec" in scan
+
+    worst_age = max([v for v in (in_flight, beat_age) if v is not None], default=None)
+    if kill is not None and worst_age is not None and worst_age > kill:
+        out["state"] = "hanging"
+        out["note"] = (
+            f"A scan cycle has been running {in_flight}s and the heartbeat is "
+            f"{beat_age}s old, against a {kill:.0f}s deadline — the container is "
+            "being killed right now, or is about to be. None of the counters "
+            "below can show this: they record cycles at completion, and this one "
+            "has not completed."
+        )
+        return out
+
     if over_kill:
         out["state"] = "past_deadline"
         out["note"] = (

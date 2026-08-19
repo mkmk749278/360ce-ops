@@ -71,12 +71,23 @@
     <p><span class="badge badge-warn">NO CYCLE YET</span> {{ loop.note }}</p>
   {% else %}
     <p>
-      {% if loop.state == 'past_deadline' %}<span class="badge badge-bad">PAST THE DEADLINE</span>
+      {% if loop.state == 'hanging' %}<span class="badge badge-bad">CYCLE HANGING NOW</span>
+      {% elif loop.state == 'past_deadline' %}<span class="badge badge-bad">PAST THE DEADLINE</span>
       {% elif loop.state == 'pressure' %}<span class="badge badge-warn">UNDER PRESSURE</span>
       {% else %}<span class="badge badge-ok">WITHIN BOUNDS</span>{% endif %}
       {{ loop.note }}
     </p>
     <div class="kv-grid">
+      <div class="kv"><span class="muted">Cycle in flight</span><strong class="mono">
+        {%- if not loop.hang_reported %}not reported
+        {%- elif loop.in_flight_sec is not none %}{{ loop.in_flight_sec }}s
+        {%- else %}&mdash;{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Heartbeat age</span><strong class="mono">
+        {%- if not loop.hang_reported %}not reported
+        {%- elif loop.heartbeat_age_sec is not none %}{{ loop.heartbeat_age_sec }}s
+        {%- else %}&mdash;{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Concurrent scans</span><strong class="mono">
+        {{- loop.scan.max_concurrent_scans if loop.scan.max_concurrent_scans is not none else '—' }}</strong></div>
       <div class="kv"><span class="muted">Last cycle</span><strong class="mono">{{ loop.scan.last_sec }}s</strong></div>
       <div class="kv"><span class="muted">Worst this boot</span><strong class="mono">{{ loop.scan.worst_sec }}s</strong></div>
       <div class="kv"><span class="muted">Cycles</span><strong class="mono">{{ loop.scan.cycles }}</strong></div>
@@ -86,6 +97,26 @@
       <div class="kv"><span class="muted">Bounds (engine's)</span><strong class="mono">{% if loop.bounds_reported %}{{ loop.scan.warn_sec }}s / {{ loop.scan.kill_sec }}s{% else %}not reported{% endif %}</strong></div>
       <div class="kv"><span class="muted">Executor workers</span><strong class="mono">{{ loop.scan.executor_workers if loop.scan.executor_workers is not none else '—' }}</strong></div>
     </div>
+    <p class="muted small">
+      <strong>Read &ldquo;Cycle in flight&rdquo; and &ldquo;Heartbeat age&rdquo; before
+      any counter below them.</strong> Every other number on this card records a
+      cycle at <em>completion</em>, and <code>healthcheck.py</code> kills the
+      container on <em>heartbeat age</em> &mdash; which the scanner touches once
+      per completed cycle. So a cycle hung past the deadline appears in none of
+      &ldquo;past the deadline&rdquo;, &ldquo;worst this boot&rdquo; or
+      &ldquo;last cycle&rdquo;. On 2026-08-19 this card read
+      <em>0 past the deadline, last cycle 20.76s</em> while autoheal was
+      restarting the engine on a failing streak of 3.
+      <strong>A measurement that can only see finished work cannot see the work
+      that is killing you.</strong>
+    </p>
+    <p class="muted small">
+      &ldquo;Concurrent scans&rdquo; beside &ldquo;Executor workers&rdquo; is the
+      queueing ratio: each scan <em>awaits</em> the pool, so a limit far above the
+      worker count means the surplus is waiting, and that wait is what the stage
+      breakdown reports as <code>indicators</code> wall-time rather than as
+      anything named &ldquo;waiting&rdquo;.
+    </p>
     <p class="muted small">
       Both bounds come from the engine, never from ops. A staleness threshold invented
       here is what made <a href="/truth">/truth</a> read STALE for 23 hours out of every 24.

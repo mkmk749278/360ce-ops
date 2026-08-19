@@ -174,3 +174,80 @@ def test_an_engine_without_the_stamp_does_not_render_an_empty_table(monkeypatch)
         body = c.get("/system/liveness").text
     assert "NOT REPORTED" in body
     assert "the split simply is not being sent" in body
+
+
+# ---------------------------------------------------------------------------
+# The hang the completed-cycle counters cannot see (2026-08-19).
+# ---------------------------------------------------------------------------
+
+def test_a_hanging_cycle_outranks_every_completed_cycle_counter():
+    """The live defect, reproduced.
+
+    On 2026-08-19 this card read "0 past the deadline, last cycle 20.76s" while
+    autoheal was restarting the engine on a failing streak of 3. Every counter
+    on it records a cycle at COMPLETION; `healthcheck.py` kills on heartbeat
+    age, touched once per completed cycle. A cycle hung past the deadline is
+    therefore invisible to all of them — the page read healthy precisely while
+    the container was being killed.
+    """
+    scan = dict(_BASE, over_warn=0, over_kill=0, last_sec=20.76, worst_sec=113.47,
+                in_flight_sec=204.3, heartbeat_age_sec=210.9)
+    out = reduce_loop_health(_payload(scan))
+    assert out["state"] == "hanging", "a hang outranks a clean completed book"
+    assert "being killed right now" in out["note"]
+    assert out["in_flight_sec"] == 204.3
+
+
+def test_a_healthy_in_flight_cycle_does_not_trip_it():
+    """A cycle mid-run is the normal state; only past the deadline is a fault."""
+    scan = dict(_BASE, over_warn=0, over_kill=0, in_flight_sec=12.0,
+                heartbeat_age_sec=18.0)
+    assert reduce_loop_health(_payload(scan))["state"] == "ok"
+
+
+def test_an_engine_without_the_stamp_reads_not_reported_not_healthy():
+    """Absent is not zero, and 0s would read as 'a cycle just completed'."""
+    out = reduce_loop_health(_payload(dict(_BASE, over_warn=0, over_kill=0)))
+    assert out["hang_reported"] is False
+    assert out["in_flight_sec"] is None
+    assert out["state"] != "hanging", "we cannot claim a hang we cannot see"
+
+
+def test_the_hang_is_graded_on_the_engines_numbers_not_ops_clock():
+    """Both are ages of an in-progress state, so only the engine can take them.
+
+    Ops computing `now - last_cycle_at` would grade the engine on the
+    dashboard's clock — the rule /signals/sar-live paid for twice.
+    """
+    import inspect
+
+    from app.data_sources import system_health as sh
+
+    src = inspect.getsource(sh.reduce_loop_health)
+    assert "in_flight_sec" in src
+    for forbidden in ("time.time()", "datetime.now", "utcnow"):
+        assert forbidden not in src, (
+            f"{forbidden} in the reducer means ops is grading freshness on its "
+            "own clock"
+        )
+
+
+def test_the_page_leads_with_the_hang_and_says_why(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.routes import system as system_routes
+
+    async def _fake(_request):
+        return {"loop_health": {"scan_cycle": dict(
+            _BASE, over_warn=0, over_kill=0, last_sec=20.76,
+            in_flight_sec=204.3, heartbeat_age_sec=210.9,
+            max_concurrent_scans=20, executor_workers=8)}}
+
+    monkeypatch.setattr(system_routes, "_loop_health_probe", _fake)
+    with TestClient(app) as c:
+        c.post("/login", data={"password": "test-token"}, follow_redirects=False)
+        body = c.get("/system/liveness").text
+    assert "CYCLE HANGING NOW" in body
+    assert "cannot see the work" in body, "the reader must be told why"
+    assert "204.3" in body and "Concurrent scans" in body
