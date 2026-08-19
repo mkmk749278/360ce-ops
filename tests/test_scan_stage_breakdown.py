@@ -251,3 +251,37 @@ def test_the_page_leads_with_the_hang_and_says_why(monkeypatch):
     assert "CYCLE HANGING NOW" in body
     assert "cannot see the work" in body, "the reader must be told why"
     assert "204.3" in body and "Concurrent scans" in body
+
+
+def test_a_hang_reports_the_stage_it_is_stuck_in():
+    """The only breakdown a hung cycle can produce.
+
+    `worst_stages` is captured at completion, so the hung cycle — the one that
+    matters — contributes nothing to it.
+    """
+    scan = dict(_BASE, over_warn=0, over_kill=0, in_flight_sec=186.05,
+                heartbeat_age_sec=190.04, worst_stages={},
+                in_flight_stages={"smc": 3.1, "indicators": 181.4})
+    out = reduce_loop_health(_payload(scan))
+    assert out["state"] == "hanging"
+    assert out["in_flight_stages"][0]["stage"] == "indicators"
+    assert out["in_flight_stages"][0]["sec"] == 181.4
+
+
+def test_the_hung_stage_table_renders_only_while_hanging(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    from app.routes import system as system_routes
+
+    async def _hang(_request):
+        return {"loop_health": {"scan_cycle": dict(
+            _BASE, over_warn=0, over_kill=0, in_flight_sec=186.05,
+            heartbeat_age_sec=190.04, in_flight_stages={"indicators": 181.4})}}
+
+    monkeypatch.setattr(system_routes, "_loop_health_probe", _hang)
+    with TestClient(app) as c:
+        c.post("/login", data={"password": "test-token"}, follow_redirects=False)
+        body = c.get("/system/liveness").text
+    assert "What the hung cycle is stuck in" in body
+    assert "awaiting something that has not returned" in body

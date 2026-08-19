@@ -1239,6 +1239,19 @@ def reduce_loop_health(payload: Any) -> dict[str, Any]:
     beat_age = scan.get("heartbeat_age_sec")
     out["in_flight_sec"] = in_flight
     out["heartbeat_age_sec"] = beat_age
+    # Partial stage sums for the cycle still running. The worst-cycle breakdown
+    # is captured at COMPLETION, so a hung cycle contributes nothing to it —
+    # these are the only stages a hang can report, and they name the await it
+    # is stuck on.
+    flight_stages = scan.get("in_flight_stages")
+    out["in_flight_stages"] = [
+        {"stage": str(k), "sec": round(float(v), 2)}
+        for k, v in sorted(
+            (flight_stages or {}).items(),
+            key=lambda kv: -float(kv[1]),
+        )
+        if isinstance(v, (int, float))
+    ]
     out["hang_reported"] = "in_flight_sec" in scan
 
     worst_age = max([v for v in (in_flight, beat_age) if v is not None], default=None)
