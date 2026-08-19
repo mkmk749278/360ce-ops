@@ -96,6 +96,27 @@ class Notifier:
             data={"fingerprint": action.fingerprint, "kind": "recovery"},
         )
 
+    def armed_sinks(self) -> dict[str, bool]:
+        """Which delivery paths this notifier can actually send through.
+
+        Read off the same values `_send_telegram` and `_push` gate on, so the
+        answer cannot drift from the behaviour — the alternative is a second
+        copy of "is Telegram configured" in the web container, which is how
+        `/alerts` came to print *"Nothing pages you"* over a working Telegram
+        sink (2026-08-19). Booleans only; no token leaves this method.
+
+        `telegram` needs both a bot token and a chat id — either alone sends
+        nothing. `push` is deliberately NOT graded here: a service account
+        makes a send possible and a registered device makes it arrive, and the
+        registry lives on the web side, so that half stays where it is
+        observable. This reports what the AGENT holds.
+        """
+        return {
+            "telegram": bool(self._token and self._chat_id),
+            "push_service_account": self._fcm is not None and self._fcm.enabled,
+            "healthchecks": bool(self._hc_url),
+        }
+
     async def _push(self, *, title: str, body: str, data: dict[str, str]) -> None:
         """Best-effort FCM push to every registered device; prune dead tokens."""
         if self._fcm is None or self._devices is None:

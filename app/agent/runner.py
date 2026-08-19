@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 
 from app.config import load_settings
 from app.data_sources.engine_api import EngineApiClient
@@ -22,6 +23,7 @@ from app.agent.detectors import (
     BackgroundTaskDetector,
     CoreContainerDetector,
     DetectorResult,
+    EngineRestartDetector,
     EngineStatusDetector,
     NakedPositionDetector,
     RedisProbe,
@@ -249,6 +251,14 @@ async def run() -> None:
     d6 = ApiHealthDetector()
     d7 = SignalSilenceDetector()
     d8 = RedisStalenessDetector(stale_sec=int(os.getenv("AGENT_REDIS_STALE_SEC", "45")))
+    # Stateful across cycles, so it is built ONCE outside the loop — a
+    # detector reconstructed per cycle has no previous uptime to compare
+    # against and can never fire, which is the quiet way this check would
+    # have shipped dead.
+    d9 = EngineRestartDetector(
+        window_sec=int(os.getenv("AGENT_RESTART_WINDOW_SEC", "3600")),
+        loop_threshold=int(os.getenv("AGENT_RESTART_LOOP_THRESHOLD", "2")),
+    )
 
     log.info("Monitoring agent started — poll interval %ss", poll_interval)
 
@@ -329,6 +339,7 @@ async def run() -> None:
             (d6, {"health": health}),
             (d7, {"pulse": pulse, "mode": auto_mode.get("mode") or pulse.get("mode", "off")}),
             (d8, {"probe": redis_probe}),
+            (d9, {"pulse": pulse, "now": time.time()}),
         ]:
             try:
                 results = detector.check(**args)
@@ -378,6 +389,11 @@ async def run() -> None:
             redis_probe_summary=redis_probe.summary(),
             redis_probe_ok=redis_probe.ok,
             poll_interval_s=poll_interval,
+            # Read off the notifier rather than off env in the web container:
+            # this process is the one that knows what it can send through, and
+            # a second copy of that check is how /alerts came to print
+            # "Nothing pages you" over a working Telegram sink.
+            sinks=notifier.armed_sinks(),
         )
 
         await asyncio.sleep(poll_interval)

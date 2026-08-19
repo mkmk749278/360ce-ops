@@ -87,6 +87,21 @@ async def _api_probe(request: Request) -> dict[str, Any]:
     }
 
 
+async def _loop_health_probe(request: Request) -> dict[str, Any]:
+    """The engine's own loop counters — scan-cycle wall-time above all.
+
+    Read from the engine rather than timed here, by the same rule that keeps
+    every other number on these pages on its producer's clock. The bounds it is
+    graded against (`warn_sec`, `kill_sec`) also come from the engine: ops
+    inventing a threshold is what made /truth read STALE for 23 hours a day.
+    """
+    api = request.app.state.engine_api
+    try:
+        return await api.loop_health() or {}
+    except Exception as exc:  # noqa: BLE001 — reported to the page, never raised
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
 async def _agent_probe(request: Request) -> dict[str, Any]:
     reader = getattr(request.app.state, "agent_alerts", None)
     if reader is None:
@@ -106,11 +121,12 @@ async def _gather(request: Request) -> dict[str, Any]:
     promotion pages follow with one reducer.
     """
     settings = request.app.state.settings
-    containers, redis, api, agent = await asyncio.gather(
+    containers, redis, api, agent, loop_raw = await asyncio.gather(
         system_health.collect_containers(),
         system_health.collect_redis(),
         _api_probe(request),
         _agent_probe(request),
+        _loop_health_probe(request),
     )
     host = system_health.collect_host(settings.engine_data_dir)
     chain = system_health.build_chain(containers, redis, api, agent)
@@ -120,6 +136,7 @@ async def _gather(request: Request) -> dict[str, Any]:
         "api": api,
         "agent": agent,
         "host": host,
+        "loop": system_health.reduce_loop_health(loop_raw),
         "chain": chain,
         # Keyed, so a page can render ONE link's verdict without re-deriving
         # it. Every card that asked its own question of the raw payload got a

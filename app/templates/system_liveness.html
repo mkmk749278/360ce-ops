@@ -53,6 +53,81 @@
 </div>
 
 <div class="card">
+  <h2>Scan cycle <span class="muted">the number the healthcheck kills on</span></h2>
+  <p class="muted small">
+    The scanner touches its heartbeat file <strong>once, at the end of a cycle</strong>,
+    and <code>healthcheck.py</code> fails when that file goes stale. Three consecutive
+    failures flip the container unhealthy and the autoheal sidecar restarts it — which
+    expires every <code>snapshot:*</code> key, so the dashboard stops answering and the
+    app feed reads empty. <strong>Cycle wall-time is heartbeat age</strong>, and until
+    2026-08-19 it was computed every cycle and rendered nowhere: measured at 9.2s to
+    402.5s against a 15s target, with a restart inside the measurement window and
+    docker's <code>RestartCount</code> still reading 0.
+  </p>
+
+  {% if not loop.reported %}
+    <p><span class="badge badge-warn">NOT REPORTED</span> {{ loop.note }}</p>
+  {% elif loop.scan is none %}
+    <p><span class="badge badge-warn">NO CYCLE YET</span> {{ loop.note }}</p>
+  {% else %}
+    <p>
+      {% if loop.state == 'past_deadline' %}<span class="badge badge-bad">PAST THE DEADLINE</span>
+      {% elif loop.state == 'pressure' %}<span class="badge badge-warn">UNDER PRESSURE</span>
+      {% else %}<span class="badge badge-ok">WITHIN BOUNDS</span>{% endif %}
+      {{ loop.note }}
+    </p>
+    <div class="kv-grid">
+      <div class="kv"><span class="muted">Last cycle</span><strong class="mono">{{ loop.scan.last_sec }}s</strong></div>
+      <div class="kv"><span class="muted">Worst this boot</span><strong class="mono">{{ loop.scan.worst_sec }}s</strong></div>
+      <div class="kv"><span class="muted">Cycles</span><strong class="mono">{{ loop.scan.cycles }}</strong></div>
+      <div class="kv"><span class="muted">Over warn bound</span><strong class="mono">{{ loop.scan.over_warn }}{% if loop.over_warn_pct is not none %} ({{ loop.over_warn_pct }}%){% endif %}</strong></div>
+      <div class="kv"><span class="muted">Past the deadline</span><strong class="mono">{{ loop.scan.over_kill }}</strong></div>
+      <div class="kv"><span class="muted">Bounds (engine's)</span><strong class="mono">{% if loop.bounds_reported %}{{ loop.scan.warn_sec }}s / {{ loop.scan.kill_sec }}s{% else %}not reported{% endif %}</strong></div>
+      <div class="kv"><span class="muted">Executor workers</span><strong class="mono">{{ loop.scan.executor_workers if loop.scan.executor_workers is not none else '—' }}</strong></div>
+    </div>
+    <p class="muted small">
+      Both bounds come from the engine, never from ops. A staleness threshold invented
+      here is what made <a href="/truth">/truth</a> read STALE for 23 hours out of every 24.
+    </p>
+  {% endif %}
+
+  {% if loop.writer %}
+  <h3>Snapshot writer</h3>
+  <div class="kv-grid">
+    <div class="kv"><span class="muted">Cycles</span><strong class="mono">{{ loop.writer.cycles }}</strong></div>
+    <div class="kv"><span class="muted">Over budget</span><strong class="mono">{{ loop.writer.overruns }}</strong></div>
+    <div class="kv"><span class="muted">Last / worst</span><strong class="mono">{{ loop.writer.last_cycle_sec }}s / {{ loop.writer.worst_cycle_sec }}s</strong></div>
+    <div class="kv"><span class="muted">Key TTL</span><strong class="mono">{{ loop.writer.ttl_sec }}s</strong></div>
+  </div>
+  <p class="muted small">
+    Read the overrun <em>rate</em>, not the TTL. The keys hold for {{ loop.writer.ttl_sec }}s,
+    so this can sit at a majority of cycles over budget and still look fine right up to the
+    moment the app feed goes empty — the writer is normally not slow in itself, it is starved
+    by whatever else is holding the loop.
+  </p>
+  {% endif %}
+
+  {% if loop.cache %}
+  <h3>Indicator cache</h3>
+  <div class="kv-grid">
+    <div class="kv"><span class="muted">Frozen values avoided</span><strong class="mono">{{ loop.cache.stale_avoided }}</strong></div>
+    <div class="kv"><span class="muted">Hits at the bar cap</span><strong class="mono">{{ loop.cache.capped_hits }}</strong></div>
+    <div class="kv"><span class="muted">Undatable at the cap</span><strong class="mono">{{ loop.cache.undatable_at_cap }}</strong></div>
+    <div class="kv"><span class="muted">Bucket cap</span><strong class="mono">{{ loop.cache.bucket_cap }} bars</strong></div>
+  </div>
+  <p class="muted small">
+    The cache key was the bar <em>count</em>, which stops changing once a bucket reaches its
+    cap — so a full bucket's indicators froze while its bars kept arriving.
+    <strong>Frozen values avoided</strong> is how much that was actually happening;
+    <strong>hits at the bar cap</strong> is its denominator. <strong>Undatable at the cap</strong>
+    is a different state and never pooled with either: those buckets carry no bar timestamps,
+    so they are recomputed every cycle — correct, but expensive, and the fix is a bucket
+    re-seed rather than anything in the cache.
+  </p>
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>Engine pulse <span class="muted">the engine's own clock, not ops'</span></h2>
   {% if api.error %}
     <p><span class="badge badge-bad">NO ANSWER</span>

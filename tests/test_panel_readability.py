@@ -244,21 +244,77 @@ def test_alerts_never_claims_telegram_is_banned():
         assert "there is no push" not in body
 
 
-def test_alerts_reads_its_delivery_path_rather_than_asserting_one(monkeypatch):
-    """Push is disabled-safe: no service account means every send is a no-op. A
-    page promising a page over that configuration is the old error's mirror
-    image, so the state is read, both halves of it."""
+def _alerts_with_sinks(monkeypatch, sinks, *, present=True):
+    """Drive /alerts with a given agent heartbeat, through the real reader."""
+    from app.data_sources import agent_alerts as aa
+
+    async def _hb(self):
+        return {"present": present, "age_sec": 5.0, "sinks": sinks}
+
+    monkeypatch.setattr(aa.AgentAlertsReader, "heartbeat", _hb)
+
+
+def test_alerts_reads_every_delivery_path_rather_than_asserting_about_them(monkeypatch):
+    """This sentence has been wrong on this page three times, in both directions.
+
+    First it said Telegram was banned and there was no push. Then it graded
+    FCM — and only FCM — and kept the old conclusion, so on 2026-08-19 it
+    printed "Nothing pages you" on a box whose Telegram sink was configured and
+    delivering the very alerts the owner was receiving.
+
+    "Nothing pages you" is now allowed only when the agent has REPORTED its
+    sinks and every observable one is dark.
+    """
     with TestClient(app) as client:
         _login(client)
-
         monkeypatch.setattr(app.state.device_registry, "count", lambda: 0)
-        assert "PULL ONLY" in client.get("/alerts").text
+        object.__setattr__(app.state.settings, "fcm_service_account", "")
 
+        # The live 2026-08-19 state: no push, Telegram working.
+        _alerts_with_sinks(monkeypatch, {"telegram": True, "healthchecks": False})
+        body = client.get("/alerts").text
+        assert "Nothing pages you" not in body, (
+            "Telegram is armed — this is the sentence that was false in production"
+        )
+        assert "ALERTS DELIVERED" in body
+        assert "Telegram" in body
+
+        # Genuinely silent, and the agent said so: the one case that may claim it.
+        _alerts_with_sinks(monkeypatch, {"telegram": False, "healthchecks": False})
+        body = client.get("/alerts").text
+        assert "PULL ONLY" in body
+        assert "Nothing pages you" in body
+
+        # Push armed on its own.
         monkeypatch.setattr(app.state.device_registry, "count", lambda: 2)
         object.__setattr__(app.state.settings, "fcm_service_account", "{}")
         body = client.get("/alerts").text
-        assert "PUSH ARMED" in body
+        assert "ALERTS DELIVERED" in body
         assert "2 registered devices" in body
+        assert "Nothing pages you" not in body
+
+
+def test_alerts_will_not_claim_silence_it_has_not_observed(monkeypatch):
+    """An unobserved path is not an absent one.
+
+    An agent that predates the sinks field, or one we could not read, must
+    render NOT REPORTED — never the sentence that sends the owner to bed
+    believing this page is his only warning.
+    """
+    with TestClient(app) as client:
+        _login(client)
+        monkeypatch.setattr(app.state.device_registry, "count", lambda: 0)
+        object.__setattr__(app.state.settings, "fcm_service_account", "")
+
+        _alerts_with_sinks(monkeypatch, {})            # older agent build
+        body = client.get("/alerts").text
+        assert "DELIVERY NOT REPORTED" in body
+        assert "Nothing pages you" not in body
+
+        _alerts_with_sinks(monkeypatch, None, present=False)   # no heartbeat at all
+        body = client.get("/alerts").text
+        assert "DELIVERY NOT REPORTED" in body
+        assert "Nothing pages you" not in body
 
 
 # ---------------------------------------------------------------------------
