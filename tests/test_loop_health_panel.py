@@ -129,3 +129,45 @@ def test_the_liveness_page_renders_the_scan_cycle_card():
         # appears only when it trips teaches the reader its absence means fine.
         assert ("NOT REPORTED" in body or "WITHIN BOUNDS" in body
                 or "UNDER PRESSURE" in body or "PAST THE DEADLINE" in body)
+
+
+def test_boot_warmup_does_not_make_the_card_red():
+    """The verdict this card was about to be wrong in.
+
+    On the first deploy of this panel it read PAST THE DEADLINE for a healthy
+    boot, because a cold start's first cycles legitimately run long (74.5s /
+    131.2s / 72.8s measured, against a steady state of 8-47s) and the engine
+    counted them into the same bucket. Red that can never be anything but red
+    is a dead instrument, and this repo has already paid for one of those.
+    """
+    p = _payload(over_kill=0, over_warn=0)
+    p["loop_health"]["scan_cycle"]["over_kill_boot"] = 1
+    p["loop_health"]["scan_cycle"]["over_warn_boot"] = 3
+
+    out = reduce_loop_health(p)
+    assert out["state"] == "ok"
+    assert out["boot_over_kill"] == 1
+    assert out["boot_over_warn"] == 3
+    assert "boot warm-up" in out["note"], (
+        "counted apart is not the same as hidden — the card must still say it happened"
+    )
+
+
+def test_a_steady_state_breach_still_pages_when_boot_also_had_one():
+    """Excluding boot from the verdict must not mask a real fault beside it."""
+    p = _payload(over_kill=2, over_warn=9)
+    p["loop_health"]["scan_cycle"]["over_kill_boot"] = 1
+    out = reduce_loop_health(p)
+    assert out["state"] == "past_deadline"
+    assert out["boot_over_kill"] == 1
+
+
+def test_an_engine_predating_the_boot_split_reads_not_reported():
+    """`0` and "this build does not say" are different claims."""
+    out = reduce_loop_health(_payload())
+    assert out["boot_reported"] is False
+    assert out["boot_over_kill"] == 0
+
+    p = _payload()
+    p["loop_health"]["scan_cycle"]["over_kill_boot"] = 0
+    assert reduce_loop_health(p)["boot_reported"] is True
