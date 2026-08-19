@@ -1189,6 +1189,8 @@ what happens when you change it.
 | Scaled-exit what-if simulator (Profit tab) | `app/data_sources/exit_sim.py` |
 | Exit-method what-ifs on the dark feed — reads the engine's held-to-stop arm, prices `exit_sim`'s catalog | `app/data_sources/dark_exit_sim.py` |
 | Structural SL/TP1 snap stamps — `structural_snap_v1.json` (`/signals/structural-snap`) | `app/data_sources/structural_snap.py` |
+| Engine diagnostic catalog — `GET /internal/diag/catalog`, `POST /internal/diag/catalog/run` (`/diagnostics/console`) | `app/data_sources/engine_api.py` (`diag_catalog` / `diag_run`) |
+| Engine CPU-against-quota + running config — `/internal/diag/host-resources` (`/system`) | `app/data_sources/engine_api.py` (`host_resources`) |
 
 ## Conventions
 
@@ -1803,6 +1805,78 @@ And one from Jinja: **a payload key must not collide with a dict method.**
 name, so the template iterated a builtin and 500'd. Renamed `key_rows`. The nav
 test's "drive every destination as a real request" is what caught it.
 
+
+## `/diagnostics/console` — a catalog, and the one write a guest may issue (2026-08-19)
+
+Owner: *"what amount send commands to vps from ops, then you can directly
+interact with engine send commands accordingly fix problems"*, scoped by him to
+a diagnostic catalog plus a few safe actions, usable **inside a guest session**
+— the point being that a diagnosis should not need him as the transport.
+
+**It sends a catalog key, never a command**, and this page holds no list of its
+own: the entries arrive as data from `360-v2/src/diag_catalog.py`, so one ops
+has never heard of still renders under the engine's own label. Ops does not
+validate the key either — a second implementation of the engine's allow-list
+would drift, and the drift is invisible until a key silently stops working.
+
+Rules the page carries:
+
+- **Three states for the catalog, never two.** `unreachable` (we could not ask)
+  · `not_reported` (an engine predating the endpoint) · `empty` (reporting, with
+  nothing in it — a deploy question). Their next moves are a network check, a
+  deploy and a shrug respectively.
+- **A switched-off action renders OFF, not absent.** A vanished entry reads as a
+  broken deploy; `OFF` reads as a decision somebody made and can reverse. The
+  switch itself is enforced engine-side *where entries run*, not where they
+  render — hiding a button while the request still executes is a control in
+  appearance only.
+- **`may_use` mirrors the gate, so the Run button follows the same table the
+  refusal does.** Had it stayed absolute it would hide a control the gate allows
+  — the 2026-08-07 defect with the sign flipped, and just as invisible, because
+  a silently absent control reads as a page with nothing to offer.
+- **No free-form input, and the shape is asserted.** `symbol` is the only text
+  field any entry takes and it is pattern-bound; a test walks every rendered
+  `<input>`, because a second free-text box is exactly how this page would
+  become the thing it exists not to be.
+
+### A diagnostic result had a cookie-sized ceiling, and blank was its symptom
+
+Found by **running the page against production minutes after it deployed**, not
+by the suite. `read.edge_store` (~2 KB) returned cleanly; `read.loop` rendered
+**FAILED with a blank entry, a blank kind and no reason at all** — this repo's
+own "blank needs a cause before it gets a caption", on the page whose entire job
+is explaining faults.
+
+The result was parked in `request.session`, which Starlette signs into a
+**cookie** capped near 4 KB. The ceiling is invisible until some payload crosses
+it, and *which* payload crosses depends on how much the engine has to say — so
+the failure arrives later, on the busier box. Results live server-side in a
+bounded ring now; the session carries only a random id, so PRG survives and one
+browser cannot read another's result.
+
+**The second half matters more**: whatever shape comes back, the reader sees it.
+An unrecognised reply prints raw under a sentence saying so, rather than
+rendering as a FAILED badge with nothing beneath it. The first half was only
+findable by reading the page; the next unrecognised shape will be something
+nobody predicted, and an ugly answer with a cause beats a tidy blank.
+
+### Using it immediately corrected a claim this session had already made
+
+The console's first real read settled a question two hours of reasoning had not.
+Live edge store: **11,279 cells, 198,090 records, `saves: 0` and
+`recorded_total: 0` since boot.** The store only goes dirty when a signal
+*closes*, so the measured ~1.85s serialisation stall happens at roughly the rate
+of closed signals — about **16 a day**, not the 120/hour that "every 30s when
+dirty" implied. It is a real cost and **not** a plausible cause of the writer
+overruns, and acting on the earlier framing would have optimised the wrong
+thing. Related: at 198,090 records over ~39 MB the unit is ~197 bytes per
+**record**, so "cells are 7x fatter than a synthetic one" was arithmetically
+right and pointed at the wrong lever.
+
+**One reading deliberately not drawn from.** `read.scan_executor` returned
+`queue_depth: 0, threads_alive: 3` — a single sample in a quiet moment. The
+GIL-bound-versus-I/O-bound question needs samples taken *during* a slow cycle,
+and the note the entry prints beside itself says so.
 
 ## `/truth` — the report was never late, the bound was invented (2026-08-18)
 

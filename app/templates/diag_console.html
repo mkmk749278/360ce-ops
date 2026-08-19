@@ -69,6 +69,15 @@
   {% endif %}
   {% if result.result %}
     <pre class="mono small">{{ result.result | tojson(indent=2) }}</pre>
+  {% elif not result.error %}
+    {#- A FAILED badge with no reason under it is the exact defect this page
+        exists to end, and the first cut printed one: a payload whose shape
+        nothing here recognised rendered as blank entry, blank kind, no cause.
+        Whatever comes back, the reader sees it. -#}
+    <p class="muted small"><strong>The reply had a shape this page does not
+      recognise</strong>, so it is printed raw rather than summarised away —
+      a blank with no cause is worse than an ugly one with a cause.</p>
+    <pre class="mono small">{{ result | tojson(indent=2) }}</pre>
   {% endif %}
 </div>
 {% endif %}
