@@ -154,6 +154,20 @@ class AgentAlertsReader:
             "redis_probe": state.get("redis_probe"),
             "redis_probe_ok": state.get("redis_probe_ok"),
             "poll_interval_s": state.get("poll_interval_s"),
+            # Which delivery paths the agent can actually send through.
+            #
+            # This method builds a FIXED dict of known keys, so a field the
+            # agent publishes and this list does not name is dropped in
+            # transit and invisible at both ends — the writer's test passes,
+            # the reader's test passes, and the page renders NOT REPORTED
+            # forever. That is exactly what happened to `sinks` on 2026-08-19,
+            # hours after it shipped, and it is the defect class CLAUDE.md
+            # already names twice.
+            #
+            # `{}` and "the agent did not say" must stay distinguishable:
+            # /alerts may print "Nothing pages you" only on the first, and a
+            # missing key must never collapse into an armed-nothing verdict.
+            "sinks": state.get("sinks"),
         }
 
 
