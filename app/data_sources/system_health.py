@@ -1066,6 +1066,19 @@ def reduce_loop_health(payload: Any) -> dict[str, Any]:
     out["over_warn_pct"] = round(100.0 * over_warn / cycles, 1) if cycles else None
     out["bounds_reported"] = warn is not None and kill is not None
 
+    # Boot warm-up is a separate population and never folded into the verdict.
+    # A cold start re-seeds every pair over REST and rebuilds the indicator
+    # caches, so its first cycles legitimately run long — 74.5s / 131.2s / 72.8s
+    # measured after a real deploy against a steady state of 8-47s, and
+    # `healthcheck.py` holds its own grace for exactly that. Grading them made
+    # this card read PAST THE DEADLINE for the whole life of a healthy boot,
+    # which is a dead instrument rather than a warning.
+    boot_kill = int(scan.get("over_kill_boot") or 0)
+    boot_warn = int(scan.get("over_warn_boot") or 0)
+    out["boot_over_kill"] = boot_kill
+    out["boot_over_warn"] = boot_warn
+    out["boot_reported"] = "over_kill_boot" in scan
+
     if over_kill:
         out["state"] = "past_deadline"
         out["note"] = (
@@ -1086,5 +1099,11 @@ def reduce_loop_health(payload: Any) -> dict[str, Any]:
             f"Worst cycle {scan.get('worst_sec')}s against a {kill:.0f}s deadline."
             if kill is not None else ""
         )
+        if boot_kill:
+            out["note"] += (
+                f" {boot_kill} cycle(s) ran long during boot warm-up and are "
+                "counted apart — a cold start re-seeds every pair over REST, and "
+                "the healthcheck holds its own grace for it."
+            )
 
     return out

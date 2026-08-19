@@ -82,12 +82,19 @@
       <div class="kv"><span class="muted">Cycles</span><strong class="mono">{{ loop.scan.cycles }}</strong></div>
       <div class="kv"><span class="muted">Over warn bound</span><strong class="mono">{{ loop.scan.over_warn }}{% if loop.over_warn_pct is not none %} ({{ loop.over_warn_pct }}%){% endif %}</strong></div>
       <div class="kv"><span class="muted">Past the deadline</span><strong class="mono">{{ loop.scan.over_kill }}</strong></div>
+      <div class="kv"><span class="muted">Boot warm-up (warn / past)</span><strong class="mono">{% if loop.boot_reported %}{{ loop.boot_over_warn }} / {{ loop.boot_over_kill }}{% else %}not reported{% endif %}</strong></div>
       <div class="kv"><span class="muted">Bounds (engine's)</span><strong class="mono">{% if loop.bounds_reported %}{{ loop.scan.warn_sec }}s / {{ loop.scan.kill_sec }}s{% else %}not reported{% endif %}</strong></div>
       <div class="kv"><span class="muted">Executor workers</span><strong class="mono">{{ loop.scan.executor_workers if loop.scan.executor_workers is not none else '—' }}</strong></div>
     </div>
     <p class="muted small">
       Both bounds come from the engine, never from ops. A staleness threshold invented
       here is what made <a href="/truth">/truth</a> read STALE for 23 hours out of every 24.
+      <strong>Boot warm-up is counted apart and kept out of the verdict</strong>: a cold start
+      re-seeds every pair over REST and rebuilds the indicator caches, so its first cycles run
+      long by construction (74.5s / 131.2s / 72.8s measured after a deploy, against a steady
+      state of 8&ndash;47s) and <code>healthcheck.py</code> holds its own grace for exactly that.
+      Folding them in would leave this card red for the whole life of a healthy boot, which is a
+      dead instrument rather than a warning.
     </p>
   {% endif %}
 
