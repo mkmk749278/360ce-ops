@@ -216,3 +216,64 @@ def test_ops_does_not_validate_the_key_itself(client):
     assert "diag_run(key" in src
     for word in ("ALLOWED", "allowlist", "allow_list", "VALID_KEYS"):
         assert word not in src, f"ops is keeping its own key list ({word})"
+
+
+# ---------------------------------------------------------------------------
+# The cookie ceiling, found by running the page against production.
+# ---------------------------------------------------------------------------
+
+def test_a_large_result_survives_the_round_trip(client):
+    """`read.loop` FAILED on production with a blank entry, kind and reason.
+
+    The result was parked in `request.session`, which Starlette signs into a
+    **cookie** — capped near 4 KB. A ~2 KB payload round-tripped and a larger
+    one did not, so the ceiling was invisible until a diagnostic crossed it, and
+    what the reader got was the blank-with-no-cause defect on the page whose
+    whole job is explaining faults. Results live server-side now.
+    """
+    from app.routes import diag_console as mod
+
+    big = {"ok": True, "key": "read.loop", "kind": "read", "took_sec": 0.1,
+           "result": {"rows": [{"i": i, "pad": "x" * 200} for i in range(60)]}}
+
+    async def _big(key, args=None):
+        return big
+
+    client.app.state.engine_api.diag_run = _big
+    client.post("/diagnostics/console/run", data={"key": "read.loop"},
+                follow_redirects=False)
+    body = client.get("/diagnostics/console").text
+    assert "read.loop" in body
+    assert "x" * 200 in body, "the payload must survive, not be silently trimmed"
+
+
+def test_the_result_store_is_bounded():
+    """A long session must not grow it without limit."""
+    from app.routes import diag_console as mod
+
+    mod._RESULTS.clear()
+    for i in range(mod._RESULTS_MAX + 10):
+        mod._stash({"ok": True, "key": f"k{i}"})
+    assert len(mod._RESULTS) == mod._RESULTS_MAX
+
+
+def test_one_session_cannot_read_anothers_result():
+    """Ids are random, not sequential — a guessable id would leak a result."""
+    from app.routes import diag_console as mod
+
+    ids = {mod._stash({"ok": True}) for _ in range(20)}
+    assert len(ids) == 20
+    assert all(len(i) > 12 for i in ids)
+
+
+def test_an_unrecognised_shape_still_shows_the_reader_something(client):
+    """A FAILED badge with no cause under it is the defect this page ends."""
+    async def _weird(key, args=None):
+        return {"detail": "something the page has never seen"}
+
+    client.app.state.engine_api.diag_run = _weird
+    client.post("/diagnostics/console/run", data={"key": "read.loop"},
+                follow_redirects=False)
+    body = client.get("/diagnostics/console").text
+    assert "shape this page does not" in body
+    assert "something the page has never seen" in body

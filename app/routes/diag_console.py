@@ -24,6 +24,8 @@ without touching this repo.
 """
 from __future__ import annotations
 
+import secrets
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import APIRouter, Form, Request
@@ -35,7 +37,30 @@ router = APIRouter()
 
 #: Where the result of a run is parked between the POST and the redirect.
 #: PRG, like every other action surface here: a refresh must not re-fire a run.
-_FLASH_KEY = "diag_console_result"
+_FLASH_KEY = "diag_console_result_id"
+
+#: Results live HERE, not in the session cookie.
+#:
+#: The first cut stored the payload in `request.session`, which Starlette signs
+#: and base64-encodes into a cookie — capped around 4 KB. `read.edge_store`
+#: (~2 KB) round-tripped fine and `read.loop` did not: the card rendered
+#: **FAILED with a blank entry, blank kind and no reason**, which is precisely
+#: the "blank needs a cause before it gets a caption" defect, on the page whose
+#: whole job is explaining faults. A diagnostic payload has no business being
+#: bounded by a cookie, and the bound is invisible until one exceeds it.
+#:
+#: Bounded so a long session cannot grow it without limit; keyed by a random id
+#: so one browser cannot read another's result.
+_RESULTS: "OrderedDict[str, dict]" = OrderedDict()
+_RESULTS_MAX = 32
+
+
+def _stash(result: dict) -> str:
+    rid = secrets.token_urlsafe(12)
+    _RESULTS[rid] = result
+    while len(_RESULTS) > _RESULTS_MAX:
+        _RESULTS.popitem(last=False)
+    return rid
 
 
 def _role(request: Request) -> str:
@@ -63,7 +88,8 @@ async def diag_console(request: Request):
     else:
         state = "ok"
 
-    result = request.session.pop(_FLASH_KEY, None)
+    rid = request.session.pop(_FLASH_KEY, None)
+    result = _RESULTS.pop(rid, None) if rid else None
     return request.app.state.templates.TemplateResponse(
         "diag_console.html",
         {
@@ -113,5 +139,8 @@ async def diag_console_run(
         actor=_role(request),
     )
 
-    request.session[_FLASH_KEY] = out
+    request.session[_FLASH_KEY] = _stash(
+        out if isinstance(out, dict) else {"ok": False, "key": key,
+                                           "error": f"unexpected reply: {out!r}"}
+    )
     return RedirectResponse("/diagnostics/console", status_code=303)
