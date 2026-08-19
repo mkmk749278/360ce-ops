@@ -585,3 +585,136 @@ class RedisStalenessDetector:
             ),
             raw={"idle_sec": idle_sec},
         )]
+
+
+# ---------------------------------------------------------------------------
+# D9 — EngineRestartDetector  (HIGH on a loop, WARN on one restart)
+# ---------------------------------------------------------------------------
+
+class EngineRestartDetector:
+    """The engine restarting on its own, which nothing on the box could see.
+
+    Measured live 2026-08-19: scan cycles of 9.2s to 402.5s against a 15s
+    target. The scanner touches its heartbeat file once, at the *end* of a
+    cycle; ``healthcheck.py`` fails when that file is older than 120s and
+    compose runs it every 30s with ``retries: 3``, so a long cycle flips the
+    container unhealthy and the autoheal sidecar restarts it. Each restart
+    takes every ``snapshot:*`` key past its TTL, so the dashboard stops
+    answering and the Lumin app reads "No signals yet".
+
+    **Three things independently hid it, and each one is why this detector is
+    shaped the way it is:**
+
+    * ``RestartCount`` cannot see it. Docker increments that only for restarts
+      made by the container's *restart policy*; autoheal issues a manual
+      restart, which does not, and a ``compose`` recreate starts the count
+      over. It read ``0`` throughout.
+    * ``CoreContainerDetector`` cannot see it either. It asks whether the
+      container is *running*, and a restart that completes between two 60s
+      poll cycles never presents as anything but ``Up``.
+    * The engine's own counters reset, so ``signals_today`` reads 0 again and
+      the quietness looks like the market.
+
+    So this keys on the one thing a restart always does: **uptime goes
+    backwards.** The engine publishes ``uptime_seconds`` in its pulse, and a
+    reading lower than the previous one means the process it describes is not
+    the process we saw last cycle. That is a fact about the engine, read on the
+    engine's own clock — this detector never times anything itself, by the same
+    rule that keeps ops from grading engine freshness on ops' clock.
+
+    **One restart is a WARN, a loop is a HIGH**, and they are never pooled. A
+    single restart is usually autoheal working: a wedged scan loop cleared by a
+    bounce, which is the design. A *loop* is the failure — each cycle re-seeds
+    75 pairs over REST and rebuilds every indicator cache cold, so the cure
+    pushes the next cycle further past the deadline that triggered it.
+    """
+
+    name = "EngineRestartDetector"
+
+    def __init__(self, window_sec: int = 3600, loop_threshold: int = 2) -> None:
+        #: How far back a restart still counts toward the loop verdict.
+        self._window = window_sec
+        #: Restarts inside the window that make it a loop rather than an event.
+        self._loop_threshold = loop_threshold
+        #: Monotonic-ish history of observed restart wall-times.
+        self._restarts: list[float] = []
+        self._last_uptime: float | None = None
+
+    #: Below this, two consecutive pulses can legitimately disagree — the
+    #: engine's uptime is a float and the API may serve a snapshot written a
+    #: moment earlier. A restart moves it by minutes, never by a second.
+    _NOISE_SEC = 5.0
+
+    def check(self, pulse: dict, now: float) -> list[DetectorResult]:
+        raw = pulse.get("uptime_seconds") if isinstance(pulse, dict) else None
+        try:
+            uptime = float(raw)
+        except (TypeError, ValueError):
+            # Unknown is not "no restart". But it is also not evidence OF one,
+            # and the engine being unreachable already has its own detector —
+            # raising a second alert for one event is how a page stops being
+            # read. Forget the previous reading so the next comparison is not
+            # made across a gap we cannot account for.
+            self._last_uptime = None
+            return []
+
+        previous = self._last_uptime
+        self._last_uptime = uptime
+
+        if previous is None:
+            # First reading of this agent's life. A restart may well have
+            # happened before we started watching; claiming one on no evidence
+            # would page on every agent deploy.
+            return []
+        if uptime >= previous - self._NOISE_SEC:
+            return []
+
+        # Uptime went backwards: this is a different process than last cycle.
+        self._restarts.append(now)
+        self._restarts = [t for t in self._restarts if now - t <= self._window]
+        count = len(self._restarts)
+        mins = int(self._window // 60)
+
+        if count >= self._loop_threshold:
+            return [DetectorResult(
+                severity="HIGH",
+                fingerprint="engine_restart_loop",
+                description=(
+                    f"The engine has restarted {count} times in the last {mins} "
+                    f"minutes (uptime fell {previous:.0f}s -> {uptime:.0f}s). "
+                    "This is an autoheal loop, not a single bounce: the "
+                    "healthcheck grades scan-cycle wall-time, and each restart "
+                    "re-seeds every pair over REST and rebuilds the indicator "
+                    "caches cold, which pushes the next cycle further past the "
+                    "deadline that caused it. Every restart also expires the "
+                    "snapshot:* keys, so the dashboard and the app feed go "
+                    "empty while it runs. Read /system/liveness for the "
+                    "scan-cycle numbers; docker RestartCount will read 0 "
+                    "because autoheal restarts are manual restarts."
+                ),
+                raw={
+                    "restarts_in_window": count,
+                    "window_sec": self._window,
+                    "uptime_before": previous,
+                    "uptime_now": uptime,
+                },
+            )]
+
+        return [DetectorResult(
+            severity="WARN",
+            fingerprint="engine_restarted",
+            description=(
+                f"The engine restarted (uptime fell {previous:.0f}s -> "
+                f"{uptime:.0f}s). One restart is usually autoheal working — a "
+                "wedged scan loop cleared by a bounce. It is worth knowing "
+                "about because docker's RestartCount cannot show it and the "
+                f"engine's own counters reset. A second one inside {mins} "
+                "minutes pages as a loop."
+            ),
+            raw={
+                "restarts_in_window": count,
+                "window_sec": self._window,
+                "uptime_before": previous,
+                "uptime_now": uptime,
+            },
+        )]

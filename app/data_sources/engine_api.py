@@ -167,6 +167,21 @@ class EngineApiClient:
         """
         return await self._get("/internal/diag/trail-governor")
 
+    async def loop_health(self) -> Any:
+        """Scan-cycle wall-time, snapshot-writer timing, edge-store flush state.
+
+        The numbers that decide whether the engine container survives. The
+        scanner touches its heartbeat once per cycle and ``healthcheck.py``
+        kills on that file going stale, so **cycle wall-time is heartbeat
+        age** — and it used to live only in a log line, which is why the
+        restarts it caused had no explanation anywhere.
+
+        Read it from here rather than timing anything on ops' clock, and grade
+        it against the bounds the payload carries rather than a threshold
+        invented in this repo.
+        """
+        return await self._get("/internal/diag/loop-health")
+
     async def data_intake(self) -> Any:
         """What the engine is actually reading from Binance.
 

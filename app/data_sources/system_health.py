@@ -986,3 +986,105 @@ def agent_step(agent: dict[str, Any]) -> dict[str, Any]:
         return _step("agent", "degraded", detail + " · that cycle reported failures",
                      "the external dead-man's switch was not pinged for it")
     return _step("agent", "ok", detail)
+
+
+# ---------------------------------------------------------------------------
+# Engine loop health — the numbers that decide whether the container survives
+# ---------------------------------------------------------------------------
+
+#: Verdicts for the scan-cycle card, ordered worst first. Never two states:
+#: "we were not told" is not "healthy", and it is not "broken" either.
+LOOP_STATES = ("not_reported", "past_deadline", "pressure", "ok")
+
+
+def reduce_loop_health(payload: Any) -> dict[str, Any]:
+    """Grade the engine's own loop counters.
+
+    Added 2026-08-19 with engine ``/internal/diag/loop-health``. The number
+    this card exists for is **scan-cycle wall-time**: the scanner touches its
+    heartbeat file once at the end of a cycle, ``healthcheck.py`` fails when
+    that file is older than 120s, and three consecutive failures make autoheal
+    restart the container. Measured on the live box that day: cycles of 9.2s to
+    402.5s against a 15s target, and a restart inside the measurement window.
+
+    None of it was readable anywhere. ``telemetry.scan_latency_ms`` was
+    computed every cycle and reached a log line and a Telegram command — so the
+    quantity that was restarting the engine appeared on no page, no probe and
+    no report, which is why the restarts had no explanation and the only alert
+    firing named redis.
+
+    **Every bound comes from the engine.** ``warn_sec`` and ``kill_sec`` are
+    published in the block, not chosen here — ops inventing a staleness bound
+    is exactly what made ``/truth`` read STALE for 23 hours a day. When the
+    engine does not send them the card says so rather than substituting a
+    number of its own.
+    """
+    block = {}
+    if isinstance(payload, dict):
+        raw = payload.get("loop_health")
+        if isinstance(raw, dict):
+            block = raw
+
+    out: dict[str, Any] = {
+        "reported": bool(block),
+        "state": "not_reported",
+        "scan": None,
+        "writer": None,
+        "edge": None,
+        "cache": None,
+        "note": "",
+    }
+    if not block:
+        out["note"] = (
+            "This engine build does not publish loop health. It is NOT a claim "
+            "that the loop is fine — the numbers simply are not being sent."
+        )
+        return out
+
+    scan = block.get("scan_cycle")
+    out["writer"] = block.get("snapshot_writer")
+    out["edge"] = block.get("strategy_edge")
+    # Top-level, because that is where the engine writes it. Reading it off
+    # `scan_cycle` would have been a field this repo reads and no repo writes
+    # — the card would render empty forever and look like a quiet cache.
+    cache = block.get("indicator_cache")
+    out["cache"] = cache if isinstance(cache, dict) else None
+    if not isinstance(scan, dict) or not scan.get("cycles"):
+        out["note"] = (
+            "The engine is reporting, but the scanner has not completed a cycle "
+            "yet — a young process, not a stalled one."
+        )
+        out["state"] = "not_reported"
+        return out
+
+    out["scan"] = scan
+    warn = scan.get("warn_sec")
+    kill = scan.get("kill_sec")
+    cycles = int(scan.get("cycles") or 0)
+    over_warn = int(scan.get("over_warn") or 0)
+    over_kill = int(scan.get("over_kill") or 0)
+    out["over_warn_pct"] = round(100.0 * over_warn / cycles, 1) if cycles else None
+    out["bounds_reported"] = warn is not None and kill is not None
+
+    if over_kill:
+        out["state"] = "past_deadline"
+        out["note"] = (
+            f"{over_kill} scan cycle(s) have run past the {kill:.0f}s healthcheck "
+            "deadline since this boot. Sustained across three checks that restarts "
+            "the container — and every restart expires the snapshot:* keys, so the "
+            "dashboard and the app feed go empty while it happens."
+        )
+    elif cycles >= 10 and over_warn / cycles > 0.5:
+        out["state"] = "pressure"
+        out["note"] = (
+            f"{over_warn} of {cycles} cycles are past the {warn:.0f}s warn bound. "
+            "Nothing has been restarted, but the deadline is one busy market away."
+        )
+    else:
+        out["state"] = "ok"
+        out["note"] = (
+            f"Worst cycle {scan.get('worst_sec')}s against a {kill:.0f}s deadline."
+            if kill is not None else ""
+        )
+
+    return out

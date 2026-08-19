@@ -21,6 +21,14 @@ Two things it deliberately records beyond a timestamp:
   carries this only while it is firing; the heartbeat carries it always, which
   is what makes a *flapping* probe visible as a pattern rather than as a series
   of unrelated pages.
+* ``sinks`` — which delivery paths are actually armed (2026-08-19). ``/alerts``
+  used to grade only FCM and print *"Nothing pages you — this page is the only
+  way you learn about a naked position"* over a box whose Telegram sink was
+  working and delivering. That page has now asserted a delivery path it could
+  not observe three times, in both directions. The fix is not a third
+  assertion: the **agent** is the only process that knows what it can send
+  through, so it publishes that here and the page renders it. One writer, one
+  reader. Only whether a sink is configured is published — never a token.
 
 Best-effort throughout: a heartbeat that could break a detection cycle would be
 a monitoring surface that reduces monitoring. Every failure here is logged and
@@ -52,8 +60,13 @@ async def publish(
     redis_probe_summary: str,
     redis_probe_ok: bool,
     poll_interval_s: int,
+    sinks: dict[str, bool] | None = None,
 ) -> None:
-    """Stamp this cycle. Never raises."""
+    """Stamp this cycle. Never raises.
+
+    ``sinks`` maps a delivery path to whether it is armed — booleans only, and
+    a token never travels through here.
+    """
     if client is None:
         # In-memory alert state — the agent still works, but nothing outside
         # this process can see it. Logged once per cycle at debug rather than
@@ -68,6 +81,12 @@ async def publish(
         "redis_probe": redis_probe_summary,
         "redis_probe_ok": redis_probe_ok,
         "poll_interval_s": poll_interval_s,
+        # `{}` and "no sink armed" are different claims and must stay
+        # distinguishable: an older agent that predates this field publishes
+        # nothing, and a reader has to render NOT REPORTED rather than "nothing
+        # pages you" — which is the exact sentence this field exists to stop
+        # being guessed at.
+        "sinks": dict(sinks) if sinks else {},
     }
     try:
         await client.set(KEY, json.dumps(payload), ex=TTL_SEC)
