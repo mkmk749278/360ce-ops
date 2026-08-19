@@ -27,7 +27,7 @@
   as they fire. This page is the shared record, not the only way you find out.
   {%- if not push.armed %}
   <br>Push is not armed —
-  {% if not push.configured %}no <code>FIREBASE_SERVICE_ACCOUNT</code> is configured{% else %}no device is registered{% endif %},
+  {% if not push.configured %}the monitoring agent reports no <code>FIREBASE_SERVICE_ACCOUNT</code>{% else %}a service account is configured but no device is registered{% endif %},
   so Telegram is carrying this on its own.
   {%- endif %}
 </p>
@@ -37,6 +37,7 @@
   The agent reports no armed delivery path:
   {% if not push.configured %}no <code>FIREBASE_SERVICE_ACCOUNT</code>{% elif not push.devices %}no registered device{% endif %},
   and no Telegram bot token or chat id.
+  {% if push.sa_source == 'local' %}<br><span class="muted">(read from this container's own env — the agent did not report its sinks, so this is a fallback, not the agent's answer.)</span>{% endif %}
   <strong>Nothing pages you</strong> — this page is the only way you learn about a naked
   position, so check it, or arm a sink.
 </p>
