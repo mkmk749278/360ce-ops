@@ -11,6 +11,8 @@ states apart: an engine that does not report is NOT a healthy engine.
 """
 from __future__ import annotations
 
+import re
+
 from app.data_sources.system_health import reduce_loop_health
 
 
@@ -171,3 +173,199 @@ def test_an_engine_predating_the_boot_split_reads_not_reported():
     p = _payload()
     p["loop_health"]["scan_cycle"]["over_kill_boot"] = 0
     assert reduce_loop_health(p)["boot_reported"] is True
+
+
+# ---------------------------------------------------------------------------
+# Slow is not wedged (engine 2026-08-19: the progress heartbeat)
+# ---------------------------------------------------------------------------
+#
+# The heartbeat file used to be written only at the END of a scan cycle, so
+# "cycle wall-time" and "heartbeat age" were one number and this card could not
+# tell a loop that had stopped from a loop that was merely slow. It called both
+# `hanging` and told the owner the container was "being killed right now" —
+# true all day on 2026-08-19, and about to become false for the slow case. The
+# engine now beats when a SYMBOL finishes; only a stale beat is a restart.
+
+
+def _beating(**scan):
+    """A payload from an engine that reports the progress beat."""
+    scan.setdefault("progress_heartbeat_enabled", True)
+    scan.setdefault("heartbeat_progress_writes", 40)
+    return _payload(**scan)
+
+
+def test_a_long_cycle_with_a_live_beat_is_slow_not_wedged():
+    out = reduce_loop_health(_beating(in_flight_sec=200.0, heartbeat_age_sec=3.0))
+    assert out["state"] == "slow"
+    assert "no restart is coming" in out["note"]
+
+
+def test_a_stale_beat_is_wedged_whatever_the_cycle_says():
+    """The heartbeat is the only quantity that decides a restart."""
+    out = reduce_loop_health(_beating(in_flight_sec=200.0, heartbeat_age_sec=300.0))
+    assert out["state"] == "hanging"
+    assert "wedged rather than merely slow" in out["note"]
+
+
+def test_an_engine_without_the_progress_beat_still_pools_the_two():
+    """Three states, never two: absent is not off.
+
+    On an engine that predates the beat the two ages really ARE one number, so
+    grading `in_flight` alone as slow would tell the owner no restart is coming
+    while autoheal restarts the container. The old behaviour is kept for exactly
+    the engines the old behaviour is true of.
+    """
+    out = reduce_loop_health(_payload(in_flight_sec=200.0, heartbeat_age_sec=3.0))
+    assert out["state"] == "hanging"
+    assert out["progress_heartbeat"] is None
+
+
+def test_the_progress_beat_being_switched_off_is_its_own_state():
+    out = reduce_loop_health(
+        _payload(progress_heartbeat_enabled=False, in_flight_sec=200.0,
+                 heartbeat_age_sec=3.0),
+    )
+    assert out["progress_heartbeat"] is False
+    assert out["state"] == "hanging", "switched off, so the two ages are one again"
+
+
+def test_the_past_deadline_note_stops_promising_a_restart_that_will_not_come():
+    """An alarming caption over a healthy subsystem is worse than a blank.
+
+    With the progress beat, a completed cycle past the deadline no longer
+    restarts anything — so the copy that said it does would send the owner to
+    debug a loop that is working. `/invalidations` (2026-08-07) is the standing
+    example of this costing an hour in the wrong direction.
+    """
+    beating = reduce_loop_health(_beating(over_kill=2))
+    assert beating["state"] == "past_deadline"
+    assert "no longer" in beating["note"]
+    assert "the dashboard and the app feed go empty" not in beating["note"]
+
+    old = reduce_loop_health(_payload(over_kill=2))
+    assert "the dashboard and the app feed go empty" in old["note"]
+
+
+def _render_liveness(monkeypatch, payload):
+    """Drive the REAL route and the REAL template with a chosen engine payload.
+
+    Rendering the template standalone needs a fabricated `request` (the nav
+    calls `may_use` on it), and a fabricated one is a fixture agreeing with
+    whatever I assumed — the failure this repo has paid for twice. Stubbing the
+    engine probe instead leaves every other hop real.
+    """
+    from fastapi.testclient import TestClient
+
+    import app.routes.system as system_routes
+    from app.main import app
+    from tests.test_panel_readability import _login
+
+    async def _fake_probe(_request):
+        return payload
+
+    monkeypatch.setattr(system_routes, "_loop_health_probe", _fake_probe)
+    with TestClient(app) as client:
+        _login(client)
+        return client.get("/system/liveness").text
+
+def test_the_slow_state_renders_and_keeps_its_stage_breakdown(monkeypatch):
+    """A slow cycle asks the same question a wedged one does — where did it go.
+
+    Keying the stage table on `hanging` alone would blank the breakdown for the
+    exact state this change creates, and that is the population it is most
+    useful for: a cycle running long right now that is going to finish.
+
+    Renders through the app's REAL Jinja environment (globals, filters and all)
+    rather than a locally-built one — `test_templates_compile.py` was itself a
+    hand-built mirror until 2026-08-07, and a mirror can only ever diverge
+    toward passing over a template the app cannot render.
+    """
+    payload = _beating(in_flight_sec=200.0, heartbeat_age_sec=3.0,
+                       in_flight_stages={"indicators": 461.7, "smc": 12.0})
+    out = reduce_loop_health(payload)
+    assert out["state"] == "slow"
+    assert [r["stage"] for r in out["in_flight_stages"]] == ["indicators", "smc"]
+
+    html = _render_liveness(monkeypatch, payload)
+    assert "CYCLE SLOW, LOOP ALIVE" in html
+    assert "LOOP WEDGED NOW" not in html
+    assert "indicators" in html, "the stage breakdown must survive the new state"
+
+
+def test_the_beat_row_says_not_reported_rather_than_off(monkeypatch):
+    """An engine predating the progress beat must not render as one with it
+    switched off — different states, different next moves (deploy vs a flag)."""
+    html = _render_liveness(monkeypatch, _payload())
+    assert "Beats on progress" in html
+    assert "not reported" in html
+
+
+def test_the_wedged_note_does_not_name_a_cause_the_engine_cannot_report():
+    """Two engines, two claims — a caption must follow the state it describes.
+
+    With the progress beat a stale heartbeat means no unit of work finished. On
+    an engine without it the same staleness only means no CYCLE completed, which
+    a merely-slow cycle also produces — so asserting "no unit of work finished"
+    there would name a cause the page cannot observe. That is the `/alerts` and
+    `/invalidations` defect, and it is cheapest to avoid while writing the note.
+    """
+    beating = reduce_loop_health(_beating(in_flight_sec=400.0, heartbeat_age_sec=300.0))
+    assert beating["state"] == "hanging"
+    assert "no unit of work has finished" in beating["note"]
+
+    old = reduce_loop_health(_payload(in_flight_sec=400.0, heartbeat_age_sec=300.0))
+    assert old["state"] == "hanging"
+    assert "no unit of work has finished" not in old["note"]
+    assert "only at the END of a cycle" in old["note"]
+
+
+def test_a_wedged_verdict_with_no_beat_reported_never_prints_none():
+    """The old engine can reach `hanging` on `in_flight` alone, with no beat
+    reported at all — quoting a missing value as a number is how a blank becomes
+    a finding."""
+    out = reduce_loop_health(_payload(in_flight_sec=400.0))
+    assert out["state"] == "hanging"
+    assert "heartbeat is None" not in out["note"], "a missing value quoted as one"
+    assert "the heartbeat is not reported" in out["note"]
+
+
+def test_every_state_the_reducer_can_emit_has_its_own_badge(monkeypatch):
+    """Derived, because the hand-checked version cost a CI round.
+
+    Adding `slow` beside `hanging` renamed two labels, and three assertions in
+    `test_scan_stage_breakdown.py` were still pinning the old strings — the rot
+    case this repo names: an assertion outliving its premise at the exact moment
+    somebody is changing the premise, which is the one moment nobody re-reads
+    it. The suite was still running locally when the push went out, and CI found
+    them.
+
+    So rather than a fourth hand-written label assertion: every state the
+    reducer can emit must render a badge of its own on the real page. A state
+    added without one falls through to WITHIN BOUNDS and reads healthy while it
+    is not — and a label renamed on one side of that pair fails here rather than
+    in whichever test happened to quote it.
+    """
+    cases = {
+        "ok": _beating(),
+        "pressure": _beating(cycles=20, over_warn=15, over_kill=0),
+        "past_deadline": _beating(over_kill=2),
+        "slow": _beating(in_flight_sec=200.0, heartbeat_age_sec=3.0),
+        "hanging": _beating(in_flight_sec=400.0, heartbeat_age_sec=300.0),
+    }
+    badges = {}
+    for state, payload in cases.items():
+        assert reduce_loop_health(payload)["state"] == state, (
+            f"fixture for {state!r} no longer produces it"
+        )
+        html = _render_liveness(monkeypatch, payload)
+        # Scoped to the scan-cycle card: the page carries a global status banner
+        # whose badge comes first in the document, and grading on that would
+        # have compared five identical strings and called them a pass.
+        card = html.split("the number the healthcheck kills on", 1)[-1]
+        found = re.findall(r'<span class="badge badge-\w+">([^<]+)</span>', card)
+        assert found, f"{state!r} rendered no badge at all"
+        badges[state] = found[0].strip()
+
+    assert len(set(badges.values())) == len(badges), (
+        f"two states share a badge, so the page cannot tell them apart: {badges}"
+    )

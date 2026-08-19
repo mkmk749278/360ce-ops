@@ -595,12 +595,20 @@ class EngineRestartDetector:
     """The engine restarting on its own, which nothing on the box could see.
 
     Measured live 2026-08-19: scan cycles of 9.2s to 402.5s against a 15s
-    target. The scanner touches its heartbeat file once, at the *end* of a
-    cycle; ``healthcheck.py`` fails when that file is older than 120s and
-    compose runs it every 30s with ``retries: 3``, so a long cycle flips the
-    container unhealthy and the autoheal sidecar restarts it. Each restart
-    takes every ``snapshot:*`` key past its TTL, so the dashboard stops
+    target. ``healthcheck.py`` fails when the scanner's heartbeat file is older
+    than 120s and compose runs it every 30s with ``retries: 3``, so a stale beat
+    flips the container unhealthy and the autoheal sidecar restarts it. Each
+    restart takes every ``snapshot:*`` key past its TTL, so the dashboard stops
     answering and the Lumin app reads "No signals yet".
+
+    **The beat used to be written only at the END of a cycle**, which made cycle
+    wall-time and heartbeat age one number and every slow cycle a restart — the
+    loop that ran all of 2026-08-19. Engine #971 moved it onto PROGRESS (a
+    symbol finished), so a stale beat now means the loop stopped advancing.
+    This detector is unaffected by that: it keys on uptime going backwards, not
+    on any theory of why. Only its *description* changed, and that mattered —
+    the sentence it sends to a phone is what decides where the reader looks
+    next, and it had been naming a cause that is no longer the cause.
 
     **Three things independently hid it, and each one is why this detector is
     shaped the way it is:**
@@ -682,15 +690,20 @@ class EngineRestartDetector:
                 description=(
                     f"The engine has restarted {count} times in the last {mins} "
                     f"minutes (uptime fell {previous:.0f}s -> {uptime:.0f}s). "
-                    "This is an autoheal loop, not a single bounce: the "
-                    "healthcheck grades scan-cycle wall-time, and each restart "
-                    "re-seeds every pair over REST and rebuilds the indicator "
-                    "caches cold, which pushes the next cycle further past the "
-                    "deadline that caused it. Every restart also expires the "
-                    "snapshot:* keys, so the dashboard and the app feed go "
-                    "empty while it runs. Read /system/liveness for the "
-                    "scan-cycle numbers; docker RestartCount will read 0 "
-                    "because autoheal restarts are manual restarts."
+                    "This is an autoheal loop, not a single bounce: each "
+                    "restart re-seeds every pair over REST and rebuilds the "
+                    "indicator caches cold, which pushes the next cycle further "
+                    "past the deadline, and every restart expires the "
+                    "snapshot:* keys so the dashboard and the app feed go empty "
+                    "while it runs. Since 2026-08-19 the healthcheck grades "
+                    "whether the scan loop is ADVANCING (the scanner beats when "
+                    "a symbol finishes), not how long a cycle takes — so this "
+                    "firing means the loop stopped advancing, or the beat is "
+                    "not reaching the file. Read /system/liveness and check "
+                    "'Beats on progress' FIRST: 'not reported' means the engine "
+                    "predates that fix, and a beat count that is not climbing "
+                    "means it is not working. docker RestartCount will read 0 "
+                    "either way, because autoheal restarts are manual restarts."
                 ),
                 raw={
                     "restarts_in_window": count,

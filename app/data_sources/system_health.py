@@ -1232,13 +1232,27 @@ def reduce_loop_health(payload: Any) -> dict[str, Any]:
     # below it records completion only. On 2026-08-19 this card read
     # "0 past the deadline, last cycle 20.76s" while autoheal was restarting the
     # engine on a failing streak of 3 — healthy-looking precisely while the
-    # container was being killed. `healthcheck.py` kills on heartbeat age, the
-    # heartbeat is touched once per COMPLETED cycle, so a hung cycle appears in
-    # none of over_warn / over_kill / worst_sec.
+    # container was being killed.
+    #
+    # What `healthcheck.py` kills on is the heartbeat FILE's age, and until
+    # 2026-08-19 that file's only writer was the end of a cycle — so cycle
+    # wall-time and heartbeat age were one number and a slow cycle WAS a
+    # restart. The engine now beats on PROGRESS (a symbol finished), which
+    # separates them: a long cycle whose loop is advancing keeps beating and is
+    # SLOW; a loop that has stopped advancing goes stale and is WEDGED. They had
+    # been the same state on this card, and the note told the owner a healthy
+    # slow cycle was "being killed right now".
     in_flight = scan.get("in_flight_sec")
     beat_age = scan.get("heartbeat_age_sec")
     out["in_flight_sec"] = in_flight
     out["heartbeat_age_sec"] = beat_age
+    out["cycle_completed_age_sec"] = scan.get("cycle_completed_age_sec")
+    # Three states, never two: an engine predating the progress beat reports
+    # NEITHER key, and grading it as "progress beat off" would describe a
+    # deploy that has not happened. None => not reported.
+    progress_beat = scan.get("progress_heartbeat_enabled")
+    out["progress_heartbeat"] = progress_beat
+    out["heartbeat_progress_writes"] = scan.get("heartbeat_progress_writes")
     # Partial stage sums for the cycle still running. The worst-cycle breakdown
     # is captured at COMPLETION, so a hung cycle contributes nothing to it —
     # these are the only stages a hang can report, and they name the await it
@@ -1254,25 +1268,77 @@ def reduce_loop_health(payload: Any) -> dict[str, Any]:
     ]
     out["hang_reported"] = "in_flight_sec" in scan
 
-    worst_age = max([v for v in (in_flight, beat_age) if v is not None], default=None)
+    # The heartbeat is the only quantity that decides a restart, so it is
+    # graded alone. `in_flight` is pooled into it ONLY for an engine that does
+    # not report the progress beat, where the two really are one number.
+    ages = [beat_age] if progress_beat else [v for v in (in_flight, beat_age) if v is not None]
+    worst_age = max([v for v in ages if v is not None], default=None)
     if kill is not None and worst_age is not None and worst_age > kill:
         out["state"] = "hanging"
+        # The note must not name a cause this engine cannot report. With the
+        # progress beat a stale heartbeat means no unit of work finished; on an
+        # engine without it the same staleness only means no CYCLE completed,
+        # which a merely-slow cycle also produces. Two sentences, because they
+        # are two claims — and `beat_age` can be absent entirely, where the
+        # verdict came from `in_flight` and quoting a None would be worse.
+        if progress_beat:
+            _why = (
+                f"The scanner heartbeat is {beat_age}s old against a "
+                f"{kill:.0f}s deadline — no unit of work has finished in that "
+                "time, so the loop is wedged rather than merely slow."
+            )
+        else:
+            _seen = (
+                f"the heartbeat is {beat_age}s old"
+                if beat_age is not None else "the heartbeat is not reported"
+            )
+            _why = (
+                f"A scan cycle has been running {in_flight}s and {_seen}, against "
+                f"a {kill:.0f}s deadline. This engine writes the heartbeat only "
+                "at the END of a cycle, so slow and wedged are one state here and "
+                "the container is being killed either way."
+            )
         out["note"] = (
-            f"A scan cycle has been running {in_flight}s and the heartbeat is "
-            f"{beat_age}s old, against a {kill:.0f}s deadline — the container is "
-            "being killed right now, or is about to be. None of the counters "
-            "below can show this: they record cycles at completion, and this one "
-            "has not completed."
+            f"{_why} Sustained across three checks the container is restarted. "
+            "None of the counters below can show this: they record cycles at "
+            "completion, and this one has not completed."
+        )
+        return out
+
+    if progress_beat and kill is not None and in_flight is not None and in_flight > kill:
+        # Long cycle, live heartbeat. Before the progress beat this was
+        # indistinguishable from a wedge and was restarted every ~15 minutes,
+        # each restart re-seeding every pair cold and making the next cycle
+        # slower — the loop of 2026-08-19. It is a real problem and it is not
+        # this instrument's alarm.
+        out["state"] = "slow"
+        out["note"] = (
+            f"A scan cycle has been running {in_flight}s, past the {kill:.0f}s "
+            f"deadline — but the heartbeat is {beat_age}s old, so symbols are "
+            "still finishing and the loop is advancing. Slow, not wedged: no "
+            "restart is coming. The counters below record cycles at completion, "
+            "so this one is in none of them yet."
         )
         return out
 
     if over_kill:
         out["state"] = "past_deadline"
+        # Deliberately no longer "that restarts the container": with the
+        # progress beat a long cycle does not, and an alarming caption over a
+        # healthy subsystem is worse than a blank — it sends the owner to debug
+        # something that is working (`/invalidations`, 2026-08-07).
+        _consequence = (
+            "The loop keeps beating through a long cycle, so this no longer "
+            "restarts the container on its own — but the app feed is only as "
+            "fresh as the slowest cycle."
+            if progress_beat else
+            "Sustained across three checks that restarts the container — and "
+            "every restart expires the snapshot:* keys, so the dashboard and "
+            "the app feed go empty while it happens."
+        )
         out["note"] = (
             f"{over_kill} scan cycle(s) have run past the {kill:.0f}s healthcheck "
-            "deadline since this boot. Sustained across three checks that restarts "
-            "the container — and every restart expires the snapshot:* keys, so the "
-            "dashboard and the app feed go empty while it happens."
+            f"deadline since this boot. {_consequence}"
         )
     elif cycles >= 10 and over_warn / cycles > 0.5:
         out["state"] = "pressure"
