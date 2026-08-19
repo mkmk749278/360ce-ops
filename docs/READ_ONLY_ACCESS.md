@@ -75,7 +75,8 @@ pages.
 **Not readable, and it will say why:** the control panel and its Access sub-tab
 (a holder must not see the live grants, let alone mint one), the diag runner,
 subscriber tables (users / referrals / trials), the raw data volume, the
-`/api/v1` token surface — and **every** write, on every route.
+`/api/v1` token surface — and **every write except one named exception** (the
+diagnostic console; see below).
 
 Measured against the live nav, a holder sees **5 of 6 groups** — Overview,
 Signals, Performance, Autonomy, Diagnostics, with Control absent entirely — and
@@ -88,9 +89,11 @@ other sub-tab in those groups is reachable.
 
 Three rules, in `app/guest_scope.py`, applied in this order:
 
-1. **Method** — a guest may issue `GET` and `HEAD`. Nothing else, ever. This is
-   structural: it covers every write route in the app today and every one added
-   tomorrow, with nobody remembering to update anything.
+1. **Method** — a guest may issue `GET` and `HEAD` freely. Every other method is
+   refused **unless** the matched route is named in `GUEST_ACTION_ROUTES`, a
+   short allow-list where each entry carries a written reason. The blanket
+   refusal still covers every other write route in the app today and every one
+   added tomorrow, with nobody remembering to update anything.
 2. **Route classification** — the matched route's *path template* must be
    classified `guest`. Unclassified is denied.
 3. There is no third rule and no override.
@@ -131,12 +134,52 @@ Do not delete the assertion.
 
 ---
 
+## The one write a guest may issue (2026-08-19)
+
+The owner asked for a session that could *"diagnosis everything and fix every
+error within that allowed guest mode"*. A pure-read tier cannot, so rule 1 was
+**narrowed rather than deleted**, and exactly one route was added:
+
+    POST /diagnostics/console/run
+
+It runs one named entry from the engine's diagnostic catalog
+(`360-v2/src/diag_catalog.py`). Four properties make it admissible, and a route
+lacking any of them would not be:
+
+1. **It forwards a catalog *key*, never a command.** There is no field for a
+   path, a target or a shell fragment. Ops does not validate the key either —
+   the engine owns the allow-list, so there is no second copy to drift.
+2. **The catalog cannot reach the money path.** No entry places, cancels or
+   modifies an order, reads a key or secret, or touches the kill switch,
+   auto-execution mode, the position FSM or per-user settings. Asserted in the
+   engine per entry by walking each one's syntax tree — not promised in prose.
+3. **Actions are separately switchable** (`DIAG_ACTIONS_ENABLED=false`,
+   enforced where entries run, not only where they render), so the write half
+   closes without revoking the code or touching this repo.
+4. **Every run is audited** with the tier that issued it.
+
+**Why the owner's key argument does not cover this, and why it did not need
+to.** He noted the Binance key is IP-whitelisted to the engine box, futures-only
+and cannot withdraw. That is correct against a *stolen* key used from anywhere
+else — and silent about code running **on** the whitelisted host, where futures
+permission is not symbol-scoped. The exposure arbitrary execution would carry
+here is a **position**, not a withdrawal. That is the whole reason this is a
+fixed catalog rather than a shell.
+
+`tests/test_guest_access.py` bounds the allow-list at one entry and fails on any
+mutating route reaching the guest set without being named there, so a second
+exception has to arrive with its own argument visible in the diff.
+
+---
+
 ## What is *not* claimed
 
-- **This is not a second owner tier.** Scope is fixed at read for every grant and
-  there is no scope parameter. A tier that can *sometimes* write is one whose
-  blast radius has to be re-derived at every call site; read-only is the only
-  tier that needs no such argument.
+- **This is not a second owner tier.** There is no scope *parameter* — and that
+  is the point of the one exception being a **route allow-list** instead. The
+  original objection was that "a tier that can sometimes write is one whose
+  blast radius has to be re-derived at every call site"; an allow-list re-derives
+  it exactly once, per named route, in writing. Grants are identical to each
+  other: there is no per-code scope to set or get wrong.
 - **A read-only reader still sees real trading data** — every signal, every
   position, every PnL figure the owner sees. It withholds the control plane and
   subscriber PII, not the book. Mint accordingly.
