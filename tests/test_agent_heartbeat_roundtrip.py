@@ -180,3 +180,82 @@ async def test_the_alerts_page_reads_the_sinks_the_agent_really_published():
         "the sinks were published and must not be dropped in transit"
     )
     assert "ALERTS DELIVERED" in body
+
+
+@pytest.mark.asyncio
+async def test_push_is_graded_on_the_agents_service_account_not_this_containers():
+    """The half of the delivery path that lives in the other container.
+
+    Found on the live box 2026-08-19, after the Telegram fix: `/alerts` read
+    "no FIREBASE_SERVICE_ACCOUNT is configured" while the agent reported
+    `push_service_account: true`. Compose passes that variable to the
+    monitoring-agent service and NOT to this one, so the web container's copy
+    is empty on a box where push is perfectly armed. Grading a copy of another
+    process's config is the same defect as asserting a delivery path.
+
+    Both halves are needed and each is read where it can be observed: whether a
+    send is possible comes from the agent, whether it has anywhere to go comes
+    from the device registry this container owns.
+    """
+    from fastapi.testclient import TestClient
+
+    from app.data_sources import agent_alerts as aa
+    from app.main import app
+    from tests.test_panel_readability import _login
+
+    client = _FakeRedis()
+    await _publish(client, sinks={"telegram": False, "push_service_account": True,
+                                  "healthchecks": False})
+    real = AgentAlertsReader.heartbeat
+
+    async def _hb(self):
+        return await real(_reader_over(client))
+
+    original = aa.AgentAlertsReader.heartbeat
+    aa.AgentAlertsReader.heartbeat = _hb
+    try:
+        with TestClient(app) as tc:
+            _login(tc)
+            # This container has NO service account — exactly the live config.
+            object.__setattr__(app.state.settings, "fcm_service_account", "")
+            app.state.device_registry.count = lambda: 2   # type: ignore[method-assign]
+            body = tc.get("/alerts").text
+    finally:
+        aa.AgentAlertsReader.heartbeat = original
+
+    assert "ALERTS DELIVERED" in body
+    assert "2 registered devices" in body
+    assert "no <code>FIREBASE_SERVICE_ACCOUNT</code>" not in body, (
+        "the agent said it has one — this container's empty copy is not the answer"
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_agent_that_says_nothing_falls_back_and_labels_it():
+    """Silent fallbacks are mirrors nobody knows are mirrors."""
+    from fastapi.testclient import TestClient
+
+    from app.data_sources import agent_alerts as aa
+    from app.main import app
+    from tests.test_panel_readability import _login
+
+    client = _FakeRedis()
+    await _publish(client)          # no sinks key at all
+    real = AgentAlertsReader.heartbeat
+
+    async def _hb(self):
+        return await real(_reader_over(client))
+
+    original = aa.AgentAlertsReader.heartbeat
+    aa.AgentAlertsReader.heartbeat = _hb
+    try:
+        with TestClient(app) as tc:
+            _login(tc)
+            object.__setattr__(app.state.settings, "fcm_service_account", "")
+            app.state.device_registry.count = lambda: 0   # type: ignore[method-assign]
+            body = tc.get("/alerts").text
+    finally:
+        aa.AgentAlertsReader.heartbeat = original
+
+    assert "DELIVERY NOT REPORTED" in body
+    assert "Nothing pages you" not in body

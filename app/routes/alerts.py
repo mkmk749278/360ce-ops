@@ -55,18 +55,43 @@ async def alerts_page(request: Request):
     # device pages nobody, and a registered device with no service account is a
     # no-op send.
     devices = request.app.state.device_registry.count()
-    configured = bool(settings.fcm_service_account)
-    push = {
-        "armed": configured and devices > 0,
-        "configured": configured,
-        "devices": devices,
-    }
     # The other sinks come from the agent, because the agent is what holds
     # them. `reported` is tri-state on purpose: an agent that predates this
     # field, or one we could not read, is NOT the same as one with no sink
     # armed, and only the second justifies telling the owner nothing pages him.
     hb = await reader.heartbeat()
     raw_sinks = hb.get("sinks") if isinstance(hb, dict) else None
+
+    # Push needs BOTH halves, and they live in different containers — which is
+    # why this page got it wrong on 2026-08-19 even after the Telegram fix.
+    # `FIREBASE_SERVICE_ACCOUNT` is passed to the monitoring-agent service and
+    # NOT to this one, so `settings.fcm_service_account` is empty here on a box
+    # where push is perfectly armed: the page read "no FIREBASE_SERVICE_ACCOUNT
+    # is configured" while the agent reported `push_service_account: true`.
+    # Grading a copy of someone else's config is the same defect as asserting a
+    # delivery path, one variable over.
+    #
+    # So each half is read where it can be observed: whether a send is possible
+    # comes from the AGENT (it is the process that sends), and whether it has
+    # anywhere to go comes from the device registry this container owns.
+    # `armed_sinks`' own docstring already said to split it this way.
+    agent_has_sa = (raw_sinks or {}).get("push_service_account")
+    if agent_has_sa is None:
+        # Older agent, or no heartbeat: fall back to this container's copy,
+        # which is right in single-container deployments and stated as a
+        # fallback rather than presented as the answer.
+        configured = bool(settings.fcm_service_account)
+        sa_source = "local"
+    else:
+        configured = bool(agent_has_sa)
+        sa_source = "agent"
+    push = {
+        "armed": configured and devices > 0,
+        "configured": configured,
+        "devices": devices,
+        "sa_source": sa_source,
+    }
+
     delivery = {
         "reported": isinstance(raw_sinks, dict) and bool(raw_sinks),
         "telegram": bool((raw_sinks or {}).get("telegram")),

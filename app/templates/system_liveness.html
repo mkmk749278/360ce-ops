@@ -98,6 +98,63 @@
     </p>
   {% endif %}
 
+  {% if loop.stages %}
+  <h3>Where a slow cycle went</h3>
+  {% if loop.stages.state == 'not_reported' %}
+    <p><span class="badge badge-warn">NOT REPORTED</span>
+      This engine build does not stamp the per-stage breakdown. It is not a claim
+      that no cycle ran long &mdash; the split simply is not being sent.</p>
+  {% elif loop.stages.state == 'none_yet' %}
+    <p><span class="badge badge-ok">NO SLOW CYCLE YET</span>
+      The engine is stamping the breakdown and has not had a cycle worth
+      capturing since this boot. This is the healthy case, not a blank.</p>
+  {% else %}
+    <div>
+        <h4 class="muted small">At the worst cycle ({{ loop.scan.worst_sec }}s)</h4>
+        <table class="data-table">
+          <thead><tr><th>Stage</th><th class="num">Wall-time</th><th class="num">Share</th></tr></thead>
+          <tbody>
+          {% for row in loop.stages.worst %}
+            <tr>
+              <td class="mono">{{ row.stage }}</td>
+              <td class="num mono">{{ row.sec | secs }}</td>
+              <td class="num mono">{% if row.share is not none %}{{ row.share }}%{% else %}&mdash;{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      <h4 class="muted small">
+          Most recent slow cycle
+          {% if loop.stages.last_slow_sec %}({{ loop.stages.last_slow_sec }}s){% endif %}
+        </h4>
+        {% if loop.stages.last_slow %}
+        <table class="data-table">
+          <thead><tr><th>Stage</th><th class="num">Wall-time</th><th class="num">Share</th></tr></thead>
+          <tbody>
+          {% for row in loop.stages.last_slow %}
+            <tr>
+              <td class="mono">{{ row.stage }}</td>
+              <td class="num mono">{{ row.sec | secs }}</td>
+              <td class="num mono">{% if row.share is not none %}{{ row.share }}%{% else %}&mdash;{% endif %}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="muted small">No cycle has passed the warn bound since this boot.</p>
+        {% endif %}
+    </div>
+    <p class="muted small">
+      <strong>These are not a partition of the cycle and the shares can exceed
+      100%.</strong> Symbols are scanned concurrently, so each stage accumulates
+      wall-time across workers &mdash; the <em>ratio between stages</em> is what
+      locates the cost, never the absolute total against the cycle's own duration.
+      The worst-cycle column is kept rather than overwritten: a later fast cycle
+      would replace exactly the breakdown a reader needs with weather.
+    </p>
+  {% endif %}
+  {% endif %}
+
   {% if loop.writer %}
   <h3>Snapshot writer</h3>
   <div class="kv-grid">

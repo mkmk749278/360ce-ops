@@ -997,6 +997,154 @@ def agent_step(agent: dict[str, Any]) -> dict[str, Any]:
 LOOP_STATES = ("not_reported", "past_deadline", "pressure", "ok")
 
 
+def reduce_host_resources(payload: Any) -> dict[str, Any]:
+    """Is the box big enough — and is the deployed config the running one.
+
+    The owner asked this first (*"engine cpu 221% used is our vps not enough or
+    what"*) and no surface could answer it, because the raw percentage is
+    meaningless alone. 221% against a 250% quota is a process at its ceiling
+    whose scan loop cannot meet its deadline however well it is written; 221%
+    against an unlimited 4-core box is a busy machine with a core spare. Same
+    number, opposite next move — so this grades CPU **against the quota** and
+    says which of the two it is looking at.
+
+    Four states, and `unknown` outranks convenience: a reading that could not
+    be taken renders under its own name. A 0.0% CPU figure over a pinned engine
+    is worse than a blank, because a blank prompts a question.
+    """
+    block: dict[str, Any] = {}
+    if isinstance(payload, dict):
+        raw = payload.get("host_resources")
+        if isinstance(raw, dict):
+            block = raw
+
+    out: dict[str, Any] = {
+        "reported": False,
+        "state": "not_reported",
+        "cpu": None,
+        "memory": None,
+        "load": None,
+        "disk": None,
+        "config": None,
+        "note": "",
+        "error": "",
+    }
+    if not block:
+        out["note"] = (
+            "This engine build does not publish host resources. It is NOT a "
+            "claim that the box is fine — the numbers are not being sent."
+        )
+        return out
+    if block.get("error"):
+        out["state"] = "unknown"
+        out["error"] = str(block["error"])
+        out["note"] = "The engine tried to sample the box and the sample raised."
+        return out
+
+    out["reported"] = True
+    cpu = block.get("cpu") if isinstance(block.get("cpu"), dict) else {}
+    out["cpu"] = cpu
+    out["memory"] = block.get("memory")
+    out["load"] = block.get("load")
+    out["disk"] = block.get("disk")
+    out["config"] = block.get("effective_config")
+    out["sampled_at"] = block.get("sampled_at")
+
+    pct = cpu.get("pct_of_quota")
+    quota = cpu.get("quota_cores")
+    if pct is None:
+        out["state"] = "unknown"
+        out["note"] = cpu.get("reason") or (
+            "CPU could not be measured. That is a statement about the reading, "
+            "not about the load."
+        )
+        return out
+
+    # The quota being the whole host is its own finding: it means nothing is
+    # capping this container, so a pinned engine is competing with every other
+    # container on the box rather than being throttled by a number we chose.
+    uncapped = bool(cpu.get("quota_is_host"))
+    if pct >= 90:
+        out["state"] = "at_ceiling"
+        out["note"] = (
+            f"The engine is using {cpu.get('cores_used')} of its {quota} allotted "
+            f"cores ({pct}%). At this level the scan loop cannot meet its deadline "
+            "however well it is written — the next lever is more CPU or less work "
+            "per cycle, not another optimisation."
+        ) + (
+            " Note the quota equals the host's core count, so nothing is capping "
+            "this container: it is competing with every other container on the box."
+            if uncapped else ""
+        )
+    elif pct >= 70:
+        out["state"] = "tight"
+        out["note"] = (
+            f"{pct}% of a {quota}-core quota. Working, with little headroom for a "
+            "busy market — worth watching beside the scan-cycle worst case rather "
+            "than acting on alone."
+        )
+    else:
+        out["state"] = "ok"
+        out["note"] = (
+            f"{cpu.get('cores_used')} of {quota} cores ({pct}%). CPU is not what is "
+            "limiting the loop; read the scan-cycle card for what is."
+        )
+    return out
+
+
+def _reduce_cycle_stages(scan: dict[str, Any]) -> dict[str, Any]:
+    """Where a slow scan cycle actually went — three states, never two.
+
+    ``not_reported`` is an engine predating the stamp; ``none_yet`` is an engine
+    that has the stamp and has recorded no slow cycle, which is the HEALTHY case
+    and must not render as the same blank. Collapsing them would say "we cannot
+    see inside a slow cycle" on a box that simply has not had one — the caption
+    naming a cause the page cannot observe, which this repo has paid for on
+    /invalidations and /truth.
+
+    The breakdown existed the whole time and was LOGGED and nowhere else, so on
+    2026-08-19 the owner's grep for it returned nothing while the deadline
+    warnings beside it came through — the one question that aims the next fix
+    had no answer on any surface.
+    """
+    out: dict[str, Any] = {
+        "state": "not_reported",
+        "worst": [],
+        "last_slow": [],
+        "last_slow_sec": None,
+        "last_slow_at": None,
+    }
+    if "worst_stages" not in scan:
+        return out
+
+    def _rows(raw: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw, dict) or not raw:
+            return []
+        # The engine already orders these worst-first; ops sorts anyway rather
+        # than trusting dict order across a JSON round trip, and carries the
+        # total so a reader can see the ratio without adding the column up.
+        items = sorted(
+            ((str(k), float(v)) for k, v in raw.items() if isinstance(v, (int, float))),
+            key=lambda kv: -kv[1],
+        )
+        total = sum(v for _, v in items)
+        return [
+            {
+                "stage": k,
+                "sec": round(v, 2),
+                "share": round(100.0 * v / total, 1) if total > 0 else None,
+            }
+            for k, v in items
+        ]
+
+    out["worst"] = _rows(scan.get("worst_stages"))
+    out["last_slow"] = _rows(scan.get("last_slow_stages"))
+    out["last_slow_sec"] = scan.get("last_slow_sec") or None
+    out["last_slow_at"] = scan.get("last_slow_at") or None
+    out["state"] = "reported" if out["worst"] else "none_yet"
+    return out
+
+
 def reduce_loop_health(payload: Any) -> dict[str, Any]:
     """Grade the engine's own loop counters.
 
@@ -1058,6 +1206,7 @@ def reduce_loop_health(payload: Any) -> dict[str, Any]:
         return out
 
     out["scan"] = scan
+    out["stages"] = _reduce_cycle_stages(scan)
     warn = scan.get("warn_sec")
     kill = scan.get("kill_sec")
     cycles = int(scan.get("cycles") or 0)
