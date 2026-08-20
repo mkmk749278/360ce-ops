@@ -165,6 +165,71 @@ def reduce_drops(payload: dict) -> dict:
     }
 
 
+def reduce_position_lock(payload: dict) -> dict:
+    """Is `correlation_lock` **tight** or **stale**? — the same counter, two
+    opposite findings, and until 2026-08-20 nothing on this page could say.
+
+    Owner that morning: *"we enable lsr to go live but nothing reached live
+    feed and where they going"*.  The dark lane had promoted **30** rows (25
+    `LIQUIDITY_SWEEP_REVERSAL`) and **0** reached a subscriber — 26 died
+    here.  On the same box, `correlation_lock` had taken **309 of 332**
+    dequeued candidates (93.1%) in one 13h process while **2** signals were
+    ACTIVE, and six of the locked symbols had no delivered trade at all in
+    the 30-day recorded book.
+
+    93% is this gate doing its job when the locked symbols hold positions,
+    and a silent outage when they do not.  This page had been reading the
+    first sentence over a book living the second — the *"a caption that is
+    true about the wrong axis reads as reassurance"* defect, on the gate
+    that drops the most.
+
+    Four states, because the reader's next move differs for each:
+
+    * `not_reported` — an engine predating the block.  **Not** zero
+      divergence: "nothing to report" and "nothing reported" are the
+      conflation this repo keeps paying for.
+    * `orphaned` — locked symbols with no active signal.  Over-blocking, and
+      what the outage was.
+    * `unlocked` — active signals with no lock.  **Under**-blocking, and
+      ranked first, because a second position opening on a symbol that
+      already has one is worse than a candidate being dropped.
+    * `healthy` — the two maps agree.  Which is the normal state, since the
+      engine writes them on adjacent lines.
+
+    ``repaired`` is not a fault and is rendered apart: it is what the boot
+    reconcile dropped, and the only evidence anywhere that the skew ever
+    happened.
+    """
+    block = (payload or {}).get("position_lock")
+    if not isinstance(block, dict):
+        return {"state": "not_reported"}
+
+    orphaned = _i(block.get("orphaned_now"))
+    unlocked = _i(block.get("unlocked_now"))
+    if unlocked:
+        state = "unlocked"
+    elif orphaned:
+        state = "orphaned"
+    else:
+        state = "healthy"
+
+    return {
+        "state": state,
+        "locked": _i(block.get("locked")),
+        "active_signals": _i(block.get("active_signals")),
+        "active_symbols": _i(block.get("active_symbols")),
+        "orphaned": orphaned,
+        "unlocked": unlocked,
+        # Samples are bounded engine-side; they are illustrations beside the
+        # counts, never the population.
+        "orphaned_sample": list(block.get("orphaned_sample") or []),
+        "unlocked_sample": list(block.get("unlocked_sample") or []),
+        "repaired": _i(block.get("orphans_dropped_at_restore")),
+        "relocked": _i(block.get("missing_added_at_restore")),
+        "direction_corrected": _i(block.get("direction_corrected_at_restore")),
+    }
+
+
 def concentration(reduced: dict) -> list[dict]:
     """Per setup, across the SHARED caps only — the crowding-out question.
 
@@ -206,6 +271,7 @@ async def router_drops(request: Request):
             "request": request,
             "active": "router_drops",
             "reduced": reduced,
+            "lock": reduce_position_lock(payload),
             "by_setup": concentration(reduced),
             "error": error,
             "raw": payload,
