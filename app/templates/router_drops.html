@@ -73,6 +73,59 @@
 </div>
 
 <div class="card">
+  <h2>Is <code>correlation_lock</code> tight, or stale?</h2>
+  <p class="muted small">
+    The same 93% reads two opposite ways. This gate is blast-radius protection
+    when the symbols it holds have positions on them, and a silent outage when
+    they do not — and this page could not tell you which until 2026-08-20, when
+    the dark lane's <strong>30 promoted rows delivered 0</strong> (26 died here)
+    against <strong>2</strong> open positions.
+  </p>
+
+  {% if lock.state == 'not_reported' %}
+    <p><span class="badge">NOT REPORTED</span>
+      This engine predates the lock census. That is not "nothing is wrong" —
+      it is that nobody asked; the reading below needs a newer engine.</p>
+  {% else %}
+    <table class="kv">
+      <tr><th>Symbols locked</th><td><strong>{{ lock.locked }}</strong></td></tr>
+      <tr><th>Symbols with an active signal</th><td><strong>{{ lock.active_symbols }}</strong>
+        <span class="muted small">from {{ lock.active_signals }} active signal(s)</span></td></tr>
+    </table>
+
+    {% if lock.state == 'unlocked' %}
+      <p><span class="badge bad">UNDER-BLOCKING</span>
+        <strong>{{ lock.unlocked }}</strong> active signal(s) hold no lock
+        ({{ lock.unlocked_sample|join(', ') }}). A second position can open on a
+        symbol that already has one. This is the more dangerous direction and is
+        reported ahead of any orphan below.</p>
+    {% elif lock.state == 'orphaned' %}
+      <p><span class="badge bad">STALE — OVER-BLOCKING</span>
+        <strong>{{ lock.orphaned }}</strong> locked symbol(s) have no active
+        signal behind them ({{ lock.orphaned_sample|join(', ') }}). Every
+        candidate on those symbols is dying on a gate protecting nothing —
+        the drop count above is not this gate working.</p>
+    {% else %}
+      <p><span class="badge ok">TIGHT</span>
+        Every locked symbol has an active signal and every active signal is
+        locked. The drops above are this gate doing its job.</p>
+    {% endif %}
+
+    {% if lock.repaired or lock.relocked or lock.direction_corrected %}
+      <p class="muted small">
+        At the last restart the engine's reconcile dropped
+        <strong>{{ lock.repaired }}</strong> orphaned entr(ies), restored
+        <strong>{{ lock.relocked }}</strong> missing one(s) and corrected
+        <strong>{{ lock.direction_corrected }}</strong> direction(s).
+        <strong>Not a fault now</strong> — it is the only record anywhere that
+        the skew happened, kept because a repair that erases its own evidence
+        makes the next occurrence look like the first.
+      </p>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>Is one path eating the shared caps?</h2>
   <p class="muted small">
     Shared caps only: <code>same_direction_throttle</code> (a
