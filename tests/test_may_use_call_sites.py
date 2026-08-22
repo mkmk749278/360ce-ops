@@ -106,3 +106,88 @@ def test_the_permissive_failure_mode_is_real_and_not_a_theory():
         scope = {"ops_role": "owner"}
 
     assert guest_scope.may_use(_Owner(), "/control/users/exit-mechanism", "POST") is True
+
+
+# ---------------------------------------------------------------------------
+# The denial's own diagnosis
+# ---------------------------------------------------------------------------
+
+def test_a_denial_records_the_resolved_route_beside_the_concrete_path():
+    """"read-only access cannot issue POST" has two causes and one wording.
+
+    The route may not have resolved at all, or it may have resolved and simply
+    not be in the table. Different faults, different fixes, and the audit row
+    could not tell them apart — which cost an hour on 2026-08-22 chasing a live
+    403 on a route the gate allows on `main`.
+
+    Driven through the REAL middleware with a REAL guest grant, because the
+    field only matters if it lands in the row somebody actually reads.
+    """
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        log = app.state.settings.audit_log_path
+        before = _audit_rows(log)
+
+        code, _gid = app.state.guest_access.issue(label="arity-test", ttl_sec=3600)
+        assert c.post("/guest?json=1", data={"code": code}).status_code == 200
+
+        # Owner-only, and it resolves — so the row must name the template.
+        assert c.get("/control").status_code == 403
+
+    rows = [
+        r for r in _audit_rows(log)[len(before):]
+        if r.get("action") == "guest_denied"
+    ]
+    assert rows, "the denial was not audited at all"
+    row = rows[-1]
+    assert row["params"]["path"] == "/control"
+    assert "route" in row["params"], (
+        "a denial that cannot say which route it resolved cannot say which of "
+        "its two faults occurred"
+    )
+    assert row["params"]["route"] == "/control", (
+        "the route RESOLVED and is simply not in the table — the other fault "
+        "is `route: null`, and one wording covers both without this field"
+    )
+
+
+def _audit_rows(path):
+    import json
+    import os
+
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        return [json.loads(ln) for ln in fh if ln.strip()]
+
+
+def test_the_middleware_resolves_the_route_through_the_same_function():
+    """One resolver, not two.
+
+    A second lookup in the audit path could disagree with the one that made
+    the decision — and then the row would describe a refusal that did not
+    happen.
+    """
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "app" / "auth_mw.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+
+    calls = [
+        n for n in ast.walk(tree)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and n.func.attr == "matched_route_path"
+    ]
+    assert calls, "the denial path no longer records the resolved route"
+    for c in calls:
+        assert isinstance(c.func.value, ast.Name) and c.func.value.id == "guest_scope", (
+            "resolve through guest_scope.matched_route_path — the function the "
+            "decision itself used — never a local reimplementation"
+        )
