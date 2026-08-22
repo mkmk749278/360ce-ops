@@ -132,7 +132,7 @@
         required.</span>
       {% endif %}
     </p>
-    {% if may_use('/control/users/exit-mechanism', 'POST') %}
+    {% if may_use(request, '/control/users/exit-mechanism', 'POST') %}
     <form method="post" action="/control/users/exit-mechanism"
           onsubmit="return confirm('Hand {{ lookup.phone }} exits to ' + this.exit_mechanism.value.toUpperCase() + '? This changes how REAL positions close.');">
       <input type="hidden" name="phone" value="{{ lookup.phone }}">

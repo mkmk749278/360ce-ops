@@ -101,7 +101,7 @@
               {#- OFF, never absent. A vanished entry reads as a broken deploy;
                   this reads as a decision somebody made and can reverse. -#}
               <span class="badge badge-muted" title="DIAG_ACTIONS_ENABLED is off engine-side">OFF</span>
-            {% elif may_use('/diagnostics/console/run', 'POST') %}
+            {% elif may_use(request, '/diagnostics/console/run', 'POST') %}
               <form method="post" action="/diagnostics/console/run">
                 <input type="hidden" name="key" value="{{ e.key }}">
                 {% if 'symbol' in e.needs %}
