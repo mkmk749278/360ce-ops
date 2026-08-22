@@ -130,6 +130,30 @@ def size(value: Any) -> str:
     return f"{out:.1f} TiB"
 
 
+def share_of(value: Any, total: Any) -> str:
+    """*value* as a percentage of *total* — with the zero-denominator named.
+
+    A share needs a denominator, and this repo has paid twice for one rendered
+    without it (the Layer-G ``wasted_pct`` divided by every promotion; the
+    Strategy Lab dropped the matrix's eviction count). The two failure modes
+    are different and are kept different here:
+
+    * a denominator of **zero** renders the em-dash, because "0 of 0" is not
+      0% — nothing was measured, and printing 0% asserts that it was;
+    * a value that will not parse renders the em-dash too, for the same reason
+      every other filter in this module does.
+
+    Kept as a filter rather than inlined into a template so the zero-denominator
+    decision is made once. A template computing ``a / b * 100`` inline makes it
+    at every call site, and one of them will get it wrong.
+    """
+    num = _as_float(value)
+    den = _as_float(total)
+    if num is None or den is None or den == 0:
+        return EMDASH
+    return f"{num / den * 100:.1f}%"
+
+
 def register(env) -> None:
     """Attach the filters to a Jinja environment."""
     env.filters["price"] = price
@@ -137,3 +161,4 @@ def register(env) -> None:
     env.filters["secs"] = secs
     env.filters["duration"] = duration
     env.filters["size"] = size
+    env.filters["share_of"] = share_of

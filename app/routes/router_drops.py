@@ -58,10 +58,17 @@ router = APIRouter()
 #: this list has never heard of renders under its raw name rather than being
 #: dropped or silently bucketed (`MEASUREMENT_SUFFIXES` wearing another hat).
 SHARED_CAPS = {
+    # NOTE: the *mode* of this gate is not asserted here — it is read off the
+    # engine's payload by `reduce_direction_cap` and rendered beside the row.
+    # This description used to say "a GLOBAL cap of 3 … shared book-wide",
+    # which stopped being unconditionally true on 2026-08-22 when the engine
+    # gained a per-path budget. Copy is part of the measurement: a sentence
+    # asserting one mode over a counter produced by the other is wrong on
+    # screen even when every number above it is right.
     "same_direction_throttle": (
-        "MAX_SAME_DIRECTION_GLOBAL — a GLOBAL cap of 3 concurrent positions in "
-        "one direction, across every path and every symbol. The only gate here "
-        "whose budget is shared book-wide."
+        "The same-direction cap. Its budget is shared book-wide in "
+        "<code>global</code> mode and per path in <code>per_path</code> mode — "
+        "the panel below says which one produced these counts."
     ),
     "per_channel_cap": (
         "MAX_CONCURRENT_SIGNALS_PER_CHANNEL — 5 for 360_SCALP, 3 elsewhere. "
@@ -230,6 +237,82 @@ def reduce_position_lock(payload: dict) -> dict:
     }
 
 
+def reduce_direction_cap(payload: dict) -> dict:
+    """The same-direction cap's mode, its budgets, and the OTHER mode's answer.
+
+    Added 2026-08-22 with engine `DIRECTION_CAP_MODE`, for the owner: *"set cap
+    per path 3 same direction and no cumulative max cap anyways"*.
+
+    This gate took **499 of 500 drops — 91.6% of everything dequeued** over one
+    10.5h boot, and the row above it could only say that it did. Three rules:
+
+    * **The mode is read off the rows the engine decided**, never mirrored from
+      a copy of its config. `MEASUREMENT_SUFFIXES` drifted for a week; the fix
+      for a drifting mirror is not a second mirror.
+    * **The counterfactual is what the OTHER mode would have done**, and it is
+      a count of candidates that would survive *this hop* — not of signals that
+      would be delivered, and certainly not of trades that would be profitable.
+      Everything it names still faces TP/SL sanity, the staleness checks and
+      the channel floor below this gate, and their outcomes are unknowable
+      because they never traded. That limit is on screen, not in a footnote.
+    * **A saturated budget and an absence of candidates read identically**
+      without `budgets_held`, so the occupancy table renders whether or not
+      anything is held.
+    """
+    if not isinstance(payload, dict):
+        return {"available": False, "reason": "no payload"}
+    cap = payload.get("direction_cap")
+    if not isinstance(cap, dict) or not cap:
+        # An engine predating the block, NOT a gate that dropped nothing —
+        # those have different next moves (deploy vs. read the numbers).
+        return {"available": False, "reason": "not_reported"}
+
+    cf = cap.get("counterfactual") or {}
+    evaluated = _i(cap.get("evaluated"))
+    mode = str(cap.get("mode") or "")
+    cumulative = _i(cap.get("cumulative_limit"))
+
+    held = []
+    for key, n in (cap.get("budgets_held") or {}).items():
+        path, _, direction = str(key).partition("|")
+        held.append({"path": path, "direction": direction or "?", "n": _i(n)})
+    held.sort(key=lambda r: (-r["n"], r["path"]))
+
+    gain = _i(cap.get("would_gain"))
+    return {
+        "available": True,
+        "mode": mode,
+        "mode_known": mode in ("global", "per_path"),
+        "per_path_limit": _i(cap.get("per_path_limit")),
+        "global_limit": _i(cap.get("global_limit")),
+        "cumulative_limit": cumulative,
+        # 0 is a decision somebody made ("no cumulative max cap"), not an
+        # unset value, and the page says which.
+        "cumulative_off": cumulative == 0,
+        "evaluated": evaluated,
+        "both_block": _i(cf.get("both_block")),
+        "global_only": _i(cf.get("global_only")),
+        "per_path_only": _i(cf.get("per_path_only")),
+        "neither_blocks": _i(cf.get("neither_blocks")),
+        "would_gain": gain,
+        "would_gain_share": cap.get("would_gain_share"),
+        "by_path": [
+            {"key": k, "n": _i(v)}
+            for k, v in sorted(
+                (cap.get("counterfactual_by_path") or {}).items(),
+                key=lambda kv: -_i(kv[1]),
+            )
+        ],
+        "budgets_held": held,
+        "budgets_held_total": _i(cap.get("budgets_held_total")),
+        # The name of the mode that is NOT running, so the panel can say what
+        # the counterfactual is a counterfactual *of*.
+        "other_mode": (
+            "per_path" if mode == "global" else "global" if mode == "per_path" else ""
+        ),
+    }
+
+
 def concentration(reduced: dict) -> list[dict]:
     """Per setup, across the SHARED caps only — the crowding-out question.
 
@@ -273,6 +356,7 @@ async def router_drops(request: Request):
             "reduced": reduced,
             "lock": reduce_position_lock(payload),
             "by_setup": concentration(reduced),
+            "dircap": reduce_direction_cap(payload),
             "error": error,
             "raw": payload,
         },
