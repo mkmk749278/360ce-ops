@@ -48,6 +48,17 @@ async def pairs_page(request: Request, tab: str = "promoting"):
             # causes, different next moves — "blank needs a cause before it gets
             # a caption".
             "retention": data.get("retention"),
+            # Dual universe (engine `Scanner.mover_universe_role`). A pair can
+            # be in BOTH lists — core by volume AND currently promoted — and
+            # until 2026-08-22 the Regular tab hid every promoted symbol, so
+            # the owner was reading a regular universe roughly half its real
+            # size behind a tab that said "Regular (167)".
+            #
+            # `None` (absent) is an engine predating the census and is NOT
+            # `{}` — the template must be able to say "this engine does not
+            # report it" rather than "nothing is dual", which is a claim.
+            "dual_universe": data.get("dual_universe"),
+            "dual_count": data.get("dual_count"),
             "error": error,
         },
     )

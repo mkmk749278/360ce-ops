@@ -126,10 +126,150 @@
 </div>
 
 <div class="card">
+  <h2>The same-direction cap — which budget, and what the other mode would do</h2>
+
+  {% if not dircap.available %}
+    <span class="badge badge-warn">NOT REPORTED</span>
+    <p class="muted small">
+      This engine publishes no <code>direction_cap</code> block — almost
+      certainly one predating it. That is <strong>not</strong> a cap that
+      blocked nothing, which would report zeroes with a mode beside them; the
+      next move is a deploy, not a reading.
+    </p>
+  {% else %}
+    {% if dircap.mode == 'per_path' %}
+      <span class="badge badge-ok">PER PATH</span>
+    {% elif dircap.mode == 'global' %}
+      <span class="badge badge-warn">GLOBAL</span>
+    {% else %}
+      <span class="badge badge-bad">UNKNOWN MODE</span>
+    {% endif %}
+
+    <p class="small">
+      {% if dircap.mode == 'per_path' %}
+        Each path holds its own budget of
+        <strong>{{ dircap.per_path_limit }}</strong> concurrent signals per
+        direction — so one path can hold
+        {{ dircap.per_path_limit }} long and {{ dircap.per_path_limit }} short
+        at once, and a quiet path cannot be starved by a noisy one.
+      {% elif dircap.mode == 'global' %}
+        One budget of <strong>{{ dircap.global_limit }}</strong> concurrent
+        signals per direction, shared by every path and every symbol. The path
+        submitting the most candidates holds it — that is arithmetic, not a
+        preference.
+      {% else %}
+        The engine reported a mode this page has never heard of
+        (<code>{{ dircap.mode }}</code>). The counts below are still the
+        engine's own; only the description is missing.
+      {% endif %}
+      Cumulative ceiling:
+      {% if dircap.cumulative_off %}
+        <strong>off</strong> — a decision, not an unset value.
+      {% else %}
+        <strong>{{ dircap.cumulative_limit }}</strong> across all paths.
+      {% endif %}
+    </p>
+
+    <h3>What the other mode would have done</h3>
+    <p class="muted small">
+      Both modes are evaluated on <em>every</em> candidate whatever the engine
+      is configured to apply, so this is one evaluation read two ways rather
+      than a second implementation — a panel built on its own copy of the rule
+      is how it ends up disagreeing with the gate it is used to justify
+      switching.
+    </p>
+    <table>
+      <thead><tr><th>Outcome</th><th>n</th><th>Share of evaluated</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Both modes block</td><td>{{ dircap.both_block }}</td>
+          <td>{{ dircap.both_block | share_of(dircap.evaluated) }}</td>
+        </tr>
+        <tr>
+          <td><strong>Only <code>global</code> blocks</strong>
+            <span class="muted small">— a per-path budget would pass these</span></td>
+          <td>{{ dircap.global_only }}</td>
+          <td>{{ dircap.global_only | share_of(dircap.evaluated) }}</td>
+        </tr>
+        <tr>
+          <td>Only <code>per_path</code> blocks
+            <span class="muted small">— its own path is saturated while the book is not</span></td>
+          <td>{{ dircap.per_path_only }}</td>
+          <td>{{ dircap.per_path_only | share_of(dircap.evaluated) }}</td>
+        </tr>
+        <tr>
+          <td>Neither blocks</td><td>{{ dircap.neither_blocks }}</td>
+          <td>{{ dircap.neither_blocks | share_of(dircap.evaluated) }}</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="small">
+      Switching to <code>{{ dircap.other_mode or 'the other mode' }}</code>
+      would let <strong>{{ dircap.would_gain }}</strong> more candidates past
+      <em>this hop</em>
+      {% if dircap.would_gain_share is not none %}
+        ({{ '%.1f'|format(dircap.would_gain_share * 100) }}% of the
+        {{ dircap.evaluated }} it saw){% endif %}.
+    </p>
+    <p class="muted small">
+      <strong>Past this hop is not delivered, and delivered is not
+      profitable.</strong> Every candidate in that number still faces TP/SL
+      sanity, four staleness checks and the channel confidence floor below this
+      gate, and none of their outcomes is knowable — they never traded. Read it
+      as an upper bound on volume, never as an expected gain.
+      <strong>Counters are cumulative since engine start and reset on
+      restart</strong>: they are in-process integers, not a ledger, so a low
+      number after a deploy is a young process rather than a quiet market.
+    </p>
+
+    {% if dircap.by_path %}
+    <h3>Which paths the disagreement is about</h3>
+    <table>
+      <thead><tr><th>Bucket · path</th><th>n</th></tr></thead>
+      <tbody>
+        {% for r in dircap.by_path %}
+        <tr><td><code>{{ r.key }}</code></td><td>{{ r.n }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <h3>Budgets held right now</h3>
+    <p class="muted small">
+      A saturated cap and an absence of candidates produce the same drop
+      counter. This is what separates them.
+    </p>
+    {% if dircap.budgets_held %}
+    <table>
+      <thead><tr><th>Path</th><th>Direction</th><th>Held</th></tr></thead>
+      <tbody>
+        {% for r in dircap.budgets_held %}
+        <tr>
+          <td><code>{{ r.path }}</code></td>
+          <td>{{ r.direction }}</td>
+          <td>{{ r.n }}{% if dircap.mode == 'per_path' %} / {{ dircap.per_path_limit }}{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small">{{ dircap.budgets_held_total }} signal(s) holding a budget.</p>
+    {% else %}
+    <p class="muted small">
+      Nothing held — the book is empty, so this gate is currently blocking
+      nothing. Not a fault.
+    </p>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>Is one path eating the shared caps?</h2>
   <p class="muted small">
-    Shared caps only: <code>same_direction_throttle</code> (a
-    <strong>global</strong> 3), <code>per_channel_cap</code> and
+    Shared caps only: <code>same_direction_throttle</code>
+    ({% if dircap.available and dircap.mode == 'per_path' %}per path, so its
+    budget is shared only within one setup{% elif dircap.available %}a
+    <strong>global</strong> {{ dircap.global_limit }}{% else %}mode not
+    reported{% endif %}), <code>per_channel_cap</code> and
     <code>correlation_group_limit</code>. Per-symbol gates are deliberately
     excluded — a path with a large <code>symbol_channel_cooldown</code> count is
     re-detecting its own symbol and taking nothing from anybody, and pooling that

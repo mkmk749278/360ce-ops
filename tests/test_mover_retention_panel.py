@@ -115,6 +115,23 @@ def _page(payload, path="/pairs?tab=promoting") -> str:
         return resp.text
 
 
+def _retention_card(html: str) -> str:
+    """Just the retention card's markup.
+
+    These tests assert the retention lane's four states by badge text, and on
+    2026-08-22 `/pairs` gained a second card that uses the same vocabulary —
+    the dual-universe census, which correctly reads NOT REPORTED against an
+    engine that predates it. A page-wide substring then answers a question
+    about a different element, which is how an assertion silently stops
+    meaning its own sentence.
+
+    The badges still say what they said; the check now looks where they are.
+    """
+    start = html.index("Retention:")
+    end = html.index("</section>", start)
+    return html[start:end]
+
+
 # --------------------------------------------------------------------------- #
 # Three states, never two
 # --------------------------------------------------------------------------- #
@@ -126,7 +143,7 @@ def test_an_engine_that_does_not_report_says_so_rather_than_reading_empty():
     rendered the same thing for both would tell the owner a scorer is working
     when no scorer exists.
     """
-    text = _visible(_page(_payload(retention="absent")))
+    text = _visible(_retention_card(_page(_payload(retention="absent"))))
     assert "NOT REPORTED" in text
     assert "predates" in text
     assert "MEASURING ONLY" not in text
@@ -134,7 +151,7 @@ def test_an_engine_that_does_not_report_says_so_rather_than_reading_empty():
 
 
 def test_an_error_from_the_lane_is_a_fault_not_a_quiet_market():
-    text = _visible(_page(_payload(retention="error")))
+    text = _visible(_retention_card(_page(_payload(retention="error"))))
     assert "UNREADABLE" in text
     assert "boom" in text
     assert "NOT REPORTED" not in text
@@ -142,7 +159,7 @@ def test_an_error_from_the_lane_is_a_fault_not_a_quiet_market():
 
 def test_a_reporting_lane_holding_nothing_is_the_quiet_case():
     """Zero held pairs in a quiet market is normal and must not read as a fault."""
-    text = _visible(_page(_payload(promoting=[], retention="present")))
+    text = _visible(_retention_card(_page(_payload(promoting=[], retention="present"))))
     assert "MEASURING ONLY" in text
     assert "UNREADABLE" not in text
     assert "NOT REPORTED" not in text

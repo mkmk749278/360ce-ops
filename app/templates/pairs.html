@@ -19,10 +19,122 @@
   <a class="btn {% if tab == 'regular' %}btn-go{% endif %}" href="/pairs?tab=regular">
     Regular ({{ regular_count }})
   </a>
+  {% if dual_count %}
+  <span class="muted small" title="A pair in both lists is counted in both — adding the two tabs overshoots the universe by exactly this many.">
+    {{ dual_count }} in both
+  </span>
+  {% endif %}
   <span class="muted" style="margin-left:auto">
     updated at {{ updated_at or '—' }}
   </span>
 </div>
+
+<section class="card">
+  <h2>Dual universe <span class="muted">a pair can be in both lists</span></h2>
+
+  {% if dual_universe is none %}
+    <span class="badge badge-warn">NOT REPORTED</span>
+    <p class="muted small">
+      This engine publishes no dual-universe census — one predating it. That is
+      <strong>not</strong> "no pair is in both", which would report zeroes:
+      an engine that cannot answer and an answer of none have different next
+      moves.
+    </p>
+  {% elif dual_universe.get('error') %}
+    <span class="badge badge-bad">UNREADABLE</span>
+    <p class="small"><code>{{ dual_universe.error }}</code></p>
+  {% else %}
+    {% if dual_universe.enabled %}
+      <span class="badge badge-ok">ENFORCING</span>
+    {% else %}
+      <span class="badge badge-warn">MEASURING ONLY</span>
+    {% endif %}
+
+    <p class="small">
+      A promoted mover is scanned by <strong>4</strong> evaluators; a regular
+      pair by all <strong>{{ dual_universe.withheld_evaluators | length + 4 }}</strong>.
+      Until 2026-08-22 the restriction applied on promotion alone, so a core
+      top-N pair that happened to be up 15% lost
+      <strong>{{ dual_universe.withheld_evaluators | length }}</strong> of its
+      evaluators for the whole window — and in a broad rally the pairs a
+      subscriber recognises are exactly the pairs that qualify as movers.
+    </p>
+
+    <p class="small">
+      <strong>{{ dual_universe.dual_candidates }}</strong> of
+      {{ dual_universe.promoted }} promoted pair(s) also earn a regular place
+      {% if dual_universe.universe_size %}
+        — {{ dual_universe.dual_candidates | share_of(dual_universe.universe_size) }}
+        of the {{ dual_universe.universe_size }}-pair universe{% endif %}.
+      {% if dual_universe.enabled %}
+        They keep their own evaluators <em>and</em> gain the mover paths.
+      {% else %}
+        They are currently narrowed to the mover paths anyway; the effect
+        switch (<code>DUAL_UNIVERSE_ENABLED</code>) is off.
+      {% endif %}
+    </p>
+
+    <table>
+      <thead><tr><th>Role</th><th>n</th><th>What it means</th></tr></thead>
+      <tbody>
+        {% for role, label in [
+             ('dual_core', 'A top-N pair by volume that is also igniting. The population the mover restriction was never written for.'),
+             ('dual_volume', 'A mover admitted from outside the top-N that trades at core volume. Never earning a top-N slot is a fact about the last universe refresh, not about the instrument.'),
+             ('mover_only', 'A genuine outside-the-universe mover. The restriction was written for exactly this pair and still applies to it.')] %}
+        <tr>
+          <td><code>{{ role }}</code></td>
+          <td>{{ dual_universe.by_role.get(role, 0) }}</td>
+          <td class="muted small">{{ label }}</td>
+        </tr>
+        {% endfor %}
+        {% for role, n in dual_universe.by_role.items() %}
+          {% if role not in ['dual_core', 'dual_volume', 'mover_only'] %}
+          <tr>
+            <td><code>{{ role or 'none' }}</code> <span class="badge badge-warn">unclassified</span></td>
+            <td>{{ n }}</td>
+            <td class="muted small">
+              A role this dashboard has never heard of. Rendered under the
+              engine's own name rather than dropped — a reader iterating its own
+              list is silent by construction on the next role.
+            </td>
+          </tr>
+          {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+
+    {% if dual_universe.symbols.get('dual_core') %}
+    <p class="muted small">
+      dual_core:
+      {% for sym in dual_universe.symbols['dual_core'] %}<code>{{ sym }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+      {% if dual_universe.symbols_truncated.get('dual_core') %}
+        <em>+{{ dual_universe.symbols_truncated['dual_core'] }} more (list bounded; the count above is not)</em>
+      {% endif %}
+    </p>
+    {% endif %}
+
+    <details>
+      <summary class="muted small">Which evaluators a promotion withholds</summary>
+      <p class="muted small">
+        {% for e in dual_universe.withheld_evaluators %}<code>{{ e }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+      </p>
+    </details>
+
+    <p class="muted small">
+      <strong>This says how much of the universe is affected and cannot say how
+      much better it would be.</strong> The evaluators named above are precisely
+      the ones that did not run, so nothing here is a count of foregone signals
+      — pricing that needs a shadow scan chain, and saying so is cheaper than a
+      survivorship-biased number that looks like an answer.
+      {% if dual_universe.min_volume_usd %}
+      A synthetic mover counts as <code>dual_volume</code> at
+      {{ '%.0f'|format(dual_universe.min_volume_usd / 1000000) }}M 24h volume —
+      <code>pair_manager</code>'s existing MIDCAP boundary, not a threshold
+      chosen while looking at this window.
+      {% endif %}
+    </p>
+  {% endif %}
+</section>
 
 {% if tab == 'promoting' %}
 <section class="card">
