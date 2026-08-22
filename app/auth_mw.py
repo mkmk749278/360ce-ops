@@ -69,10 +69,36 @@ class AuthRedirectMiddleware(BaseHTTPMiddleware):
             if store is not None:
                 store.record_denial(grant_id)
             settings = request.app.state.settings
+            # The RESOLVED route template, beside the concrete path. Without it
+            # a denial cannot say which of two faults it is: the route did not
+            # resolve at all (`null`), or it resolved and is simply not in the
+            # table. Those have different fixes, and "read-only access cannot
+            # issue POST" reads identically for both — "blank needs a cause
+            # before it gets a caption", at the auth layer.
+            #
+            # Chasing a live 403 on `POST /diagnostics/console/run` (2026-08-22)
+            # cost an hour that this single field would have ended, because the
+            # gate allows that route on `main` and refused it in production and
+            # nothing recorded which branch ran.
+            #
+            # Computed only on the denial path, so it costs nothing on a served
+            # request, and through the SAME function the decision used — a
+            # second resolver here could disagree with the one that refused.
+            # Audit only: the 403 page's wording is unchanged, because a prober
+            # must not learn the route table from a refusal.
+            try:
+                _route = guest_scope.matched_route_path(request.app, request.scope)
+            except Exception:  # noqa: BLE001 - diagnostics must not break a refusal
+                _route = None
             audit.record(
                 settings.audit_log_path,
                 action="guest_denied",
-                params={"path": request.url.path, "method": request.method, "why": reason},
+                params={
+                    "path": request.url.path,
+                    "method": request.method,
+                    "route": _route,
+                    "why": reason,
+                },
                 result={},
                 ok=False,
                 actor=f"guest:{grant.label}",
