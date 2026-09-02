@@ -1170,6 +1170,39 @@ choosing a half-open-probe threshold with no evidence. **A finding and a fix are
 separate deliverables**, and "the number looked bad once" is not evidence about
 what happens when you change it.
 
+## A safety switch that cannot be thrown is the one state this page must shout (2026-09-02)
+
+`/control` rendered **"Kill switch unavailable — the engine reports it never
+initialised (no Firestore / GCP creds in this deployment)"** and, beside it,
+**"Global auto-trade — Unavailable"**. Both in `.muted` grey, as a note rather
+than a fault. What that state actually means is that `POST /api/kill-switch`
+returns **503**: the owner cannot halt auto-trade from the control plane at
+all, against a B18 requirement that a kill-switch flip takes effect in under
+five seconds. **The one control this repo exists to guarantee was inoperable,
+and the page said so in the typeface it uses for footnotes.**
+
+Three rules, each already in this file arriving at the safety section:
+
+- **Grade an unavailable control as a FAULT, not as an absence.** A tunable
+  that cannot be read is a blank; a switch that cannot be thrown is an
+  outage. They must not share a visual class, and this one must lead the page
+  above every tile.
+- **The parenthetical is a cause the page cannot observe.**
+  `_kill_switch_state()` returns `initialised: false` for *both* a process
+  that never wired Firestore *and* a read that raised — and ops turns that one
+  boolean into a confident sentence about the deployment's credentials. Same
+  defect as `/invalidations`' WRITER STALE and `/dark-signals`' hardcoded ban
+  cause: **name what the engine said, not why you think it said it**, and where
+  the engine cannot distinguish two causes, ask it to publish which.
+- **Which process holds the state, again.** In isolated mode the kill switch is
+  initialised in the **api** container by `src/api/main.py` under a stricter
+  precondition than the engine's own boot path — both `FIREBASE_PROJECT_ID`
+  and `FIREBASE_SERVICE_ACCOUNT_PATH`, where `bootstrap.py` needs only the
+  project and falls back to ADC. So this page can read "unavailable" over an
+  engine that is trading normally. The `INDEX COLD` and promotion-census `{}`
+  defects were this same shape on diagnostic pages; here it is on the switch.
+
+
 ## Data sources (one-line each)
 
 | Source | Module |
