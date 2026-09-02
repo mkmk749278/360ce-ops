@@ -128,6 +128,40 @@ FEATURE_COPY: dict[str, dict[str, Any]] = {
         "default": 0.0,
         "asks": "Was there depth behind the entry, or was it thin?",
     },
+    # ── Campaign state: the only column here brought TO the table rather than
+    #    found in it. Measured on the 90-day delivered book before the stamp
+    #    existed, which is the opposite of a cell discovered by drawing 21 of
+    #    them — and the page should let a reader tell those two apart.
+    "campaign_prev_won": {
+        "label": "The previous trade on this symbol × side won",
+        "default": 1.0,
+        "asks": "Fully knowable at entry and recorded nowhere until now. On "
+                "MOVER_TREND_PULLBACK the delivered book splits +0.969%/trade "
+                "after a winner (CI95 [+0.440, +1.506], n=145) against "
+                "-0.304% after a stop and -0.136% on a first entry — the "
+                "path's entire positive contribution is that one bucket. It "
+                "does NOT generalise: off MVRTP the same split reads +0.017% "
+                "against +0.123%, so read the path selector before this column.",
+    },
+    "campaign_prev_age_h": {
+        "label": "Hours since that trade closed",
+        "default": 6.0,
+        "asks": "The effect is a window, not a state. Measured: +1.41% at "
+                "0-2h and +1.42% at 2-6h, both intervals excluding zero; "
+                "-0.03% at 6-24h and +0.06% beyond, both spanning zero. Lower "
+                "is better here, which is why the rule keeps rows BELOW the "
+                "threshold — reading it the other way round would keep the "
+                "stale half and report the effect as absent.",
+    },
+    "campaign_leg_index": {
+        "label": "Closed legs on this campaign before this one",
+        "default": 1.0,
+        "asks": "0 on a first entry, and never unknown — which makes it the "
+                "column to grade the other two's coverage against. The "
+                "measured relationship is not monotonic (legs 2-4 best, leg 1 "
+                "worst, leg 5 dips), so the engine declares no split direction "
+                "for it and neither does this page.",
+    },
     # ── TREND_PULLBACK_EMA: the magnitudes behind its own boolean gates ───────
     "retrace_frac_of_leg": {
         "label": "Retrace of the impulse leg",
