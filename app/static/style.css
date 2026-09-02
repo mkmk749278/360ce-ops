@@ -264,6 +264,11 @@ code {
 .ks-state { font-weight: 700; font-size: 1.05rem; }
 .ks-on  { color: var(--neg); }
 .ks-off { color: var(--pos); }
+/* A state we could not READ is neither engaged nor disengaged, and it must not
+   borrow either colour. Added 2026-09-02: /control rendered "kill switch
+   unavailable" in .muted — the class it uses for footnotes — over a control
+   that returned 503 on every flip. */
+.ks-warn { color: var(--warn, #d89b1a); }
 
 /* Control status summary strip (control.html) */
 .ctl-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.8rem; margin-bottom: 1.2rem; }

@@ -720,3 +720,127 @@ def test_a_str_tunable_without_choices_is_still_free_text(monkeypatch):
         html = client.get("/control").text
     assert 'type="text" id="tun-structural_snap_apply_paths"' in html
     assert "<select id=\"tun-structural_snap_apply_paths\"" not in html
+
+
+# ---- the switch that could not be thrown (2026-09-02) -------------------
+#
+# Owner screenshot: /control read "Kill switch — Clear" in green and "Global
+# auto-trade — Disabled", with the explanation in the grey this page uses for
+# footnotes.  What that state actually meant is that POST /api/kill-switch
+# returned 503 — the owner could not halt auto-trade from the control plane at
+# all, against B18's five-second requirement.
+#
+# The engine now publishes `availability` (ok / not_configured / read_failed),
+# `detail`, `throwable` and `source`, so this page can stop inventing a cause
+# and can grade the BUTTON rather than the reading.
+
+
+def _patch_switches(monkeypatch, ks_state, glob_state):
+    async def fake_auto_mode(self):
+        return {"mode": "paper"}
+
+    async def fake_governor(self):
+        return GOVERNOR_OFF
+
+    async def fake_ks(self):
+        return ks_state
+
+    async def fake_glob_(self):
+        return glob_state
+
+    async def fake_billing(self):
+        return {"enabled": True, "configured": True, "initialised": True}
+
+    monkeypatch.setattr(EngineApiClient, "auto_mode", fake_auto_mode)
+    monkeypatch.setattr(EngineApiClient, "trail_governor", fake_governor)
+    monkeypatch.setattr(EngineApiClient, "kill_switch_state", fake_ks)
+    monkeypatch.setattr(EngineApiClient, "auto_trade_global_state", fake_glob_)
+    monkeypatch.setattr(EngineApiClient, "billing_enabled_state", fake_billing)
+    monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
+
+
+def _get_control(monkeypatch, ks_state, glob_state) -> str:
+    _patch_switches(monkeypatch, ks_state, glob_state)
+    with TestClient(app) as client:
+        _login(client)
+        return client.get("/control").text
+
+
+def test_an_unthrowable_kill_switch_renders_as_an_outage(monkeypatch):
+    """Not a footnote, and not green.  This is the state the owner was in."""
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": False, "availability": "not_configured",
+         "throwable": False, "source": "local", "detail": None},
+        {"enabled": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+    )
+    assert "INOPERABLE" in body
+    assert "cannot be thrown" in body
+    assert "badge-ok\">Clear" not in body, (
+        "an unreadable switch must never render as the green all-clear — "
+        "`engaged: false` because we could not ask is a different fact"
+    )
+
+
+def test_an_unreadable_but_throwable_switch_says_which_half_works(monkeypatch):
+    """The api container is blind and the engine bridge is up: the value is not
+    a reading, and the buttons still work.  A page that graded the button on
+    readability would hide a working emergency stop."""
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": False, "availability": "not_configured",
+         "throwable": True, "source": "engine", "detail": None},
+        {"enabled": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+    )
+    assert "STATE UNREADABLE" in body
+    assert "INOPERABLE" not in body
+    assert "Engage kill switch" in body, "the control must still be offered"
+    assert "routed to the engine container" in body
+
+
+def test_a_failed_read_quotes_the_engine_rather_than_naming_a_cause(monkeypatch):
+    """/invalidations' WRITER STALE and /dark-signals' hardcoded ban cause, for
+    the fourth time: say what the engine said, never why you think it said it."""
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": False, "availability": "read_failed",
+         "throwable": True, "source": "local",
+         "detail": "ResourceExhausted: 429 Quota exceeded."},
+        {"enabled": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+    )
+    assert "Firestore refused the read" in body
+    assert "Quota exceeded" in body
+    assert "no Firestore / GCP creds in this deployment" not in body, (
+        "the old copy asserted a cause this page cannot observe"
+    )
+
+
+def test_a_healthy_switch_still_renders_exactly_as_before(monkeypatch):
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local", "reason": None},
+        {"enabled": True, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+    )
+    assert "Disengaged — auto-trade allowed" in body
+    assert "ENABLED — new orders allowed" in body
+    assert "INOPERABLE" not in body
+    assert "STATE UNREADABLE" not in body
+
+
+def test_an_old_engine_without_the_new_fields_still_renders(monkeypatch):
+    """An engine that predates this change sends neither `throwable` nor
+    `availability`.  Jinja yields Undefined for both, which is neither None nor
+    a value — the exact shape the exit-mechanism control fell past on its first
+    cut."""
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": True, "reason": None},
+        {"enabled": True, "initialised": True},
+    )
+    assert "Disengaged — auto-trade allowed" in body
+    assert "INOPERABLE" not in body

@@ -37,9 +37,19 @@
    switch here that moves a REAL stop order, and nothing on this page can show
    what it is doing, so its tile goes to the page that can. #}
 <div class="ctl-summary">
+  {# Three states, not two. The owner's 2026-09-02 screenshot read "Clear" in
+     green over a kill switch that answered 503 on every flip: `engaged: false`
+     because we could not ASK is not the same fact as `engaged: false` because
+     the switch is off, and green is the flattering direction of that error.
+     A switch that cannot be thrown outranks both readings. #}
   <a class="ctl-stat" href="#sec-safety">
     <div class="k">Kill switch</div>
-    <div class="v">{% if ks.get('engaged') %}<span class="badge badge-bad">Engaged</span>{% else %}<span class="badge badge-ok">Clear</span>{% endif %}</div>
+    <div class="v">
+      {% if ks.get('throwable') is false %}<span class="badge badge-bad">INOPERABLE</span>
+      {% elif ks.get('availability', 'ok') != 'ok' %}<span class="badge badge-warn">Unreadable</span>
+      {% elif ks.get('engaged') %}<span class="badge badge-bad">Engaged</span>
+      {% else %}<span class="badge badge-ok">Clear</span>{% endif %}
+    </div>
   </a>
   <a class="ctl-stat" href="#sec-mode">
     <div class="k">Auto-execution</div>
@@ -47,7 +57,12 @@
   </a>
   <a class="ctl-stat" href="#sec-safety">
     <div class="k">Global auto-trade</div>
-    <div class="v">{% if glob.get('enabled') %}<span class="badge badge-ok">Enabled</span>{% else %}<span class="badge badge-muted">Disabled</span>{% endif %}</div>
+    <div class="v">
+      {% if glob.get('throwable') is false %}<span class="badge badge-bad">INOPERABLE</span>
+      {% elif glob.get('availability', 'ok') != 'ok' %}<span class="badge badge-warn">Unreadable</span>
+      {% elif glob.get('enabled') %}<span class="badge badge-ok">Enabled</span>
+      {% else %}<span class="badge badge-muted">Disabled</span>{% endif %}
+    </div>
   </a>
   <a class="ctl-stat" href="#sec-safety">
     <div class="k">Signal expiry</div>
@@ -87,12 +102,38 @@
 <div class="ctl-grid">
 <section class="card">
   <h2>Global kill switch</h2>
-  {% if ks.get('initialised') is false %}
+  {# A switch that cannot be THROWN is an outage, and it must not share a
+     visual class with a value we merely could not read. `throwable` is the
+     question this card exists to answer; `availability` says why a reading is
+     or is not a reading. The engine publishes both — this page names neither
+     cause of its own. #}
+  {% if ks.get('throwable') is false %}
+    <p class="ks-state ks-on">⛔ INOPERABLE — the kill switch cannot be thrown.</p>
     <p class="muted">
-      Kill switch unavailable — the engine reports it never initialised
-      (no Firestore / GCP creds in this deployment).
+      The process serving this page has no Firestore client and no engine
+      bridge is reachable, so <code>POST /api/kill-switch</code> refuses. B18
+      requires a flip to take effect in under five seconds; right now it cannot
+      be made at all. Halt trading from the VPS directly until this is fixed.
+      {% if ks.get('detail') %}<br>Engine said: <code>{{ ks.detail }}</code>{% endif %}
     </p>
-  {% elif ks.get('engaged') %}
+  {% else %}
+    {% if ks.get('availability') == 'not_configured' %}
+      <p class="ks-state ks-warn">⚠ STATE UNREADABLE — the switch is still throwable.</p>
+      <p class="muted">
+        This process holds no Firestore client, so the value below is not a
+        reading. The flip is routed to the engine container, which does hold
+        one — the buttons work.
+      </p>
+    {% elif ks.get('availability') == 'read_failed' %}
+      <p class="ks-state ks-warn">⚠ STATE UNREADABLE — Firestore refused the read.</p>
+      <p class="muted">
+        Not a safety pause and not "off": we could not ask.
+        {% if ks.get('detail') %}Engine said: <code>{{ ks.detail }}</code>{% endif %}
+        A <code>RESOURCE_EXHAUSTED</code> here is the daily read quota, which
+        resets at midnight Pacific — check the Firestore read census.
+      </p>
+    {% endif %}
+  {% if ks.get('engaged') %}
     <p class="ks-state ks-on">⛔ ENGAGED — all auto-trade is halted.</p>
     {% if ks.get('reason') %}<p class="muted">Reason: {{ ks.reason }}</p>{% endif %}
     <form method="post" action="/control/kill-switch"
@@ -110,13 +151,32 @@
       <button type="submit" class="btn btn-danger">⛔ Engage kill switch — halt all</button>
     </form>
   {% endif %}
+  {% endif %}
+  {% if ks.get('source') == 'engine' %}
+    <p class="muted">Flip routed to the engine container over Redis.</p>
+  {% endif %}
 </section>
 
 <section class="card">
   <h2>Global auto-trade</h2>
-  {% if glob.get('initialised') is false %}
-    <p class="muted">Unavailable — the engine reports the flag never initialised.</p>
-  {% elif glob.get('enabled') %}
+  {% if glob.get('throwable') is false %}
+    <p class="ks-state ks-on">⛔ INOPERABLE — this flag cannot be flipped.</p>
+    <p class="muted">
+      No Firestore client here and no engine bridge reachable.
+      {% if glob.get('detail') %}Engine said: <code>{{ glob.detail }}</code>{% endif %}
+    </p>
+  {% else %}
+    {% if glob.get('availability') == 'not_configured' %}
+      <p class="ks-state ks-warn">⚠ STATE UNREADABLE — the flag is still flippable.</p>
+      <p class="muted">This process cannot read it; the flip goes to the engine.</p>
+    {% elif glob.get('availability') == 'read_failed' %}
+      <p class="ks-state ks-warn">⚠ STATE UNREADABLE — Firestore refused the read.</p>
+      <p class="muted">
+        We could not ask — this is neither enabled nor disabled.
+        {% if glob.get('detail') %}Engine said: <code>{{ glob.detail }}</code>{% endif %}
+      </p>
+    {% endif %}
+  {% if glob.get('enabled') %}
     <p class="ks-state ks-off">✓ ENABLED — new orders allowed engine-wide.</p>
     <form method="post" action="/control/auto-trade-global"
           onsubmit="return confirm('DISABLE global auto-trade? New orders halt engine-wide (open positions are left untouched).');">
@@ -130,6 +190,7 @@
       <input type="hidden" name="enabled" value="true">
       <button type="submit" class="btn btn-go">Enable global auto-trade</button>
     </form>
+  {% endif %}
   {% endif %}
   <p class="muted">Master gate, separate from the kill switch: disabling stops
   new entries without cancelling existing Binance positions.</p>

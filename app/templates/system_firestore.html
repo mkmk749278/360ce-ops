@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+{% block title %}Firestore reads · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Firestore — the read allowance, and what it becomes at 1,000 members</h1>
+
+<div class="card">
+  <h2>Why this page exists</h2>
+  <p class="muted small">
+    On <strong>2026-09-02 at 00:41 UTC</strong> Firestore answered
+    <code>RESOURCE_EXHAUSTED: Quota exceeded.</code> on <strong>53,000 document
+    reads against a 50,000/day allowance — on 25 writes</strong>. Every
+    Firestore-backed path failed together: the keystore (so
+    <code>list_active_uids</code> returned empty and every signal fanned out to
+    <em>zero users</em>), the kill switch (so <code>POST /api/kill-switch</code>
+    503'd — the emergency stop and the thing it stops failing at once), the
+    runtime tunables and the dispatch log.
+  </p>
+  <p class="muted small">
+    <strong>That budget is a hard ceiling, not a bill.</strong> Past it a
+    project whose billing account is not in good standing is <em>refused</em>,
+    so this is a safety surface, not a finance one — which is why it sits beside
+    the container X-rays rather than under diagnostics.
+  </p>
+  <p class="muted small">
+    The auto-trade target is <strong>1,000 members</strong>. Every per-user read
+    is invisible at one user and linear in subscribers, so nothing in the
+    console, the bill or the census says a word about it until the subscribers
+    arrive — <code>worker_manager</code>'s roster scan cost 1,440 reads a day on
+    this account and <strong>1.44 million</strong> at the target. The projection
+    below is the <em>engine's</em>, rendered here rather than recomputed: ops
+    ports the engine's arithmetic and does not invent it, and a second
+    implementation of a cost model drifts silently in the flattering direction.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Projection at {{ "{:,}".format(members) }} members</h2>
+  {% if projection_state == 'unreachable' %}
+    <p class="warn">UNREACHABLE — the engine did not answer. This is a network
+    or container question, not a cost one.</p>
+  {% elif projection_state == 'not_reported' %}
+    <p class="warn">NOT REPORTED — the engine has no
+    <code>read.firestore_projection</code> entry. That is an engine predating
+    this page, so it is a deploy question.</p>
+  {% elif projection_state == 'empty' %}
+    <p class="muted">The census has recorded no reads in this process yet. After
+    a restart that is the correct and uninteresting answer — it is not a fault.</p>
+  {% else %}
+    {% set over = projection.get('projected_over_free_tier') or 0 %}
+    <p>
+      Measured in the <strong>{{ projection.get('process_role') }}</strong>
+      process over {{ projection.get('uptime_sec') }}s:
+      <strong>{{ "{:,}".format(projection.get('measured_per_day') or 0) }}</strong>
+      reads/day at {{ projection.get('measured_members') }} member(s) →
+      <strong class="{{ 'warn' if over else '' }}">{{ "{:,}".format(projection.get('projected_per_day') or 0) }}</strong>
+      reads/day at {{ "{:,}".format(members) }}.
+    </p>
+    {% if projection.get('uptime_is_short') %}
+      <p class="warn small">
+        UPTIME UNDER 15 MINUTES — <code>per_day</code> is extrapolated from a
+        short window and is not yet a rate. Read this after the process has run
+        for a while; a figure from ninety seconds of data is confident and
+        meaningless.
+      </p>
+    {% endif %}
+    {% if over %}
+      <p class="warn">
+        <strong>{{ "{:,}".format(over) }} reads/day over the free allowance.</strong>
+        Charged on the excess only — the first
+        {{ "{:,}".format(projection.get('free_tier_reads_per_day') or 50000) }}
+        are free every day:
+        <strong>${{ projection.get('projected_usd_per_month_regional') }}/mo</strong>
+        (regional) or
+        <strong>${{ projection.get('projected_usd_per_month_multi_region') }}/mo</strong>
+        (multi-region).
+      </p>
+      <p class="muted small">
+        Both tiers are shown because the project's Firestore <em>location</em> is
+        a console fact, not a code fact — quoting one silently would be choosing
+        the half of a number the reader cannot check. And past the allowance the
+        first failure mode is a refusal, not a charge.
+      </p>
+    {% else %}
+      <p class="ok">Inside the free allowance at {{ "{:,}".format(members) }} members.</p>
+    {% endif %}
+
+    <table class="tbl">
+      <thead><tr>
+        <th>Call site</th><th>Docs</th><th>Calls</th><th>Docs/call</th>
+        <th>Reads/day now</th><th>At {{ "{:,}".format(members) }}</th><th>Scales?</th>
+      </tr></thead>
+      <tbody>
+      {% for row in projection.get('sites', []) %}
+        <tr>
+          <td><code>{{ row.site }}</code></td>
+          <td>{{ row.docs }}</td>
+          <td>{{ row.calls }}</td>
+          <td>{{ row.docs_per_call }}</td>
+          <td>{{ "{:,}".format(row.per_day) }}</td>
+          <td class="{{ 'warn' if row.projected_per_day > 50000 else '' }}">
+            {{ "{:,}".format(row.projected_per_day) }}</td>
+          <td>{% if row.scales_with_members %}<span class="badge badge-warn">per-user</span>
+              {% else %}<span class="badge badge-muted">flat</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted small">{{ projection.get('note') }}</p>
+    <p class="muted small">
+      A site ops has never heard of is assumed to <strong>scale</strong>. That is
+      the safe direction: a flat site wrongly scaled overstates a bill somebody
+      then checks, while a per-user site wrongly called flat is invisible until
+      the subscribers arrive — which is the failure this page exists to prevent.
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Invalidation channel</h2>
+  <p class="muted small">
+    The three control documents are no longer re-read on a TTL. A write bumps a
+    Redis generation and every reader drops its cache on the next tick, which is
+    both cheaper and <em>faster</em> than the 5-second TTL it replaced — that TTL
+    equalled <code>MONITOR_POLL_INTERVAL</code> exactly, so the cache could never
+    hit and the kill-switch document alone cost ~34,000 reads a day through two
+    slots.
+  </p>
+  <p class="muted small">
+    A dead channel is invisible in the ordinary case, because the defensive
+    300-second floor still converges — just minutes late. These counters are the
+    only thing that can say a flip is taking the slow path.
+  </p>
+  {% if not generation_ok %}
+    <p class="warn">NOT REPORTED — the engine has no
+    <code>read.control_generation</code> entry, or did not answer.</p>
+  {% else %}
+    {% if not generation.get('redis_configured') %}
+      <p class="warn">REDIS NOT CONFIGURED — every control read is on the
+      300-second defensive floor. A kill-switch flip in the other container can
+      take that long to be seen.</p>
+    {% elif generation.get('polls', 0) == 0 and generation.get('bumps', 0) > 0 %}
+      <p class="warn">BUMPS WITH NO POLLS — writes are announcing themselves and
+      nothing in this process is listening. Flips converge on the floor.</p>
+    {% elif generation.get('poll_failures', 0) > 0 %}
+      <p class="warn">POLL FAILURES: {{ generation.get('poll_failures') }} — Redis
+      is refusing reads, so invalidation is on the floor.</p>
+    {% else %}
+      <p class="ok">Channel healthy.</p>
+    {% endif %}
+    <table class="tbl">
+      <tbody>
+        <tr><th>Bumps</th><td>{{ generation.get('bumps') }}</td>
+            <th>Bump failures</th><td>{{ generation.get('bump_failures') }}</td></tr>
+        <tr><th>Polls</th><td>{{ generation.get('polls') }}</td>
+            <th>Poll failures</th><td>{{ generation.get('poll_failures') }}</td></tr>
+        <tr><th>Invalidations</th><td>{{ generation.get('invalidations') }}</td>
+            <th>Documents</th><td>{{ generation.get('documents')|join(', ') }}</td></tr>
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+{% endblock %}

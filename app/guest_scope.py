@@ -166,6 +166,10 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/system",
         "/system/liveness",
         "/system/redis",
+        # Same reasoning, and it reads the engine's read census through the
+        # diagnostic catalog — which is itself already guest-readable, so this
+        # widens nothing.
+        "/system/firestore",
         # -- diagnostics ----------------------------------------------------
         "/truth",
         "/truth/raw.json",
