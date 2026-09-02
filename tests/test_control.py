@@ -844,3 +844,101 @@ def test_an_old_engine_without_the_new_fields_still_renders(monkeypatch):
     )
     assert "Disengaged — auto-trade allowed" in body
     assert "INOPERABLE" not in body
+
+
+# ---- the verdict must not outlive the reading (2026-09-02, owner screenshot) -
+#
+# The first cut of the availability work guarded the TILE and left the card
+# BODY unconditional, so /control shipped reading:
+#
+#     ⚠ STATE UNREADABLE — Firestore refused the read.
+#     Not a safety pause and not "off": we could not ask.
+#     ✓ Disengaged — auto-trade allowed.          <- in green, one line below
+#
+# The page said we could not ask and then answered anyway, in the flattering
+# direction, on the safety card. "Fixed one writer, not the field" — and the
+# reason no test caught it is that every assertion was about the tile.
+#
+# These assert the CARD BODY, on both cards, in both directions.
+
+
+def test_an_unreadable_kill_switch_prints_no_verdict_at_all(monkeypatch):
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": False, "availability": "read_failed",
+         "throwable": True, "source": "local",
+         "detail": "ResourceExhausted: 429 Quota exceeded."},
+        {"enabled": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+    )
+    assert "STATE UNREADABLE" in body
+    assert "Disengaged — auto-trade allowed" not in body, (
+        "a value we could not read must not be printed as a reading — and "
+        "green is the flattering direction of that error"
+    )
+    assert "ENGAGED — all auto-trade is halted" not in body
+    assert "No state is shown because none was read" in body
+
+
+def test_an_unreadable_kill_switch_still_offers_BOTH_controls(monkeypatch):
+    """We do not know which way it is set, so both actions must be reachable.
+
+    Offering only one would be the verdict smuggled back in as a control: a
+    lone "Engage" button asserts it is currently disengaged.
+    """
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": False, "availability": "read_failed",
+         "throwable": True, "source": "local", "detail": "429"},
+        {"enabled": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+    )
+    assert "Engage kill switch — halt all" in body
+    assert "Disengage — resume trading" in body
+
+
+def test_an_unreadable_auto_trade_flag_does_not_claim_DISABLED(monkeypatch):
+    """"DISABLED — no new orders are placed" is a claim about the engine's
+    behaviour that a failed read in THIS process cannot support. The engine
+    reads the same flag with its own client and may be trading normally."""
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local", "reason": None},
+        {"enabled": False, "initialised": False, "availability": "read_failed",
+         "throwable": True, "source": "local", "detail": "429 Quota exceeded."},
+    )
+    assert "DISABLED — no new orders are placed" not in body
+    assert "ENABLED — new orders allowed" not in body
+    assert "Enable global auto-trade" in body
+    assert "Disable global auto-trade" in body
+
+
+def test_a_readable_switch_still_prints_its_verdict(monkeypatch):
+    """The repair must not have made every card silent."""
+    body = _get_control(
+        monkeypatch,
+        {"engaged": True, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local", "reason": "manual halt"},
+        {"enabled": True, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+    )
+    assert "ENGAGED — all auto-trade is halted" in body
+    assert "manual halt" in body
+    assert "ENABLED — new orders allowed" in body
+    assert "No state is shown because none was read" not in body
+
+
+def test_an_old_engine_without_availability_still_prints_its_verdict(monkeypatch):
+    """`availability` absent is an older engine, not an unreadable state.
+
+    Jinja yields Undefined for the missing key; `.get(..., 'ok')` is what keeps
+    that from silencing every card against an engine that predates the field.
+    """
+    body = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": True, "reason": None},
+        {"enabled": True, "initialised": True},
+    )
+    assert "Disengaged — auto-trade allowed" in body
+    assert "No state is shown because none was read" not in body

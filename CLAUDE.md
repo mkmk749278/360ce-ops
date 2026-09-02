@@ -1281,6 +1281,47 @@ Rules it carries, each one this file's own arriving at a cost surface:
   minutes late. `bumps` climbing with `polls` at zero is the only thing that can
   say a kill-switch flip is on the slow path.
 
+## The verdict must not outlive the reading (2026-09-02, hours after the fix)
+
+`/control` shipped the availability work and the owner's very next screenshot
+read, on one card, in this order:
+
+> ⚠ **STATE UNREADABLE — Firestore refused the read.**
+> Not a safety pause and not "off": we could not ask. Engine said:
+> `ResourceExhausted: 429 Quota exceeded.`
+> ✓ **Disengaged — auto-trade allowed.**
+
+The banner was correct and new. The green line under it was the **exact defect
+the banner was added to remove**, still there, because the guard went on the
+TILE and the card BODY stayed unconditional — `{% if ks.get('engaged') %}`
+running whether or not `engaged` was a reading. *Fixed one writer, not the
+field*, on the safety card, in the flattering direction.
+
+Every test written that day asserted the tile (`badge-ok">Clear` absent) and
+**not one asserted the card body**, so a full green suite sat over a page that
+contradicted itself in adjacent lines.
+
+Three rules:
+
+- **An unreadable state renders NO verdict.** Not a softer verdict, not a
+  greyed one — none. The card says *"No state is shown because none was read"*
+  and stops. A blank with a cause is the honest artefact; this repo has said so
+  about panels seven times and had not applied it to the control itself.
+- **…and it offers BOTH controls.** We do not know which way the switch is set,
+  so a lone "Engage" button asserts it is currently disengaged — **the verdict
+  smuggled back in as a control.** The flip does not depend on the read, so
+  both are reachable.
+- **When you add a state, grep for every place the OLD states render.** The
+  banner and the verdict are two renderers of one fact, in one file, forty
+  lines apart. A new branch above an existing one does not disable it.
+
+Corollary on the auto-trade card, because its wrong caption is worse than the
+kill switch's: *"DISABLED — no new orders are placed"* is a claim about what
+the **engine** is doing, and a failed read in the **api** process cannot
+support it. The engine reads the same flag with its own client and may be
+trading perfectly — which is the `INDEX COLD` shape once more, this time
+telling the owner his book is halted when it is not.
+
 ## Data sources (one-line each)
 
 | Source | Module |
