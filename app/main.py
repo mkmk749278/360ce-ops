@@ -65,6 +65,7 @@ from app.routes import (
     signal_detail,
     signals,
     strategy_lab,
+    firestore_cost,
     system,
     trials,
     truth,
@@ -170,6 +171,7 @@ app.include_router(router_drops.router)
 app.include_router(signal_detail.router)
 app.include_router(pairs.router)
 app.include_router(system.router)
+app.include_router(firestore_cost.router)
 app.include_router(diag.router)
 app.include_router(data_intake.router)
 app.include_router(diag_console.router)

@@ -1172,6 +1172,28 @@ what happens when you change it.
 
 ## A safety switch that cannot be thrown is the one state this page must shout (2026-09-02)
 
+> **Fixed the same day, and the first attempt was the reason it needed fixing
+> twice.** `#198` shipped this section and **nothing else** — 33 lines of
+> CLAUDE.md, zero lines of code — so the owner's next screenshot was identical
+> and he reported it still unresolved. **Writing the defect down is not fixing
+> it, and a doc-only PR about a LIVE fault reads like a fix in the log**: the
+> next reader finds it already documented and assumes it was handled. A
+> doc-only PR about a live fault names the PR carrying the code, in its own
+> body — and a session that ends with the fault still live says so at the top
+> of `ACTIVE_CONTEXT.md`, in the present tense.
+>
+> What ships now: the engine publishes `availability` (`ok` /
+> `not_configured` / `read_failed`), `detail`, `throwable` and `source`, and
+> `/control` grades the **button** on `throwable` rather than the reading on
+> `initialised`. Those are not the same question — with the api container
+> blind the flip is routed to the engine over Redis, so the switch can be
+> un-readable here and perfectly throwable, which the old boolean rendered as
+> broken. Three states on the tile too: `Clear` in green over a switch that
+> answered 503 was the flattering direction of the error, and the dangerous
+> one.
+
+
+
 `/control` rendered **"Kill switch unavailable — the engine reports it never
 initialised (no Firestore / GCP creds in this deployment)"** and, beside it,
 **"Global auto-trade — Unavailable"**. Both in `.muted` grey, as a note rather
@@ -1195,13 +1217,69 @@ Three rules, each already in this file arriving at the safety section:
   cause: **name what the engine said, not why you think it said it**, and where
   the engine cannot distinguish two causes, ask it to publish which.
 - **Which process holds the state, again.** In isolated mode the kill switch is
-  initialised in the **api** container by `src/api/main.py` under a stricter
-  precondition than the engine's own boot path — both `FIREBASE_PROJECT_ID`
-  and `FIREBASE_SERVICE_ACCOUNT_PATH`, where `bootstrap.py` needs only the
-  project and falls back to ADC. So this page can read "unavailable" over an
-  engine that is trading normally. The `INDEX COLD` and promotion-census `{}`
-  defects were this same shape on diagnostic pages; here it is on the switch.
+  initialised in the **api** container by `src/api/main.py`, which used a
+  stricter precondition than the engine's own boot path — both
+  `FIREBASE_PROJECT_ID` and `FIREBASE_SERVICE_ACCOUNT_PATH`, where
+  `bootstrap.py` needs only the project and falls back to ADC. So this page
+  read "unavailable" over an engine that was trading normally. The `INDEX COLD`
+  and promotion-census `{}` defects were this same shape on diagnostic pages;
+  here it was on the switch. The precondition is now identical in both places,
+  pinned engine-side by a test comparing the two guard sets on the **AST** —
+  and the flip falls back to the engine over Redis regardless, because a
+  precondition that has diverged once can diverge again.
 
+
+## `/system/firestore` — the read allowance, and the bill at 1,000 members (2026-09-02)
+
+Firestore refused the project at 00:41 UTC on 53,000 document reads against a
+50,000/day allowance, and **every Firestore-backed path failed together**: the
+keystore (so every signal fanned out to zero users), the kill switch (so the
+emergency stop 503'd — the stop and the thing it stops failing at once), the
+tunables and the dispatch log.
+
+**That budget is a hard ceiling, not a bill**, which is why this page sits in
+System beside the container X-rays rather than under Diagnostics: past the
+allowance a project whose billing account is not in good standing is *refused*.
+Guest-readable for the same reason the rest of System is — it reads the engine's
+census through the diagnostic catalog, which a guest can already reach, so it
+widens nothing.
+
+The owner's auto-trade target is **1,000 members**, and that number is the whole
+point of the page. Every per-user read is invisible at one user and linear in
+subscribers: `worker_manager`'s roster scan cost 1,440 reads a day on this
+account and **1.44 million** at the target, and nothing in the GCP console, the
+bill, or the engine's own census would have said so until the subscribers
+arrived.
+
+Rules it carries, each one this file's own arriving at a cost surface:
+
+- **The projection is the ENGINE's, rendered here.** Ops ports the engine's
+  arithmetic and does not invent it — a second implementation of a cost model is
+  a mirror that drifts silently, and it drifts in the flattering direction.
+- **Which sites scale is declared by the engine from what the CODE does**, not
+  inferred from the numbers, and an unrecognised site is assumed to **scale**. A
+  flat site wrongly scaled overstates a bill somebody then checks; a per-user
+  site wrongly called flat is invisible until it is too late.
+- **Both Firestore location tiers are published and neither is called "the"
+  price.** The project's region is a console fact, not a code fact, and quoting
+  one silently is choosing the half of a number the reader cannot check. Cost is
+  charged on the **excess** only — the first 50,000 are free every day, and
+  charging the whole figure overstates a small overage by the entire allowance.
+- **A short uptime is badged, not quoted.** `per_day` extrapolates from the
+  process's own uptime; ninety seconds of data produces a confident daily figure
+  that means nothing.
+- **Three states for the census, never pooled**: `unreachable` (a network
+  question) · `not_reported` (an engine predating the entry — a deploy question)
+  · `empty` (running, nothing recorded, which after a restart is correct and
+  uninteresting). `ok: false` is checked **before** the generic error key,
+  because an engine that answered and refused is not an unreachable one, and
+  reading it as unreachable sends the operator to check a network that is fine.
+- **The invalidation channel is graded on its own counters.** The three control
+  documents are no longer re-read on a TTL — a write bumps a Redis generation and
+  readers drop their caches on the next tick — so a *dead* channel is invisible
+  in the ordinary case, because the 300-second defensive floor still converges,
+  minutes late. `bumps` climbing with `polls` at zero is the only thing that can
+  say a kill-switch flip is on the slow path.
 
 ## Data sources (one-line each)
 
@@ -1224,6 +1302,7 @@ Three rules, each already in this file arriving at the safety section:
 | Structural SL/TP1 snap stamps — `structural_snap_v1.json` (`/signals/structural-snap`) | `app/data_sources/structural_snap.py` |
 | Engine diagnostic catalog — `GET /internal/diag/catalog`, `POST /internal/diag/catalog/run` (`/diagnostics/console`) | `app/data_sources/engine_api.py` (`diag_catalog` / `diag_run`) |
 | Engine CPU-against-quota + running config — `/internal/diag/host-resources` (`/system`) | `app/data_sources/engine_api.py` (`host_resources`) |
+| Firestore read census + cost-at-N-members projection + invalidation-channel counters — via the diag catalog (`/system/firestore`) | `app/routes/firestore_cost.py` |
 
 ## Conventions
 
