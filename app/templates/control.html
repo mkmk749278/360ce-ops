@@ -133,7 +133,34 @@
         resets at midnight Pacific — check the Firestore read census.
       </p>
     {% endif %}
-  {% if ks.get('engaged') %}
+  {# THE VERDICT RENDERS ONLY WHEN IT IS A READING.
+     Shipped 2026-09-02 with this block unconditional, and the owner's very
+     next screenshot showed the fault this whole change exists to remove:
+     "STATE UNREADABLE — Firestore refused the read" and, one line below it in
+     green, "Disengaged — auto-trade allowed". The page said we could not ask
+     and then answered anyway, in the flattering direction, on the safety card.
+     The tile above was guarded and this was not — fixed one writer, not the
+     field. #}
+  {% if ks.get('availability', 'ok') != 'ok' %}
+    <p class="muted">
+      <strong>No state is shown because none was read.</strong> The switch may
+      be engaged or disengaged right now; this page does not know, and a guess
+      here is the thing it is built not to do. Both controls are offered — the
+      flip itself does not depend on the read.
+    </p>
+    <form method="post" action="/control/kill-switch"
+          onsubmit="return confirm('ENGAGE the kill switch? This immediately halts ALL auto-trade engine-wide.');">
+      <input type="hidden" name="engaged" value="true">
+      <input type="text" name="reason" maxlength="280"
+             placeholder="Reason (optional, recorded)">
+      <button type="submit" class="btn btn-danger">⛔ Engage kill switch — halt all</button>
+    </form>
+    <form method="post" action="/control/kill-switch"
+          onsubmit="return confirm('DISENGAGE the kill switch and RESUME auto-trade?');">
+      <input type="hidden" name="engaged" value="false">
+      <button type="submit" class="btn btn-go">Disengage — resume trading</button>
+    </form>
+  {% elif ks.get('engaged') %}
     <p class="ks-state ks-on">⛔ ENGAGED — all auto-trade is halted.</p>
     {% if ks.get('reason') %}<p class="muted">Reason: {{ ks.reason }}</p>{% endif %}
     <form method="post" action="/control/kill-switch"
@@ -176,7 +203,24 @@
         {% if glob.get('detail') %}Engine said: <code>{{ glob.detail }}</code>{% endif %}
       </p>
     {% endif %}
-  {% if glob.get('enabled') %}
+  {% if glob.get('availability', 'ok') != 'ok' %}
+    <p class="muted">
+      <strong>No state is shown because none was read.</strong> Rendering
+      "DISABLED" here would tell you no new orders are being placed, which we
+      have not established — the engine reads this flag with its own client and
+      may well be trading. Both controls are offered.
+    </p>
+    <form method="post" action="/control/auto-trade-global"
+          onsubmit="return confirm('ENABLE global auto-trade engine-wide?');">
+      <input type="hidden" name="enabled" value="true">
+      <button type="submit" class="btn btn-go">Enable global auto-trade</button>
+    </form>
+    <form method="post" action="/control/auto-trade-global"
+          onsubmit="return confirm('DISABLE global auto-trade? New orders halt engine-wide (open positions are left untouched).');">
+      <input type="hidden" name="enabled" value="false">
+      <button type="submit" class="btn btn-danger">Disable global auto-trade</button>
+    </form>
+  {% elif glob.get('enabled') %}
     <p class="ks-state ks-off">✓ ENABLED — new orders allowed engine-wide.</p>
     <form method="post" action="/control/auto-trade-global"
           onsubmit="return confirm('DISABLE global auto-trade? New orders halt engine-wide (open positions are left untouched).');">
