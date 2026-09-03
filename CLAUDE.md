@@ -1389,6 +1389,72 @@ support it. The engine reads the same flag with its own client and may be
 trading perfectly — which is the `INDEX COLD` shape once more, this time
 telling the owner his book is halted when it is not.
 
+## A blank error is still an error (2026-09-03)
+
+`/signals/ai-governor` rendered, on its first real load:
+
+> **NOT REPORTED** — the engine has no `read.ai_governor` catalog entry. That
+> is an engine predating this page, so it is a deploy question.
+
+The engine had the entry, was answering it, and **listed it in the diagnostic
+console one tab away**. A reload showed the full panel. The page had sent its
+reader to check a deploy that was fine, and then told him nothing was wrong.
+
+**The mechanism is one falsy string, and it is not where anyone would look.**
+Two producers put a payload in front of `classify`, and they share a key:
+
+* the ENGINE's catalog envelope (`360-v2/src/diag_catalog.run`) always carries
+  `ok`, and always carries `error` — **empty on success**;
+* ops' own transport wrapper (`engine_api._get` / `_post`) carries `error` and
+  `endpoint`, and no `ok` at all.
+
+`str(httpx.ReadTimeout())` is `""`. So a timed-out call produced
+`{"endpoint": …, "error": ""}`, which fails `if payload.get("error")` exactly as
+a healthy call does — and the payload was then graded on its **shape**, where a
+missing `measure_enabled` means "an engine that has never heard of this entry".
+Read live through the console, that is verbatim what the run returned.
+
+Three rules:
+
+- **Tell producers apart by a key only one of them has, never by whether a
+  shared key is truthy.** `ok` is the discriminator; `error` cannot be, because
+  the engine sets it on success.
+- **Fix the writer as well as every reader.** `_named_failure` makes an
+  unmessaged exception name itself, so no page can inherit a blank cause again
+  — "blank needs a cause before it gets a caption", one layer below the pages
+  that render one. `/system/firestore` had the identical check and graded the
+  same timeout as `empty`: *"running, nothing recorded"*, the benign caption for
+  an outage, on the page read during a quota incident.
+- **An intermittent wrong caption is worse than a permanent one.** A reload
+  showing data teaches the reader that the first screen was noise.
+
+**And the counts on that page needed the vendor's own words.** `bad_json` 9 ·
+`timeout` 5 · `empty` 3 · `http_error` 3 — 20 calls, 20 failures, 0 verdicts —
+and `bad_json` alone covers a truncation, a wrong-typed answer and an error
+envelope. The engine now publishes a bounded ring of what the provider actually
+said plus `finish_reason` and a thinking-token column; this page renders it
+beside the unbounded counts. `place_failed` on `/signals/trail-governor`, one
+lane over.
+
+**A payload key must not collide with a dict method — for the second time.**
+The throttle table's "What it means" column rendered
+`<built-in method copy of dict object at 0x7…>` at the reader, because Jinja
+resolves `row.copy` to `dict.copy` before the item named `copy`; the refusal
+table was one refusal away from the same. `/system/redis` paid for this on
+`keys` and the fix there was a rename, so the lesson existed and did not
+generalise. The guard is now derived —
+`set(row) & set(dir({}))` must be empty for every annotated row — rather than a
+list of forbidden names.
+
+**One retraction, recorded because the method matters more than the finding.**
+This session first reported that the diag console renders Run buttons to a
+read-only guest and 403s every POST. It does not. `curl -L` re-issued the POST
+against the redirect target (`/diagnostics/console`), which is correctly
+refused, and the refusal page names *that* path — which was on screen and went
+unread. The console works for a guest exactly as `GUEST_ACTION_ROUTES`
+documents. **Check the tool before blaming the system, and read the whole
+refusal.**
+
 ## Data sources (one-line each)
 
 | Source | Module |

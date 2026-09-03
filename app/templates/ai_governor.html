@@ -25,12 +25,39 @@
 </div>
 
 {% if state == 'unreachable' %}
-  <div class="card"><p class="warn">UNREACHABLE — the engine did not answer.
-  A network or container question, not a governor one.</p></div>
+  <div class="card">
+    <p class="warn">UNREACHABLE — the call to the engine failed.
+    A network or container question, not a governor one.</p>
+    {% if engine_error %}
+      <p class="muted small">Client said: <code>{{ engine_error }}</code></p>
+    {% else %}
+      <p class="muted small">No cause was reported, which is itself a finding.</p>
+    {% endif %}
+  </div>
 {% elif state == 'not_reported' %}
-  <div class="card"><p class="warn">NOT REPORTED — the engine has no
-  <code>read.ai_governor</code> catalog entry. That is an engine predating this
-  page, so it is a deploy question.</p></div>
+  <div class="card"><p class="warn">NOT REPORTED — the engine answered and does
+  not know <code>read.ai_governor</code>. That is an engine predating this
+  page, so it is a deploy question.</p>
+  {% if engine_error %}<p class="muted small">Engine said:
+  <code>{{ engine_error }}</code></p>{% endif %}</div>
+{% elif state == 'engine_error' %}
+  <div class="card">
+    <p class="warn">READ FAILED — the engine has the entry and could not answer
+    it just now.</p>
+    {% if engine_error %}
+      <p class="muted small">Engine said: <code>{{ engine_error }}</code></p>
+    {% else %}
+      <p class="muted small">The engine gave no reason, which is itself the
+      finding — a failure with no cause is not a diagnosis.</p>
+    {% endif %}
+    <p class="muted small">Neither a deploy question nor a network one: the
+    engine has the entry and this particular read did not come back. A
+    mid-cycle bridge timeout is the common case, and it is
+    <strong>intermittent</strong> — so a reload showing data does not mean
+    nothing was wrong, and a lane that reads this often has a stalled loop
+    behind it worth checking on <a href="/system/liveness">System →
+    Liveness</a>.</p>
+  </div>
 {% else %}
 
 <div class="card">
@@ -161,7 +188,7 @@
       <tr><th>Name</th><th>n</th><th>What it means</th></tr>
       {% for row in throttles %}
       <tr><td><code>{{ row.name }}</code>{% if row.unclassified %} <span class="warn">unclassified</span>{% endif %}</td>
-          <td>{{ row.count }}</td><td class="muted small">{{ row.copy }}</td></tr>
+          <td>{{ row.count }}</td><td class="muted small">{{ row.meaning }}</td></tr>
       {% endfor %}
     </table>
   {% else %}
@@ -181,7 +208,7 @@
       <tr><th>Reason</th><th>n</th><th>What it means</th></tr>
       {% for row in refusals %}
       <tr><td><code>{{ row.name }}</code>{% if row.unclassified %} <span class="warn">unclassified</span>{% endif %}</td>
-          <td>{{ row.count }}</td><td class="muted small">{{ row.copy }}</td></tr>
+          <td>{{ row.count }}</td><td class="muted small">{{ row.meaning }}</td></tr>
       {% endfor %}
     </table>
   {% else %}
@@ -208,6 +235,40 @@
     Every failure is a named result rather than an exception, so
     "the provider was down" can never be read as "the model said maintain".
   </p>
+
+  {% if provider_failures %}
+    <h3>What the provider actually said <span class="muted small">— newest first</span></h3>
+    <table>
+      <tr><th>Status</th><th>Stopped because</th><th>Out / thinking / max</th>
+          <th>ms</th><th>Detail</th></tr>
+      {% for f in provider_failures %}
+      <tr>
+        <td><code>{{ f.get('status') }}</code></td>
+        <td>{% if f.get('finish_reason') %}<code>{{ f.get('finish_reason') }}</code>
+            {% else %}<span class="muted">— did not say</span>{% endif %}</td>
+        <td>{{ f.get('output_tokens') }} /
+            {% if f.get('thinking_tokens') %}{{ f.get('thinking_tokens') }}{% else %}—{% endif %} /
+            {{ f.get('max_output_tokens') }}</td>
+        <td>{{ f.get('latency_ms') }}</td>
+        <td class="muted small">{{ f.get('detail') }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted small">
+      A bounded ring of the last few, printed <strong>beside</strong> the
+      unbounded counts above so the newest few can never read as the whole
+      population. The token column is the diagnosis for a truncation:
+      <code>MAX_TOKENS</code> with output at the ceiling means the budget
+      starved the answer and the fix is a number; anything else means the model
+      answered badly and the fix is the prompt. Reasoning tokens are drawn from
+      the same ceiling before the first character of JSON is written, which is
+      why they are counted apart rather than folded into the output.
+    </p>
+  {% elif provider_status %}
+    <p class="muted small">No failure detail recorded. On an engine predating
+    the ring that is a deploy question rather than a clean run — the counts
+    above are what says whether anything failed.</p>
+  {% endif %}
 </div>
 {% endif %}
 

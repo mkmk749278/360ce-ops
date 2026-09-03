@@ -42,13 +42,22 @@ def classify(payload: Any) -> str:
     """Grade one diag result without asserting a cause we cannot observe."""
     if not isinstance(payload, dict):
         return STATE_UNREACHABLE
-    if payload.get("ok") is False:
-        # Checked BEFORE the generic error key, because the engine ANSWERED.
-        # An unknown catalog key means an engine predating the entry — a
-        # deploy question — and reading it as "unreachable" sends the operator
-        # to check a network that is fine. Ordering is the whole distinction.
-        return STATE_NOT_REPORTED
-    if payload.get("error"):
+    if "ok" in payload:
+        # The ENGINE's own envelope. It answered, so this is never
+        # "unreachable" — an unknown catalog key means a build predating the
+        # entry, which is a deploy question, and reading it as unreachable
+        # sends the operator to check a network that is fine.
+        if payload.get("ok") is False:
+            return STATE_NOT_REPORTED
+    elif "error" in payload:
+        # Ops' own transport wrapper (`engine_api._get` / `_post`), which
+        # carries no `ok`. KEY PRESENCE, not truthiness: `str(ReadTimeout())`
+        # is the empty string, so the old check read a timed-out call as a
+        # clean one and this page then graded it on shape — landing on EMPTY,
+        # "running, nothing recorded", which is the benign caption for an
+        # outage. Same defect `/signals/ai-governor` shipped, one page over;
+        # the engine envelope carries `error` on success too, which is why
+        # only `ok` can tell the two producers apart.
         return STATE_UNREACHABLE
     out = payload.get("result") if "result" in payload else payload
     if not isinstance(out, dict):

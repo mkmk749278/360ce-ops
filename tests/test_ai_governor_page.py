@@ -189,3 +189,192 @@ def test_a_partial_payload_renders_rather_than_500ing(monkeypatch):
     body = _get(monkeypatch, diag={"measure_enabled": True})
     assert "AI Trade Governor" in body
     assert "NOT CONFIGURED" in body or "MEASUREMENT OFF" in body
+
+
+# ── The verdict must not outlive the reading (2026-09-03) ───────────────────
+#
+# The first load of this page in production rendered *"NOT REPORTED — the
+# engine has no `read.ai_governor` catalog entry. That is an engine predating
+# this page, so it is a deploy question."* over an engine that HAD the entry,
+# was answering it, and listed it in the diag console one tab away. The diag
+# bridge had timed out mid-cycle; the engine's own error string said so, and
+# `classify` threw it away to print a cause this page cannot observe.
+#
+# `/invalidations`' WRITER STALE and `/dark-signals`' hardcoded ban cause, at
+# the newest lane — and intermittent, so a reload shows data and the reader
+# concludes nothing was ever wrong.
+
+_BRIDGE_TIMEOUT = {
+    "ok": False,
+    "key": "read.ai_governor",
+    "error": ("the engine did not answer within 20.0s — it may be mid-cycle "
+              "or the snapshot loop may be stalled"),
+    "request_id": "abc123",
+}
+
+
+def test_an_engine_that_answered_and_FAILED_is_not_called_a_missing_entry():
+    assert page.classify(_BRIDGE_TIMEOUT) == page.STATE_ENGINE_ERROR
+
+
+def test_only_an_unknown_key_reads_as_an_engine_predating_the_page():
+    """The one error text that genuinely means a deploy question. Anything else
+    with `ok: false` is the engine failing to answer a key it has."""
+    assert page.classify({"ok": False, "error": "unknown catalog entry"}) == page.STATE_NOT_REPORTED
+    assert page.classify({"ok": False, "error": "LookupError: unavailable"}) == page.STATE_ENGINE_ERROR
+    assert page.classify({"ok": False, "error": ""}) == page.STATE_ENGINE_ERROR
+
+
+def test_a_read_failure_quotes_the_engine_and_names_no_cause_of_its_own(monkeypatch):
+    async def fake_run(self, key, args=None):
+        return _BRIDGE_TIMEOUT
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/signals/ai-governor").text
+
+    assert "READ FAILED" in html
+    # The engine's own words, verbatim — a paraphrase is where the invented
+    # cause got in.
+    assert "the engine did not answer within 20.0s" in html
+    # And NOT the verdict that sent a reader to check a deploy that was fine.
+    assert "NOT REPORTED" not in html
+
+
+def test_a_failure_with_no_reason_says_so_rather_than_inventing_one(monkeypatch):
+    async def fake_run(self, key, args=None):
+        return {"ok": False, "key": "read.ai_governor", "error": ""}
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/signals/ai-governor").text
+    assert "The engine gave no reason" in html
+
+
+# ── A payload key must not collide with a dict method ───────────────────────
+
+def test_no_annotated_row_uses_a_key_that_shadows_a_dict_method():
+    """Jinja resolves an attribute BEFORE an item, so a row key named `copy`,
+    `keys`, `items` or `get` renders the builtin at the reader.
+
+    This shipped: the throttle table's "What it means" column read
+    `<built-in method copy of dict object at 0x7…>` in production, and the
+    refusal table was one refusal away from doing the same. `/system/redis`
+    paid for the identical collision on `keys`. Derived rather than a list of
+    forbidden names, so the next key added is covered without anybody
+    remembering.
+    """
+    rows = page.annotate({"cooldown": 749}, page.THROTTLE_COPY)
+    assert rows, "annotate produced nothing to check"
+    for row in rows:
+        clash = set(row) & set(dir({}))
+        assert not clash, f"row key(s) {clash} shadow a dict method in Jinja"
+
+
+def test_the_throttle_table_renders_its_sentence_not_a_builtin(monkeypatch):
+    diag = _engine_diag()
+    diag["health"]["throttles"] = {"cooldown": 749}
+    html = _get(monkeypatch, diag=diag)
+    assert "built-in method" not in html
+    assert "An arm was eligible and deliberately not evaluated" in html
+
+
+# ── The provider's own words reach the page ─────────────────────────────────
+
+def test_the_engine_publishes_the_failure_ring_this_page_reads():
+    """A field one repo writes and no repo reads is the defect this lane keeps
+    paying for; this is the same contract from the reading side."""
+    assert "provider_failures" in _engine_diag()["health"]
+
+
+def test_the_failure_ring_renders_the_vendors_words_and_the_token_columns(monkeypatch):
+    diag = _engine_diag()
+    diag["health"]["provider_status"] = {"bad_json": 9}
+    diag["health"]["provider_failures"] = [{
+        "at": 1756800000.0, "status": "bad_json",
+        "detail": "content not JSON: Unterminated string starting at: line 1",
+        "finish_reason": "MAX_TOKENS", "served_model": "gemini-3.7-flash-002",
+        "output_tokens": 1174, "thinking_tokens": 1160,
+        "max_output_tokens": 1174, "latency_ms": 1343,
+    }]
+    html = _get(monkeypatch, diag=diag)
+    assert "MAX_TOKENS" in html
+    assert "Unterminated string" in html
+    # The token columns ARE the diagnosis: output at the ceiling with the
+    # reasoning counted apart is a budget fault, not a prompt fault.
+    assert "1174" in html and "1160" in html
+
+
+def test_a_provider_that_did_not_say_why_renders_as_such_never_as_a_clean_stop(monkeypatch):
+    diag = _engine_diag()
+    diag["health"]["provider_status"] = {"timeout": 5}
+    diag["health"]["provider_failures"] = [{
+        "at": 1756800000.0, "status": "timeout", "detail": "TimeoutError: ",
+        "finish_reason": "", "served_model": "", "output_tokens": 0,
+        "thinking_tokens": 0, "max_output_tokens": 1174, "latency_ms": 20000,
+    }]
+    html = _get(monkeypatch, diag=diag)
+    assert "did not say" in html
+
+
+def test_an_engine_predating_the_ring_says_so_rather_than_reading_clean(monkeypatch):
+    """No detail beside a non-zero failure count is a deploy question, not a
+    healthy run — the two must not render identically."""
+    diag = _engine_diag()
+    diag["health"]["provider_status"] = {"bad_json": 9}
+    diag["health"].pop("provider_failures", None)
+    html = _get(monkeypatch, diag=diag)
+    assert "No failure detail recorded" in html
+
+
+# ── The shape production actually produced (2026-09-03) ─────────────────────
+#
+# Read off the live box through the diagnostic console: the run came back as
+# `{"endpoint": "/internal/diag/catalog/run", "error": ""}` — ops' own
+# transport wrapper, whose `str(httpx.ReadTimeout())` is the empty string. It
+# is falsy, so `if payload.get("error")` treated a timeout as no error at all,
+# and the payload was then graded on its SHAPE and called an engine predating
+# the page. Two producers, one key, and only `ok` tells them apart.
+
+_OPS_TIMEOUT = {"endpoint": "/internal/diag/catalog/run", "error": ""}
+
+
+def test_an_ops_side_timeout_with_no_message_is_unreachable_not_a_missing_entry():
+    assert page.classify(_OPS_TIMEOUT) == page.STATE_UNREACHABLE
+
+
+def test_the_transport_envelope_is_told_from_the_engines_by_the_ok_key():
+    """The engine's envelope carries `error` on SUCCESS too — empty — so
+    truthiness cannot separate them and key presence alone would misread every
+    successful read as a failure."""
+    engine_ok = {"ok": True, "key": "read.ai_governor", "error": "",
+                 "result": _engine_diag()}
+    assert page.classify(engine_ok) == page.STATE_OK
+    assert page.classify({"error": "connect timeout", "endpoint": "/x"}) == page.STATE_UNREACHABLE
+
+
+def test_an_unreachable_page_quotes_the_client_and_names_a_blank_as_a_finding(monkeypatch):
+    async def fake_run(self, key, args=None):
+        return _OPS_TIMEOUT
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/signals/ai-governor").text
+    assert "UNREACHABLE" in html
+    assert "NOT REPORTED" not in html
+    assert "No cause was reported" in html
+
+
+def test_the_client_never_reports_a_failure_with_no_cause():
+    """Fixed at the WRITER as well as at every reader: a timeout that carries
+    no message still names itself, so the next page to read this envelope
+    cannot inherit the same blank."""
+    import httpx
+
+    from app.data_sources.engine_api import _named_failure
+
+    assert _named_failure(httpx.ReadTimeout("")) == "ReadTimeout (the client gave no message)"
+    assert _named_failure(httpx.ReadTimeout("timed out")) == "timed out"

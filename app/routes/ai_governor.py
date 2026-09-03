@@ -40,8 +40,24 @@ router = APIRouter()
 #: differs for each: a network check, a deploy, or a shrug.
 STATE_UNREACHABLE = "unreachable"
 STATE_NOT_REPORTED = "not_reported"
+#: The engine answered and the READ failed — a stalled bridge, a mid-cycle
+#: timeout, an entry that raised. Split out of `not_reported` on 2026-09-03,
+#: when a diag-bridge timeout rendered as *"the engine has no
+#: `read.ai_governor` catalog entry … an engine predating this page, so it is a
+#: deploy question"* over an engine that had the entry, was answering, and
+#: showed it in the console one tab away. The engine's own error string said
+#: exactly what happened and this page threw it away to print a cause it cannot
+#: observe — `/invalidations`' WRITER STALE and `/dark-signals`' hardcoded ban
+#: cause, arriving at the newest lane. It is INTERMITTENT, which is worse: a
+#: reload shows data and the reader concludes nothing was ever wrong.
+STATE_ENGINE_ERROR = "engine_error"
 STATE_EMPTY = "empty"
 STATE_OK = "ok"
+
+#: The one error text that genuinely means "an engine predating this page".
+#: `src/diag_catalog.run` writes it verbatim for a key it does not know; every
+#: other `ok: false` is the engine failing to answer a key it HAS.
+UNKNOWN_ENTRY_MARKER = "unknown catalog entry"
 
 #: Copy for each refusal the engine can emit. Looked up FROM THE ENGINE'S
 #: PAYLOAD rather than iterated — rendering `for reason in REFUSAL_COPY` would
@@ -102,22 +118,57 @@ THROTTLE_COPY: Dict[str, str] = {
 
 
 def classify(payload: Any) -> str:
-    """Grade the diag result without asserting a cause we cannot observe."""
+    """Grade the diag result without asserting a cause we cannot observe.
+
+    There are exactly TWO producers and they are told apart by the `ok` key,
+    never by whether `error` is truthy:
+
+    * the ENGINE's own catalog envelope (`src/diag_catalog.run`) always carries
+      `ok`, and always carries `error` — **empty on success**;
+    * ops' transport wrapper (`engine_api._get` / `_post`) carries `error` and
+      `endpoint` and no `ok` at all.
+
+    Reading `if payload.get("error")` cannot separate them, and on 2026-09-03 it
+    did not: an ops-side read timeout produced `{"error": "", "endpoint": …}`,
+    whose empty message is falsy, so the payload sailed past the unreachable
+    branch and was graded on its SHAPE — which, lacking `measure_enabled`,
+    reads as an engine that has never heard of this entry. The page then told
+    the owner it was a deploy question, beside a console listing the entry.
+    """
     if not isinstance(payload, dict):
         return STATE_UNREACHABLE
-    if payload.get("ok") is False:
-        # Checked BEFORE the generic error key: the engine ANSWERED and refused
-        # the key, which means a build predating the entry. Reading that as
-        # unreachable sends the operator to check a network that is fine.
-        return STATE_NOT_REPORTED
-    if payload.get("error"):
+
+    if "ok" in payload:
+        # The engine answered — so this is never "unreachable". WHICH failure
+        # it is comes from the engine's own words, never from what this page
+        # assumes: only an unknown key means a build predating the entry.
+        if payload.get("ok") is False:
+            if UNKNOWN_ENTRY_MARKER in str(payload.get("error") or ""):
+                return STATE_NOT_REPORTED
+            return STATE_ENGINE_ERROR
+    elif "error" in payload:
+        # Ops' own client failed. Key presence, not truthiness — a timeout
+        # carries no message and an empty cause is still a failure.
         return STATE_UNREACHABLE
+
     out = payload.get("result") if "result" in payload else payload
     if not isinstance(out, dict):
         return STATE_UNREACHABLE
     if "measure_enabled" not in out:
         return STATE_NOT_REPORTED
     return STATE_OK
+
+
+def engine_error(payload: Any) -> str:
+    """What the engine said, for the page to quote rather than paraphrase.
+
+    An empty string is "the engine gave no reason", which the banner names as
+    such — a blank needs a cause before it gets a caption, and inventing one is
+    the defect this function exists to stop.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    return str(payload.get("error") or "")
 
 
 def _unwrap(payload: Any) -> dict:
@@ -141,7 +192,14 @@ def annotate(counts: Any, copy: Dict[str, str]) -> List[Dict[str, Any]]:
         rows.append({
             "name": name,
             "count": int(n or 0),
-            "copy": copy.get(name, ""),
+            # NOT `copy`. Jinja resolves an attribute before an item, so
+            # `row.copy` finds `dict.copy` — the throttle table rendered
+            # `<built-in method copy of dict object at 0x…>` at the reader on
+            # the day this page shipped, and the refusal table was one refusal
+            # away from doing the same. Identical to the `redis.keys` collision
+            # on `/system/redis`. A payload key must not collide with a dict
+            # method, and `tests/test_ai_governor_page.py` now forbids the name.
+            "meaning": copy.get(name, ""),
             "unclassified": name not in copy,
         })
     return rows
@@ -185,6 +243,7 @@ async def ai_governor(request: Request):
             "request": request,
             "active": "ai_governor",
             "state": classify(raw),
+            "engine_error": engine_error(raw),
             "diag": diag,
             "lane": lane_state(diag),
             "health": health,
@@ -194,6 +253,11 @@ async def ai_governor(request: Request):
             "throttles": annotate(health.get("throttles"), THROTTLE_COPY),
             "actions": annotate(health.get("by_action"), {}),
             "provider_status": annotate(health.get("provider_status"), {}),
+            # The counts say how many failed; these say WHAT the provider
+            # objected to. `bad_json` alone covers a truncated answer, a
+            # wrong-typed one and an error envelope — three different fixes,
+            # and the vendor already told us which.
+            "provider_failures": list(reversed(health.get("provider_failures") or [])),
             "served_models": health.get("served_models") or {},
         },
     )
