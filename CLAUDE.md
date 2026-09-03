@@ -106,15 +106,44 @@ sentence that recommends an action, falsify the action, not just the number.
 
 ## Change-management protocol (mirrors 360-v2's)
 
-Every change ships via PR. Fresh topic branch off `main`. Design-summary in the PR body before code review. Never push to `main` directly — auto-deploy on `main` push ships in ~60s and bypasses review.
+Every change ships via PR. Fresh topic branch off `main`. Design-summary in the PR body before code review. Never push to `main` directly — a `main` push auto-deploys (measured 5m30s – 7m58s, see below) and bypasses review.
 
-**Wait ~4 minutes before checking CI here.** That is what this repo's `lint +
-tests` job takes; the engine is ~8 min and `lumin-app` ~16 min. Polling a check
-run that cannot have finished yet burns API calls and turns one wait into six —
-sleep the known duration first, *then* read the conclusion. These are expected
-durations, not deadlines: a job still running at the mark gets another wait. If
-the number drifts materially, update it here rather than re-learning it every
-session.
+**Wait ~10 minutes before checking CI here, and ~8 more for the deploy.**
+
+Measured 2026-09-03, because the numbers that stood here were wrong by enough
+to mislead a session that trusted them:
+
+| | This file used to say | Measured |
+|---|---|---|
+| `lint + tests` | ~4 min | **6m52s – 10m15s** (n=4) |
+| Deploy to the VPS | ~60s | **5m30s – 7m58s** (n=7) |
+
+Both had drifted far enough to change what a reader does. The CI figure sent me
+to poll a job less than half way through; the deploy figure had me reading a
+page for a change that was still building, concluding the panels had not
+shipped. Cross-repo, also measured the same day: the engine's `test` job runs
+**4m54s – 7m31s** and its deploy **1m18s – 2m17s**; `lumin-app`'s APK build is
+**7 – 11.5 min**, though its unit-test step fails at ~1m35s when it fails.
+
+Polling a check run that cannot have finished yet burns API calls and turns one
+wait into six — sleep the known duration first, *then* read the conclusion.
+These are expected durations, not deadlines: a job still running at the mark
+gets another wait.
+
+**Re-derive rather than trust this table.** It is a constant asserting a
+property of a moving system, which is the defect this repo has recorded under
+several names, and it will go stale again:
+
+```bash
+gh run list --workflow=ci.yml     --json startedAt,updatedAt,conclusion --limit 10
+gh run list --workflow=deploy.yml --json startedAt,updatedAt,conclusion --limit 10
+```
+
+The suite is ~1,890 tests and most of its cost is page rendering — measured at
+**3.8s/test** across the render-heavy files against a **0.59s/test** average —
+so it grows with the surface rather than with the number of tests. Expect this
+to drift upward, and raise `timeout-minutes` in `ci.yml` before it starts
+cancelling runs rather than after.
 
 ## What the Strategy Lab is (and what it must not do)
 

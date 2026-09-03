@@ -24,7 +24,16 @@ jobs:
   test:
     name: lint + tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Measured 2026-09-03, four runs: 6m52s, 8m40s, 9m28s, and one CANCELLED at
+    # 10m15s — the cap itself, not a hanging job. The suite is ~1,890 tests and
+    # most of the cost is page renders (test_guest_access drives every control
+    # on every guest-readable page), so it grows with the surface. A budget the
+    # suite can reach on a slow runner turns a green change red at random, and
+    # a red that means nothing is worse than no signal at all.
+    #
+    # 20 is ~2x the measured worst. Re-derive rather than trust this comment:
+    #   gh run list --workflow=ci.yml --json startedAt,updatedAt,conclusion
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
