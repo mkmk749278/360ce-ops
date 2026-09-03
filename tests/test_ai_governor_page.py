@@ -30,7 +30,7 @@ def _login(client: TestClient) -> None:
     client.post("/login", data={"password": "test-token"})
 
 
-def _get(monkeypatch, path="/signals/ai-governor", diag=None) -> str:
+def _get(monkeypatch, path="/signals/ai-governor", diag=None, score=None) -> str:
     """Render the page against the ENGINE'S OWN payload by default.
 
     Not a hand-written dict: `build_diag` is imported from the engine and
@@ -38,8 +38,14 @@ def _get(monkeypatch, path="/signals/ai-governor", diag=None) -> str:
     here rather than rendering a blank card in production.
     """
     payload = _engine_diag() if diag is None else diag
+    score_payload = _engine_scorecard() if score is None else score
 
     async def fake_run(self, key, args=None):
+        # Routed BY KEY: the page now makes two calls, and a fake that returns
+        # one payload for both would hand the lane diag to the scorecard
+        # classifier and grade a healthy page NOT REPORTED.
+        if key == "read.ai_governor_scorecard":
+            return {"ok": True, "key": key, "result": score_payload}
         return {"ok": True, "key": key, "result": payload}
 
     monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
@@ -93,6 +99,21 @@ def _engine_diag() -> dict:
     try:
         from src.execution import ai_governor as gov  # type: ignore
         return gov.build_diag()
+    finally:
+        sys.path.remove(str(engine))
+
+
+def _engine_scorecard():
+    """The engine's REAL scorecard assembler, for the same reason as above."""
+    import sys
+    from pathlib import Path
+
+    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    sys.path.insert(0, str(engine))
+    try:
+        from src.execution import ai_governor as gov
+
+        return gov.build_scorecard()
     finally:
         sys.path.remove(str(engine))
 
@@ -394,13 +415,18 @@ def test_the_engine_publishes_the_blindness_and_scorecard_blocks_this_page_reads
     """
     diag = _engine_diag()
     assert "blindness" in diag, "engine no longer publishes the blindness block"
-    assert "scorecard" in diag, "engine no longer publishes the scorecard block"
     for key in ("rows", "measured"):
         assert key in diag["blindness"], f"blindness.{key!r} is gone"
+
+    # The scorecard is its OWN entry. It parses the closed-signal record off
+    # disk, and folded into the light entry it made `read.ai_governor` blow its
+    # 25s budget in production while every other entry answered in 0.0s.
+    assert "scorecard" not in diag, "the record parse must not ride the light entry"
+    score = _engine_scorecard()
     for key in ("coverage", "mix", "selection", "arms", "shadow_note"):
-        assert key in diag["scorecard"], f"scorecard.{key!r} is gone"
+        assert key in score, f"scorecard.{key!r} is gone"
     for arm in ("ADJUST_TP", "ADJUST_SL", "PANIC_CLOSE"):
-        assert arm in diag["scorecard"]["arms"], f"arm {arm} must render even at n=0"
+        assert arm in score["arms"], f"arm {arm} must render even at n=0"
 
 
 def test_an_empty_lane_renders_not_measured_rather_than_zero_percent_blind():
@@ -471,25 +497,23 @@ def test_selection_is_never_labelled_as_an_effect(monkeypatch):
 def test_the_page_publishes_no_blended_scorecard_figure(monkeypatch):
     """One number over four arms moves with the undecidable fraction rather
     than with the mechanism. It must not appear, at any level."""
-    diag = _engine_diag()
-    assert "governor_edge" not in diag["scorecard"]
-    assert "combined" not in diag["scorecard"]
-    assert "avg_delta_pct" not in diag["scorecard"], "no cross-arm delta"
-    html = _get(monkeypatch, diag=diag)
+    score = _engine_scorecard()
+    assert "governor_edge" not in score
+    assert "combined" not in score
+    assert "avg_delta_pct" not in score, "no cross-arm delta"
+    html = _get(monkeypatch)
     assert "no blended across-arm number" in html
 
 
 def test_an_undecidable_reason_the_page_has_never_heard_of_is_badged_not_dropped(monkeypatch):
     """The table iterates the ENGINE'S payload and looks the sentence up.
     Iterating this page's own keys would be silent on the next reason."""
-    diag = _engine_diag()
-    diag["scorecard"] = {
+    html = _get(monkeypatch, score={
         "coverage": {}, "mix": {}, "selection": {},
         "arms": {"ADJUST_TP": {"n": 1, "decidable": 0,
                                "undecidable": {"a_reason_from_the_future": 1}}},
         "shadow_note": "x",
-    }
-    html = _get(monkeypatch, diag=diag)
+    })
     assert "a_reason_from_the_future" in html
     assert "unclassified" in html
 
@@ -530,3 +554,51 @@ def test_every_undecidable_reason_the_engine_can_emit_has_copy():
         sys.path.remove(str(engine))
     missing = reasons - set(page.UNDECIDABLE_COPY)
     assert not missing, f"no copy for engine reasons: {sorted(missing)}"
+
+
+def test_a_failing_scorecard_does_not_take_the_rest_of_the_page_with_it(monkeypatch):
+    """The whole point of the two-entry split.
+
+    The scorecard parses the closed-signal record off disk; the arms, bounds and
+    refusals do not. Fetched together, a slow or broken record took the lane's
+    own state down with it — which is exactly what happened in production, where
+    `read.ai_governor` blew its 25s budget while every other catalog entry
+    answered in 0.0s.
+    """
+    async def fake_run(self, key, args=None):
+        if key == "read.ai_governor_scorecard":
+            return {"ok": False, "key": key, "error": "engine bridge timed out"}
+        return {"ok": True, "key": key, "result": _engine_diag()}
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/signals/ai-governor").text
+
+    # The scorecard says what went wrong, in the engine's own words.
+    assert "could not compute the scorecard" in html
+    assert "engine bridge timed out" in html
+    # ...and everything that did not depend on it still rendered.
+    assert "Blindness" in html
+    assert "Open arms" in html
+    assert "Bounds" in html
+
+
+def test_the_scorecard_is_graded_on_its_own_shape_not_the_lanes(monkeypatch):
+    """`classify` keys on `measure_enabled`, which only the lane entry carries.
+
+    Running a scorecard payload through it would grade every healthy scorecard
+    as an engine predating the page — the shape-vs-path defect this file already
+    records twice, one line away from shipping again.
+    """
+    healthy = {"ok": True, "result": {"coverage": {}, "arms": {}}}
+    assert page.classify_scorecard(healthy) == page.STATE_OK
+    assert page.classify(healthy) == page.STATE_NOT_REPORTED, (
+        "the lane classifier must NOT be what grades a scorecard"
+    )
+    assert page.classify_scorecard({"ok": False, "error": "unknown catalog entry: x"}) \
+        == page.STATE_NOT_REPORTED
+    assert page.classify_scorecard({"ok": False, "error": "boom"}) == page.STATE_ENGINE_ERROR
+    assert page.classify_scorecard({"error": "", "endpoint": "/x"}) == page.STATE_UNREACHABLE
+    assert page.classify_scorecard({"ok": True, "result": {"error": "no record"}}) \
+        == page.STATE_ENGINE_ERROR

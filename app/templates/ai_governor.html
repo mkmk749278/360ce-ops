@@ -318,8 +318,18 @@
 
 <div class="card">
   <h2>Scorecard <span class="muted small">— every thesis against what the signal did</span></h2>
-  {% if not scorecard %}
-    <p class="muted">Not reported. The engine predates this block.</p>
+  {% if score_state == 'not_reported' %}
+    <p class="muted">Not reported. The engine has no
+    <code>read.ai_governor_scorecard</code> entry — a deploy question, not a
+    quiet lane.</p>
+  {% elif score_state == 'unreachable' %}
+    <p class="muted">Could not reach the engine for this block. The panels above
+    came from a separate call and stand on their own.</p>
+  {% elif score_state == 'engine_error' or scorecard.get('error') %}
+    <p class="muted">The engine could not compute the scorecard. It said:
+    <code>{{ scorecard.get('error') or 'no reason given' }}</code>.
+    Fetched separately from the panels above, so this failure does not take them
+    with it.</p>
   {% else %}
     {% set cov = scorecard.get('coverage') or {} %}
     <p class="muted"><strong>Read coverage first.</strong> A scorecard over the

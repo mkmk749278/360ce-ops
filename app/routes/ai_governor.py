@@ -196,6 +196,39 @@ def classify(payload: Any) -> str:
     return STATE_OK
 
 
+def classify_scorecard(payload: Any) -> str:
+    """Grade the scorecard read on ITS OWN shape, not the lane's.
+
+    `classify` keys on `measure_enabled`, which only the lane entry carries — so
+    running a scorecard payload through it would grade every healthy scorecard
+    as an engine predating the page. That is the shape-vs-path defect this file
+    already records twice, and it was one line away from shipping again.
+
+    The transport and envelope rules are identical, so they are reused rather
+    than re-implemented; only the shape key differs.
+    """
+    if not isinstance(payload, dict):
+        return STATE_UNREACHABLE
+    if "ok" in payload:
+        if payload.get("ok") is False:
+            if UNKNOWN_ENTRY_MARKER in str(payload.get("error") or ""):
+                return STATE_NOT_REPORTED
+            return STATE_ENGINE_ERROR
+    elif "error" in payload:
+        return STATE_UNREACHABLE
+
+    out = payload.get("result") if "result" in payload else payload
+    if not isinstance(out, dict):
+        return STATE_UNREACHABLE
+    # The engine's own "I could not compute this" — a rendered state, not a
+    # transport failure, and named apart because the next move differs.
+    if "error" in out:
+        return STATE_ENGINE_ERROR
+    if "coverage" not in out:
+        return STATE_NOT_REPORTED
+    return STATE_OK
+
+
 def engine_error(payload: Any) -> str:
     """What the engine said, for the page to quote rather than paraphrase.
 
@@ -269,12 +302,27 @@ async def ai_governor(request: Request):
     except Exception as exc:  # pragma: no cover - defensive
         raw = {"error": f"{type(exc).__name__}: {exc}"}
 
+    # A SECOND call, on purpose. The scorecard parses the closed-signal record
+    # off disk; folded into the entry above it made `read.ai_governor` blow its
+    # 25s budget in production while every other catalog entry answered in
+    # 0.0s. Two costs, two entries — and fetched separately here so a slow or
+    # absent scorecard cannot take the arms, bounds and refusals down with it.
+    # This page renders whatever half it got.
+    try:
+        raw_score = await api.diag_run("read.ai_governor_scorecard", {})
+    except Exception as exc:  # pragma: no cover - defensive
+        raw_score = {"error": f"{type(exc).__name__}: {exc}"}
+
     diag = _unwrap(raw)
     health = diag.get("health") if isinstance(diag.get("health"), dict) else {}
     bounds = diag.get("bounds") if isinstance(diag.get("bounds"), dict) else {}
 
     blindness = diag.get("blindness") if isinstance(diag.get("blindness"), dict) else {}
-    scorecard = diag.get("scorecard") if isinstance(diag.get("scorecard"), dict) else {}
+    scorecard = _unwrap(raw_score)
+    # `scorecard.error` is the ENGINE saying it could not compute; a transport
+    # failure is ops' own. Both render, and they are named apart because one is
+    # a deploy or a data question and the other is a network one.
+    score_state = classify_scorecard(raw_score)
 
     # Each arm's refusals annotated the same way the lane's own are: iterate the
     # ENGINE's counts and look the sentence up. An arm with no rows still
@@ -324,6 +372,7 @@ async def ai_governor(request: Request):
             # coverage line before any delta: a scorecard over the rows that
             # happened to close is not a scorecard over the book.
             "scorecard": scorecard,
+            "score_state": score_state,
             "score_arms": score_arms,
             "shadow_note": str(scorecard.get("shadow_note") or ""),
         },
