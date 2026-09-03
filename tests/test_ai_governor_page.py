@@ -38,7 +38,7 @@ def _get(monkeypatch, path="/signals/ai-governor", diag=None, score=None) -> str
     here rather than rendering a blank card in production.
     """
     payload = _engine_diag() if diag is None else diag
-    score_payload = _engine_scorecard() if score is None else score
+    score_payload = STUB_SCORECARD if score is None else score
 
     async def fake_run(self, key, args=None):
         # Routed BY KEY: the page now makes two calls, and a fake that returns
@@ -87,6 +87,41 @@ def test_a_literal_route_is_registered_before_the_catch_all():
 
 # ── The cross-repo contract, driven against the REAL engine ─────────────────
 
+#: A scorecard shaped like the engine's, for tests about RENDERING rather than
+#: about the contract. CI checks out this repo alone, so calling the real
+#: assembler here would skip every render test — including ones that predate
+#: this lane, which is how a stub requirement silently deletes coverage.
+#:
+#: It is kept honest by `test_the_stub_scorecard_matches_the_engines_shape`,
+#: which drives the real assembler when the engine IS beside us and asserts the
+#: keys agree. A fixture that nothing checks is one that agrees with whatever
+#: you assumed — the defect this file already records twice.
+STUB_SCORECARD: dict = {
+    "coverage": {
+        "theses": 0, "records": 0, "joined": 0,
+        "still_open_or_undelivered": 0, "records_without_thesis": 0,
+        "verdict_rows": 0, "record_error": None,
+    },
+    "mix": {},
+    "blindness": {"theses_with_stamp": 0, "avg_unknown_frac": None, "fully_blind": 0},
+    "selection": {
+        "fee_pct": 0.07,
+        "intervened": {"n": 0, "n_pnl": 0, "no_pnl": 0, "wins": 0, "losses": 0,
+                       "avg_pnl_pct": None, "net_avg_pnl_pct": None},
+        "maintain_only": {"n": 0, "n_pnl": 0, "no_pnl": 0, "wins": 0, "losses": 0,
+                          "avg_pnl_pct": None, "net_avg_pnl_pct": None},
+        "flip_flopped": 0,
+    },
+    "arms": {
+        "ADJUST_TP": {"n": 0, "decidable": 0, "undecidable": {}, "reached": 0,
+                      "unreached": 0, "avg_delta_pct": None},
+        "ADJUST_SL": {"n": 0, "decidable": 0, "undecidable": {}, "why": "dark"},
+        "PANIC_CLOSE": {"n": 0, "decidable": 0, "undecidable": {}, "why": "dark"},
+    },
+    "shadow_note": "Apply is OFF, so every recorded outcome is the MAINTAIN counterfactual.",
+}
+
+
 def _engine_diag() -> dict:
     """Call the engine's own `build_diag`, not a shape this repo invented."""
     import sys
@@ -109,6 +144,8 @@ def _engine_scorecard():
     from pathlib import Path
 
     engine = Path(__file__).resolve().parents[2] / "360-v2"
+    if not engine.exists():
+        pytest.skip("engine repo not checked out beside ops")
     sys.path.insert(0, str(engine))
     try:
         from src.execution import ai_governor as gov
@@ -567,10 +604,22 @@ def test_a_failing_scorecard_does_not_take_the_rest_of_the_page_with_it(monkeypa
     split was later measured to be engine warm-up, not the parse. The property
     below is still worth holding — the story first attached to it was not.
     """
+    # The lane payload is built OUTSIDE the request. Calling a helper that can
+    # `pytest.skip` from inside an ASGI handler raises into the test client's
+    # portal ("This portal is not running") — a failure that reads like a
+    # transport bug and is really a fixture in the wrong place.
+    lane = {"measure_enabled": True, "apply_enabled": False, "armed_arms": ["tp"],
+            "provider": "google", "provider_configured": True,
+            "bounds": {"calls_per_signal": 8, "calls_per_hour": 30,
+                       "usd_per_day": 0.0, "panic_max_positions": 0,
+                       "panic_armed": False},
+            "health": {"refusals": {}, "throttles": {}, "by_action": {}},
+            "arms": [], "blindness": {"rows": 0, "measured": False}}
+
     async def fake_run(self, key, args=None):
         if key == "read.ai_governor_scorecard":
             return {"ok": False, "key": key, "error": "engine bridge timed out"}
-        return {"ok": True, "key": key, "result": _engine_diag()}
+        return {"ok": True, "key": key, "result": lane}
 
     monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
     with TestClient(app) as client:
@@ -604,3 +653,21 @@ def test_the_scorecard_is_graded_on_its_own_shape_not_the_lanes(monkeypatch):
     assert page.classify_scorecard({"error": "", "endpoint": "/x"}) == page.STATE_UNREACHABLE
     assert page.classify_scorecard({"ok": True, "result": {"error": "no record"}}) \
         == page.STATE_ENGINE_ERROR
+
+
+def test_the_stub_scorecard_matches_the_engines_shape():
+    """Keeps `STUB_SCORECARD` honest.
+
+    CI checks out this repo alone, so render tests run against a stub. A stub
+    nothing checks is one that agrees with whatever you assumed — which is the
+    `zone_distance_atr` failure and the price-action lane card, both of which
+    went green over a shape no producer had ever emitted. When the engine IS
+    beside us, this drives the real assembler and asserts the top-level keys
+    and the arm names agree.
+    """
+    real = _engine_scorecard()  # skips when the engine is not checked out
+    assert set(STUB_SCORECARD) == set(real), (
+        "STUB_SCORECARD has drifted from the engine's scorecard shape"
+    )
+    assert set(STUB_SCORECARD["arms"]) == set(real["arms"])
+    assert set(STUB_SCORECARD["coverage"]) >= set(real["coverage"]) - {"record_error"}
