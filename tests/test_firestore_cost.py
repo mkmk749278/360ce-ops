@@ -160,3 +160,21 @@ def test_the_page_requires_auth():
     with TestClient(app) as client:
         r = client.get("/system/firestore", follow_redirects=False)
         assert r.status_code == 302
+
+
+def test_an_ops_side_timeout_is_unreachable_not_an_empty_census():
+    """`str(httpx.ReadTimeout())` is the empty string, so ops' transport
+    envelope is `{"error": "", "endpoint": …}` — falsy, and the old truthiness
+    check let it through to be graded on SHAPE. Here that lands on EMPTY,
+    *"running, nothing recorded"*: the benign caption for a call that never
+    came back, on the page the owner reads during a quota outage.
+
+    The two producers are told apart by `ok`, never by `error`, because the
+    engine's own envelope carries `error` on success too — empty.
+    """
+    from app.routes import firestore_cost as page
+
+    assert page.classify({"endpoint": "/internal/diag/catalog/run", "error": ""}) == page.STATE_UNREACHABLE
+    assert page.classify({"error": "connect timeout"}) == page.STATE_UNREACHABLE
+    assert page.classify({"ok": False, "error": "unknown catalog entry"}) == page.STATE_NOT_REPORTED
+    assert page.classify({"ok": True, "error": "", "result": {"sites": [{"n": 1}]}}) == page.STATE_OK

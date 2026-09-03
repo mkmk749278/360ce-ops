@@ -8,6 +8,22 @@ import httpx
 from app.config import Settings
 
 
+def _named_failure(exc: Exception) -> str:
+    """A cause, always — `str(exc)` on a timeout is the empty string.
+
+    `httpx.ReadTimeout()` and several of its siblings carry no message, so the
+    wrapper below returned `{"error": ""}`: a failure envelope that every
+    reader then has to guess about, and one that fails a truthiness check
+    (`if payload.get("error")`) exactly as if nothing had gone wrong. On
+    2026-09-03 that took `/signals/ai-governor` past its unreachable branch and
+    into *"the engine has no `read.ai_governor` catalog entry — an engine
+    predating this page, so it is a deploy question"*, over an engine that had
+    the entry and was answering. **A blank needs a cause before it gets a
+    caption**, one layer below every page that renders one.
+    """
+    return str(exc) or f"{type(exc).__name__} (the client gave no message)"
+
+
 class EngineApiClient:
     """Thin async client. Returns JSON or ``{"error": ...}`` on failure so
     templates can render either shape without crashing on transient outages."""
@@ -44,12 +60,12 @@ class EngineApiClient:
             except Exception:
                 detail = exc.response.text
             return {
-                "error": detail or str(exc),
+                "error": detail or _named_failure(exc),
                 "status_code": exc.response.status_code,
                 "endpoint": path,
             }
         except httpx.HTTPError as exc:
-            return {"error": str(exc), "endpoint": path}
+            return {"error": _named_failure(exc), "endpoint": path}
 
     async def _post(self, path: str, payload: dict[str, Any]) -> Any:
         """POST a JSON body to an engine control endpoint.
@@ -71,12 +87,12 @@ class EngineApiClient:
             except Exception:
                 detail = exc.response.text
             return {
-                "error": detail or str(exc),
+                "error": detail or _named_failure(exc),
                 "status_code": exc.response.status_code,
                 "endpoint": path,
             }
         except httpx.HTTPError as exc:
-            return {"error": str(exc), "endpoint": path}
+            return {"error": _named_failure(exc), "endpoint": path}
 
     async def _delete(self, path: str) -> Any:
         """DELETE an engine control resource.
@@ -96,12 +112,12 @@ class EngineApiClient:
             except Exception:
                 detail = exc.response.text
             return {
-                "error": detail or str(exc),
+                "error": detail or _named_failure(exc),
                 "status_code": exc.response.status_code,
                 "endpoint": path,
             }
         except httpx.HTTPError as exc:
-            return {"error": str(exc), "endpoint": path}
+            return {"error": _named_failure(exc), "endpoint": path}
 
     async def health(self) -> Any:
         return await self._get("/api/health")
