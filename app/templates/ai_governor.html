@@ -273,6 +273,133 @@
 {% endif %}
 
 <div class="card">
+  <h2>Blindness <span class="muted small">— how much context these verdicts had</span></h2>
+  {% if blindness_state == 'not_reported' %}
+    <p class="muted">Not reported. The engine predates this block — a deploy
+    question, not a quiet lane.</p>
+  {% elif blindness_state == 'unmeasured' %}
+    <p class="muted"><strong>Not measured.</strong> No verdict has been issued yet,
+    so there is no blindness reading. This deliberately does not render 0%: a
+    lane nobody has asked anything is not a fully-informed one, and the
+    flattering direction of that error is the dangerous one.</p>
+  {% else %}
+    <table>
+      <tr><th>Verdicts read</th><td>{{ blindness.get('rows') }}</td></tr>
+      <tr><th>Carrying the book/flow split</th>
+          <td>{{ blindness.get('rows_with_split') }}
+          <span class="muted small">— rows written before the split are counted
+          apart, never read as readable: a missing stamp is not a pass.</span></td></tr>
+      <tr><th>Mean unknown fraction</th>
+          <td>{{ blindness.get('avg_unknown_frac') if blindness.get('avg_unknown_frac') is not none else '—' }}</td></tr>
+      <tr><th>Blind on both</th><td>{{ blindness.get('fully_blind') }}</td></tr>
+      <tr><th>Order-book blind</th><td>{{ blindness.get('book_blind') }}</td></tr>
+      <tr><th>Flow (CVD) blind</th><td>{{ blindness.get('flow_blind') }}</td></tr>
+    </table>
+    {% if blindness.get('book_reasons') or blindness.get('flow_reasons') %}
+    <table>
+      <tr><th>Feed</th><th>Reason</th><th>n</th></tr>
+      {% for reason, n in (blindness.get('book_reasons') or {}).items() %}
+      <tr><td>order book</td><td><code>{{ reason }}</code></td><td>{{ n }}</td></tr>
+      {% endfor %}
+      {% for reason, n in (blindness.get('flow_reasons') or {}).items() %}
+      <tr><td>flow</td><td><code>{{ reason }}</code></td><td>{{ n }}</td></tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    <p class="muted small">Book and flow are counted <em>apart</em> because their
+    fixes differ: <code>not_subscribed</code> is a stream-budget decision
+    (<code>DEPTH_MAX_SYMBOLS</code> and <code>AGGTRADE_MAX_SYMBOLS</code> are both
+    40 while much of the delivered book is promoted movers), <code>stale</code> is
+    an incident, and <code>disabled</code> is a switch nobody threw. The governor
+    is fail-open by design, so a verdict issued blind is legitimate — presenting
+    it as a fully-informed one is not.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Scorecard <span class="muted small">— every thesis against what the signal did</span></h2>
+  {% if not scorecard %}
+    <p class="muted">Not reported. The engine predates this block.</p>
+  {% else %}
+    {% set cov = scorecard.get('coverage') or {} %}
+    <p class="muted"><strong>Read coverage first.</strong> A scorecard over the
+    rows that happened to close is not a scorecard over the book.</p>
+    <table>
+      <tr><th>Verdict rows</th><td>{{ cov.get('verdict_rows') }}</td></tr>
+      <tr><th>Theses <span class="muted small">(one per signal)</span></th>
+          <td>{{ cov.get('theses') }}
+          <span class="muted small">— rows collapse to one thesis per signal, or a
+          chatty signal outvotes a quiet one and one outcome is counted several
+          times.</span></td></tr>
+      <tr><th>Graded</th><td>{{ cov.get('joined') }}</td></tr>
+      <tr><th>Still open / never delivered</th><td>{{ cov.get('still_open_or_undelivered') }}</td></tr>
+      <tr><th>Records with no thesis</th><td>{{ cov.get('records_without_thesis') }}
+          <span class="muted small">— closed before this lane, or never armed.</span></td></tr>
+      {% if cov.get('record_error') %}
+      <tr><th>Record</th><td><code>{{ cov.get('record_error') }}</code>
+          <span class="muted small">— missing and unreadable are different faults.</span></td></tr>
+      {% endif %}
+    </table>
+
+    {% set sel = scorecard.get('selection') or {} %}
+    <h3>Selection <span class="muted small">— not an effect estimate</span></h3>
+    <p class="muted">{{ shadow_note }}</p>
+    <table>
+      <tr><th></th><th>n</th><th>priced</th><th>W/L</th><th>avg %</th><th>net avg %</th></tr>
+      {% for label, book in [('Governor wanted to act', sel.get('intervened') or {}),
+                             ('Governor left alone', sel.get('maintain_only') or {})] %}
+      <tr>
+        <td>{{ label }}</td>
+        <td>{{ book.get('n') }}</td>
+        <td>{{ book.get('n_pnl') }}{% if book.get('no_pnl') %} <span class="muted small">({{ book.get('no_pnl') }} unpriced)</span>{% endif %}</td>
+        <td>{{ book.get('wins') }}/{{ book.get('losses') }}</td>
+        <td>{{ book.get('avg_pnl_pct') if book.get('avg_pnl_pct') is not none else '—' }}</td>
+        <td>{{ book.get('net_avg_pnl_pct') if book.get('net_avg_pnl_pct') is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted small">The round trip ({{ sel.get('fee_pct') }}%) is charged to
+    <em>both</em> sides — charging it to one manufactures an edge out of the fee.
+    {{ sel.get('flip_flopped') }} signal(s) had verdicts that disagreed with each
+    other; those are their own state, not evidence for either arm.</p>
+
+    <h3>Per arm <span class="muted small">— and deliberately no combined figure</span></h3>
+    {% for row in score_arms %}
+      {% set b = row.block %}
+      <h4>{{ row.arm }}</h4>
+      <table>
+        <tr><th>Theses</th><td>{{ b.get('n') }}</td></tr>
+        <tr><th>Decidable</th><td>{{ b.get('decidable') }}</td></tr>
+        {% if b.get('reached') is not none %}
+        <tr><th>Target reached / not</th><td>{{ b.get('reached') }} / {{ b.get('unreached') }}</td></tr>
+        <tr><th>Mean delta vs the trade's own exit</th>
+            <td>{{ b.get('avg_delta_pct') if b.get('avg_delta_pct') is not none else '—' }}
+            <span class="muted small">— negative means the arm would have clipped
+            a winner.</span></td></tr>
+        {% endif %}
+      </table>
+      {% if b.get('why') %}<p class="muted small">{{ b.get('why') }}</p>{% endif %}
+      {% if b.get('bias_note') %}<p class="muted small">{{ b.get('bias_note') }}</p>{% endif %}
+      {% if row.undecidable_rows %}
+      <table>
+        <tr><th>Not decidable</th><th>n</th><th>What it means</th></tr>
+        {% for u in row.undecidable_rows %}
+        <tr>
+          <td><code>{{ u.name }}</code>{% if u.unclassified %} <span class="muted small">unclassified</span>{% endif %}</td>
+          <td>{{ u.count }}</td>
+          <td class="muted small">{{ u.meaning }}</td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+    {% endfor %}
+    <p class="muted small">There is no blended across-arm number and there will
+    not be one: it would move with the undecidable fraction rather than with the
+    mechanism. A route test asserts none appears.</p>
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>Open arms <span class="muted small">— one per signal, never per position</span></h2>
   {% if arms %}
     <table>

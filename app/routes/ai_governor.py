@@ -117,6 +117,43 @@ THROTTLE_COPY: Dict[str, str] = {
 }
 
 
+#: Why a thesis could not be graded. Same discipline as `REFUSAL_COPY`: looked
+#: up FROM the engine's payload, never iterated here, so a reason the engine
+#: adds tomorrow renders under its raw name instead of vanishing.
+UNDECIDABLE_COPY: Dict[str, str] = {
+    "still_open_or_undelivered": "No closed-signal record yet — the trade is "
+                                 "open, or the router never delivered it. A "
+                                 "wait, not a fault.",
+    "no_pnl": "The record carries no readable PnL, so the row is counted and "
+              "excluded rather than clamped to zero.",
+    "no_excursion_stamp": "The excursion was never stamped, so 'would the "
+                          "nearer target have been reached' is unanswerable. "
+                          "Refused by name — unreached and unknown remove "
+                          "opposite ends of the distribution.",
+    "choice_not_in_menu": "The chosen key is not in the menu stored with that "
+                          "verdict. A ledger fault, not a row to drop quietly.",
+    "candidate_has_no_distance": "The stored candidate carries no distance, so "
+                                 "nothing can be compared against the excursion.",
+    "arm_undecidable_while_dark": "Nothing was applied, so the record shows what "
+                                  "happened WITHOUT this arm. Deciding it needs a "
+                                  "live window; for the SL arm two of its cases "
+                                  "are not in the record at all.",
+}
+
+
+def blindness_state(block: Any) -> str:
+    """Three states, never two.
+
+    `unmeasured` is not `0% blind`. A lane that has been asked nothing has no
+    blindness reading, and rendering zero there reports a fully-informed
+    governor on an empty one — the flattering direction of the error, which is
+    the dangerous one on a money-path panel.
+    """
+    if not isinstance(block, dict) or not block:
+        return STATE_NOT_REPORTED
+    return "measured" if block.get("measured") else "unmeasured"
+
+
 def classify(payload: Any) -> str:
     """Grade the diag result without asserting a cause we cannot observe.
 
@@ -236,6 +273,23 @@ async def ai_governor(request: Request):
     health = diag.get("health") if isinstance(diag.get("health"), dict) else {}
     bounds = diag.get("bounds") if isinstance(diag.get("bounds"), dict) else {}
 
+    blindness = diag.get("blindness") if isinstance(diag.get("blindness"), dict) else {}
+    scorecard = diag.get("scorecard") if isinstance(diag.get("scorecard"), dict) else {}
+
+    # Each arm's refusals annotated the same way the lane's own are: iterate the
+    # ENGINE's counts and look the sentence up. An arm with no rows still
+    # renders — a missing arm reads as one that never fired, and those are
+    # opposite facts.
+    score_arms = []
+    for name, block in sorted((scorecard.get("arms") or {}).items()):
+        if not isinstance(block, dict):
+            continue
+        score_arms.append({
+            "arm": name,
+            "block": block,
+            "undecidable_rows": annotate(block.get("undecidable"), UNDECIDABLE_COPY),
+        })
+
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "ai_governor.html",
@@ -259,5 +313,18 @@ async def ai_governor(request: Request):
             # and the vendor already told us which.
             "provider_failures": list(reversed(health.get("provider_failures") or [])),
             "served_models": health.get("served_models") or {},
+            # How much context the recent verdicts actually had. The per-row
+            # stamp existed from the day the lane shipped and nothing
+            # aggregated it, so no surface could say whether a MAINTAIN was
+            # informed or blind — which makes every verdict on this page
+            # uninterpretable in EITHER direction, not merely unexplained.
+            "blindness": blindness,
+            "blindness_state": blindness_state(blindness),
+            # Every thesis graded against the closed-signal record. Read the
+            # coverage line before any delta: a scorecard over the rows that
+            # happened to close is not a scorecard over the book.
+            "scorecard": scorecard,
+            "score_arms": score_arms,
+            "shadow_note": str(scorecard.get("shadow_note") or ""),
         },
     )

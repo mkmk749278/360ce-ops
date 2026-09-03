@@ -378,3 +378,155 @@ def test_the_client_never_reports_a_failure_with_no_cause():
 
     assert _named_failure(httpx.ReadTimeout("")) == "ReadTimeout (the client gave no message)"
     assert _named_failure(httpx.ReadTimeout("timed out")) == "timed out"
+
+
+# ---------------------------------------------------------------------------
+# D0 — blindness and the scorecard, pinned to the ENGINE'S real assembler
+# ---------------------------------------------------------------------------
+
+
+def test_the_engine_publishes_the_blindness_and_scorecard_blocks_this_page_reads():
+    """The cross-repo contract, driven rather than fixtured.
+
+    A fixture chooses a location and then agrees with you about it — every test
+    green over a card that renders NOT REPORTED against the real engine. So
+    these keys are asserted against `build_diag()` itself.
+    """
+    diag = _engine_diag()
+    assert "blindness" in diag, "engine no longer publishes the blindness block"
+    assert "scorecard" in diag, "engine no longer publishes the scorecard block"
+    for key in ("rows", "measured"):
+        assert key in diag["blindness"], f"blindness.{key!r} is gone"
+    for key in ("coverage", "mix", "selection", "arms", "shadow_note"):
+        assert key in diag["scorecard"], f"scorecard.{key!r} is gone"
+    for arm in ("ADJUST_TP", "ADJUST_SL", "PANIC_CLOSE"):
+        assert arm in diag["scorecard"]["arms"], f"arm {arm} must render even at n=0"
+
+
+def test_an_empty_lane_renders_not_measured_rather_than_zero_percent_blind():
+    """The flattering direction of this error is the dangerous one: 0% would
+    report a fully-informed governor on a lane nobody has asked anything."""
+    assert page.blindness_state({"rows": 0, "measured": False}) == "unmeasured"
+    assert page.blindness_state({}) == page.STATE_NOT_REPORTED
+    assert page.blindness_state(None) == page.STATE_NOT_REPORTED
+    assert page.blindness_state({"rows": 5, "measured": True}) == "measured"
+
+
+def test_the_blindness_card_says_not_measured_and_renders_no_figure(monkeypatch):
+    """An unmeasured lane must publish no blindness number at all.
+
+    Asserted on the card's STRUCTURE rather than on a substring: the copy
+    explaining *why* there is no 0% naturally contains "0%", and a substring
+    check would either fail on correct copy or force the sentence to be
+    worse. Substring assertions rot; this one pins the property that actually
+    holds — the unmeasured branch renders prose and no data table.
+    """
+    diag = _engine_diag()
+    diag["blindness"] = {"rows": 0, "measured": False}
+    html = _get(monkeypatch, diag=diag)
+    card = html.split("Blindness")[-1].split("Scorecard")[0]
+    assert "Not measured" in card
+    assert "<table" not in card, "an unmeasured lane must render no figures at all"
+    assert "Order-book blind" not in card and "Mean unknown fraction" not in card
+
+
+def test_book_and_flow_blindness_are_rendered_apart_because_the_fixes_differ(monkeypatch):
+    diag = _engine_diag()
+    diag["blindness"] = {
+        "rows": 10, "measured": True, "rows_with_split": 10,
+        "avg_unknown_frac": 0.5, "fully_blind": 1,
+        "book_blind": 9, "flow_blind": 1,
+        "book_reasons": {"not_subscribed": 9}, "flow_reasons": {"stale": 1},
+    }
+    html = _get(monkeypatch, diag=diag)
+    assert "Order-book blind" in html and "Flow (CVD) blind" in html
+    assert "not_subscribed" in html and "stale" in html
+
+
+def test_rows_predating_the_split_are_shown_as_their_own_count(monkeypatch):
+    diag = _engine_diag()
+    diag["blindness"] = {"rows": 10, "measured": True, "rows_with_split": 3,
+                         "avg_unknown_frac": 0.5, "fully_blind": 0,
+                         "book_blind": 1, "flow_blind": 0,
+                         "book_reasons": {}, "flow_reasons": {}}
+    html = _get(monkeypatch, diag=diag)
+    assert "Carrying the book/flow split" in html
+    assert "a missing stamp is not a pass" in html
+
+
+def test_the_scorecard_leads_with_coverage_not_with_a_delta(monkeypatch):
+    """A scorecard over the rows that happened to close is not a scorecard over
+    the book, and a reader who sees the delta first will not go looking."""
+    html = _get(monkeypatch)
+    body = html.split("Scorecard")[-1]
+    assert body.index("Read coverage first") < body.index("Selection")
+
+
+def test_selection_is_never_labelled_as_an_effect(monkeypatch):
+    html = _get(monkeypatch)
+    assert "not an effect estimate" in html
+    assert "counterfactual" in html.lower()
+
+
+def test_the_page_publishes_no_blended_scorecard_figure(monkeypatch):
+    """One number over four arms moves with the undecidable fraction rather
+    than with the mechanism. It must not appear, at any level."""
+    diag = _engine_diag()
+    assert "governor_edge" not in diag["scorecard"]
+    assert "combined" not in diag["scorecard"]
+    assert "avg_delta_pct" not in diag["scorecard"], "no cross-arm delta"
+    html = _get(monkeypatch, diag=diag)
+    assert "no blended across-arm number" in html
+
+
+def test_an_undecidable_reason_the_page_has_never_heard_of_is_badged_not_dropped(monkeypatch):
+    """The table iterates the ENGINE'S payload and looks the sentence up.
+    Iterating this page's own keys would be silent on the next reason."""
+    diag = _engine_diag()
+    diag["scorecard"] = {
+        "coverage": {}, "mix": {}, "selection": {},
+        "arms": {"ADJUST_TP": {"n": 1, "decidable": 0,
+                               "undecidable": {"a_reason_from_the_future": 1}}},
+        "shadow_note": "x",
+    }
+    html = _get(monkeypatch, diag=diag)
+    assert "a_reason_from_the_future" in html
+    assert "unclassified" in html
+
+
+def test_an_arm_with_no_rows_still_renders(monkeypatch):
+    """A missing arm reads as one that never fired; those are opposite facts."""
+    html = _get(monkeypatch)
+    for arm in ("ADJUST_TP", "ADJUST_SL", "PANIC_CLOSE"):
+        assert arm in html
+
+
+def test_no_scorecard_row_uses_a_key_that_shadows_a_dict_method():
+    """`row.copy` resolved to `dict.copy` and rendered a builtin at the reader
+    once already. Derived, not a list of forbidden names."""
+    rows = page.annotate({"no_pnl": 1}, page.UNDECIDABLE_COPY)
+    for row in rows:
+        assert not (set(row) & set(dir({}))), f"key shadows a dict method: {row}"
+
+
+def test_every_undecidable_reason_the_engine_can_emit_has_copy():
+    """A reason with no sentence renders unclassified, which is honest but
+    useless. The engine's own vocabulary is the source of the requirement."""
+    import sys
+    from pathlib import Path
+
+    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    if not engine.exists():
+        import pytest as _pytest
+        _pytest.skip("engine repo not checked out beside ops")
+    sys.path.insert(0, str(engine))
+    try:
+        from src import ai_governor_score as sc
+        reasons = {
+            getattr(sc, name) for name in dir(sc)
+            if name.startswith("WHY_") and isinstance(getattr(sc, name), str)
+        }
+    finally:
+        sys.path.remove(str(engine))
+    missing = reasons - set(page.UNDECIDABLE_COPY)
+    assert not missing, f"no copy for engine reasons: {sorted(missing)}"
