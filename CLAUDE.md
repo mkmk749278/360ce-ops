@@ -871,6 +871,73 @@ published and neither is called *the* win rate; a flat row still pays its round
 trip, so it stays in the money figures. "Three buckets, never two", arriving at
 the win-rate line.
 
+## `/signals/ai-governor` — the panel that shipped WITH its lane (2026-09-02)
+
+Engine side: `src/execution/ai_governor.py` and
+`docs/PLAN_AI_TRADE_GOVERNOR.md` in 360-v2. A model critiques already-open
+positions on the signal's own bar clock and may answer only `MAINTAIN`,
+`ADJUST_TP`, `ADJUST_SL` or `PANIC_CLOSE`. It ships with the measurement flag
+**ON** and the effect flag **OFF**.
+
+**This page shipped in the same session as the lane, which is the only new
+thing about it.** Every previous dark lane in these repos shipped its panel
+late or not at all — `structural_veto` read `UNREADABLE, 0 stamped rows` from
+the day it shipped, and `/signals/price-action` and `/signals/structural-veto`
+both landed with no nav entry, reachable only by typing the URL. "Measured but
+nowhere to look" is an unfinished change, and the fix is to write the page
+first, not to remember it later.
+
+Rules it carries, each one already in this file arriving at a new lane:
+
+- **Ops computes nothing about the governor.** Everything is
+  `read.ai_governor` through the diagnostic catalog, assembled in the ENGINE
+  container. The api process has never evaluated a candidate and cannot see the
+  arms or the position index, so a locally-assembled version would report a
+  healthy zero — `INDEX COLD`, and the promotion census before it.
+- **Refusals and throttles are separate tables.** `cooldown` means the lane
+  found an arm it was willing to evaluate and deliberately did not: positive
+  evidence it is running. Pooled with the refusals it reads as a blocked
+  governor, which is #816 arriving from the display side. The engine counts
+  them apart; this page renders them apart.
+- **The refusal table iterates the ENGINE'S payload**, and looks each sentence
+  up in `REFUSAL_COPY`. Iterating this page's own keys would be silent by
+  construction on the next reason the engine adds — `MEASUREMENT_SUFFIXES`
+  wearing yet another hat. A reason ops has never heard of renders under its
+  raw name badged `unclassified`.
+- **There is no blended cross-arm figure, and a route test asserts none
+  appears.** Three of the four arms are decidable from the closed-signal record
+  and one is not: a *wider* stop on a loser asks whether price would have come
+  back and the walk ended at the stop; a *tighter* stop on a winner asks
+  whether MAE preceded TP1, and MFE/MAE carry no ordering between them. One
+  number over all four would move with the SL arm's refusal rate rather than
+  with the mechanism.
+- **`panic_armed: false` is a rendered STATE, never an absent row.** That arm
+  refuses outright while its position ceiling is 0, and a missing row would
+  read as an arm that is simply quiet. Same for the daily USD cap, which is
+  deliberately unset at ship: the page says "unset — the call-count bounds are
+  what hold" rather than showing nothing.
+- **Four lane states, not two.** `off` / `not_configured` / `measuring` /
+  `enforcing`. "Measuring but no provider key set" is the state this lane
+  actually ships in, and it is neither working nor broken — collapsing it into
+  either sends the owner to fix the wrong thing.
+- **The served model is rendered beside the requested one.** Gemini rotates
+  aliases, so the ledger stamps what the provider says it SERVED; a rotation
+  then shows up here as a population split instead of as drift nobody can see.
+
+**The contract test drives the real engine assembler**
+(`tests/test_ai_governor_page.py` imports `build_diag` from the engine repo and
+asserts every key this page reads is one the engine actually publishes). A
+fixture chooses a location and then agrees with you about it — that is
+`zone_distance_atr` with the shape right and the path wrong, and the
+price-action lane card repeating it one repo out.
+
+**One environment note, because it cost twenty minutes.** `requirements.txt`
+pins `fastapi==0.110.0` / `jinja2==3.1.3`. Installing anything newer makes
+`starlette`'s `Jinja2Templates` raise `TypeError: unhashable type: 'dict'` on
+every render, and **every existing page test fails identically** — which reads
+exactly like "I broke the app". Check a page you did not touch before believing
+that.
+
 ## The read-only door (`/guest`) — a second tier that can never write
 
 Added 2026-08-06 (`docs/READ_ONLY_ACCESS.md`) for the owner's question: *"give
