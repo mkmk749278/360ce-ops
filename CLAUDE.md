@@ -122,8 +122,8 @@ Both had drifted far enough to change what a reader does. The CI figure sent me
 to poll a job less than half way through; the deploy figure had me reading a
 page for a change that was still building, concluding the panels had not
 shipped. Cross-repo, also measured the same day: the engine's `test` job runs
-**5–7 min** and its deploy **1–2.5 min**; `lumin-app`'s APK build is **7–11
-min**.
+**4m54s – 7m31s** and its deploy **1m18s – 2m17s**; `lumin-app`'s APK build is
+**7 – 11.5 min**, though its unit-test step fails at ~1m35s when it fails.
 
 Polling a check run that cannot have finished yet burns API calls and turns one
 wait into six — sleep the known duration first, *then* read the conclusion.
