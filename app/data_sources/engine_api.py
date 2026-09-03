@@ -8,6 +8,28 @@ import httpx
 from app.config import Settings
 
 
+#: The engine's diagnostic bridge is a QUEUE-AND-POLL path, not a request the
+#: api container answers itself: `/internal/diag/catalog/run` hands the key to
+#: the engine over Redis and polls for the answer up to its own
+#: `DIAG_POLL_TIMEOUT_SEC` (25.0s at the time of writing), because the engine
+#: drains that queue on its monitor loop and a bounded number per cycle.
+#:
+#: Ops' default 10s client timeout is SHORTER than that deadline, so every read
+#: the engine takes 10-25s to answer was thrown away here as a failure while the
+#: engine was still working on it — measured at 2 of 6 loads of
+#: `/signals/ai-governor` on 2026-09-03, both dying at ~10.8s against successes
+#: of 1.3-7.2s. It was invisible until that page learned to say which failure it
+#: had: before, an abandoned call rendered as "the engine has no read.ai_governor
+#: catalog entry — a deploy question".
+#:
+#: So this is not "raise the timeout" — 10s stays right for every endpoint the
+#: api container answers itself. It is a client that must not give up before the
+#: SERVER it is talking to does. The margin covers the round trip and the
+#: engine's own drain cadence; past it the engine returns its own named error
+#: and the page quotes that rather than guessing.
+DIAG_RUN_TIMEOUT_SEC = 35.0
+
+
 def _named_failure(exc: Exception) -> str:
     """A cause, always — `str(exc)` on a timeout is the empty string.
 
@@ -67,7 +89,9 @@ class EngineApiClient:
         except httpx.HTTPError as exc:
             return {"error": _named_failure(exc), "endpoint": path}
 
-    async def _post(self, path: str, payload: dict[str, Any]) -> Any:
+    async def _post(
+        self, path: str, payload: dict[str, Any], *, timeout: float | None = None
+    ) -> Any:
         """POST a JSON body to an engine control endpoint.
 
         Returns parsed JSON on success, or ``{"error": ..., "status_code":
@@ -77,7 +101,10 @@ class EngineApiClient:
         engine, so owner-gated writes authorise.
         """
         try:
-            r = await self.client.post(path, json=payload)
+            kwargs: dict[str, Any] = {"json": payload}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            r = await self.client.post(path, **kwargs)
             r.raise_for_status()
             return r.json()
         except httpx.HTTPStatusError as exc:
@@ -233,6 +260,7 @@ class EngineApiClient:
         return await self._post(
             "/internal/diag/catalog/run",
             {"key": key, "args": dict(args or {})},
+            timeout=DIAG_RUN_TIMEOUT_SEC,
         )
 
     async def data_intake(self) -> Any:
