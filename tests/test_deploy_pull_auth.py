@@ -1,19 +1,29 @@
 """The VPS pull must be able to authenticate, and must say so when it cannot.
 
-Runs 206 and 207 (2026-09-03) built and pushed their images, passed every test,
-and never reached the box: `git pull --ff-only origin main` in `/opt/360ce-ops`
-died on
+Runs 206, 207 and 208 (2026-09-03) built and pushed their images, passed every
+test, and never reached the box: the unauthenticated `git pull --ff-only origin
+main` in `/opt/360ce-ops` was refused. `set -e` then skipped `docker compose
+pull` entirely, so three merges deployed nothing while CI stayed green and
+production kept serving the previous image. **A deploy that cannot reach the box
+is indistinguishable from one that did**, which is the class this repo keeps
+paying for one layer up.
 
-    fatal: could not read Username for 'https://github.com': No such device or address
+**Two different refusals, and the second corrected the diagnosis.** Runs 206/207
+died on `could not read Username for 'https://github.com'`, which reads as a
+missing credential on a private repo — and that was written down here as the
+cause. Run 208, with the error path from this change in place, printed what
+GitHub actually says:
 
-— a private repo, an HTTPS remote with no credential, and no TTY to prompt on.
-`set -e` then skipped `docker compose pull` entirely, so two merges deployed
-nothing while CI stayed green and production kept serving the previous image.
-**A deploy that cannot reach the box is indistinguishable from one that did**,
-which is the class this repo keeps paying for one layer up.
+    fatal: remote error: GitHub is temporarily limiting some unauthenticated
+    downloads to protect the stability of the platform. Please retry later or
+    authenticate.
 
-`360-v2`'s deploy has carried the `git remote set-url` repair since those repos
-went private. This one never got it.
+That is a **throttle on anonymous access**, not a permission error. Nothing
+about this repository changed; the pull was working unauthenticated until it
+was not, which is why a deploy that had run green for months failed three times
+in a row with no diff to blame. The remedy is the one the vendor names, and the
+one `360-v2`'s deploy has used for months: authenticate. This workflow never
+did.
 """
 from __future__ import annotations
 

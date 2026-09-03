@@ -63,25 +63,37 @@ jobs:
             set -e
             cd /opt/360ce-ops
 
-            # The clone authenticates over HTTPS and these repos are private, so
-            # a clone that has lost its credential dies on `could not read
-            # Username for https://github.com` — non-interactive, no prompt, and
-            # `set -e` then skips the image pull entirely. That is what stopped
-            # runs 206 and 207 from reaching the box while their images built and
-            # pushed perfectly: the merge landed, CI was green, and production
-            # kept serving the previous image.
+            # The clone pulls over HTTPS with no credential, and GitHub has
+            # begun refusing it. Two different refusals, one week apart, both
+            # ending the deploy the same way — `set -e` skips the image pull
+            # entirely, so the merge lands, CI is green, and production keeps
+            # serving the previous image:
             #
-            # 360-v2's deploy has carried the repair since it went private and
-            # this one never got it. Guarded, so an absent secret leaves today's
-            # behaviour exactly as it is rather than rewriting the remote to a
-            # URL with an empty token in it.
+            #   fatal: could not read Username for 'https://github.com'
+            #   fatal: remote error: GitHub is temporarily limiting some
+            #          unauthenticated downloads … Please retry later or
+            #          authenticate.
+            #
+            # The second is the one run 208 hit, and it is worth reading
+            # carefully: it is a THROTTLE on anonymous access, not a permission
+            # error, so nothing about this repository changed — the pull was
+            # working unauthenticated until GitHub decided it would rather it
+            # were not. Which is why this deploy ran green for months and then
+            # stopped for three runs in a row with no diff to blame.
+            #
+            # Either way the vendor's own instruction is the fix: authenticate.
+            # 360-v2's deploy has authenticated its pull for months and this one
+            # never did. Guarded, so an absent secret leaves today's behaviour
+            # exactly as it is rather than rewriting the remote to a URL with an
+            # empty token in it.
             if [ -n "${{ secrets.GH_PAT }}" ]; then
               git remote set-url origin https://x-access-token:${{ secrets.GH_PAT }}@github.com/mkmk749278/360ce-ops.git
             fi
 
-            # A failure here names its own remedy. `could not read Username` is
-            # the symptom of a missing credential and reads like a network
-            # fault, and the deploy that follows it is silently skipped.
+            # A failure here names its own remedy. Both of git's messages read
+            # like something other than what they are — one like a broken
+            # terminal, one like a transient network hiccup worth waiting out —
+            # and the deploy that follows either is silently skipped.
             if ! git pull --ff-only origin main; then
               echo "::error::The VPS clone at /opt/360ce-ops cannot authenticate to GitHub."
               echo "::error::Add GH_PAT to this repository's Actions secrets (the same value 360-v2 already holds),"
