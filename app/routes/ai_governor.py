@@ -117,6 +117,43 @@ THROTTLE_COPY: Dict[str, str] = {
 }
 
 
+#: Why a thesis could not be graded. Same discipline as `REFUSAL_COPY`: looked
+#: up FROM the engine's payload, never iterated here, so a reason the engine
+#: adds tomorrow renders under its raw name instead of vanishing.
+UNDECIDABLE_COPY: Dict[str, str] = {
+    "still_open_or_undelivered": "No closed-signal record yet — the trade is "
+                                 "open, or the router never delivered it. A "
+                                 "wait, not a fault.",
+    "no_pnl": "The record carries no readable PnL, so the row is counted and "
+              "excluded rather than clamped to zero.",
+    "no_excursion_stamp": "The excursion was never stamped, so 'would the "
+                          "nearer target have been reached' is unanswerable. "
+                          "Refused by name — unreached and unknown remove "
+                          "opposite ends of the distribution.",
+    "choice_not_in_menu": "The chosen key is not in the menu stored with that "
+                          "verdict. A ledger fault, not a row to drop quietly.",
+    "candidate_has_no_distance": "The stored candidate carries no distance, so "
+                                 "nothing can be compared against the excursion.",
+    "arm_undecidable_while_dark": "Nothing was applied, so the record shows what "
+                                  "happened WITHOUT this arm. Deciding it needs a "
+                                  "live window; for the SL arm two of its cases "
+                                  "are not in the record at all.",
+}
+
+
+def blindness_state(block: Any) -> str:
+    """Three states, never two.
+
+    `unmeasured` is not `0% blind`. A lane that has been asked nothing has no
+    blindness reading, and rendering zero there reports a fully-informed
+    governor on an empty one — the flattering direction of the error, which is
+    the dangerous one on a money-path panel.
+    """
+    if not isinstance(block, dict) or not block:
+        return STATE_NOT_REPORTED
+    return "measured" if block.get("measured") else "unmeasured"
+
+
 def classify(payload: Any) -> str:
     """Grade the diag result without asserting a cause we cannot observe.
 
@@ -155,6 +192,39 @@ def classify(payload: Any) -> str:
     if not isinstance(out, dict):
         return STATE_UNREACHABLE
     if "measure_enabled" not in out:
+        return STATE_NOT_REPORTED
+    return STATE_OK
+
+
+def classify_scorecard(payload: Any) -> str:
+    """Grade the scorecard read on ITS OWN shape, not the lane's.
+
+    `classify` keys on `measure_enabled`, which only the lane entry carries — so
+    running a scorecard payload through it would grade every healthy scorecard
+    as an engine predating the page. That is the shape-vs-path defect this file
+    already records twice, and it was one line away from shipping again.
+
+    The transport and envelope rules are identical, so they are reused rather
+    than re-implemented; only the shape key differs.
+    """
+    if not isinstance(payload, dict):
+        return STATE_UNREACHABLE
+    if "ok" in payload:
+        if payload.get("ok") is False:
+            if UNKNOWN_ENTRY_MARKER in str(payload.get("error") or ""):
+                return STATE_NOT_REPORTED
+            return STATE_ENGINE_ERROR
+    elif "error" in payload:
+        return STATE_UNREACHABLE
+
+    out = payload.get("result") if "result" in payload else payload
+    if not isinstance(out, dict):
+        return STATE_UNREACHABLE
+    # The engine's own "I could not compute this" — a rendered state, not a
+    # transport failure, and named apart because the next move differs.
+    if "error" in out:
+        return STATE_ENGINE_ERROR
+    if "coverage" not in out:
         return STATE_NOT_REPORTED
     return STATE_OK
 
@@ -232,9 +302,45 @@ async def ai_governor(request: Request):
     except Exception as exc:  # pragma: no cover - defensive
         raw = {"error": f"{type(exc).__name__}: {exc}"}
 
+    # A SECOND call, on purpose. The scorecard parses the closed-signal record
+    # off disk, and a read that touches the filesystem should not be able to
+    # take the lane's own state down with it — this page renders whatever half
+    # it got.
+    #
+    # It is NOT split because the parse was slow. That was the first
+    # explanation for a 25s timeout on `read.ai_governor`, and measuring the
+    # deployed engine refuted it: the parsing entry answers in 0.145s while the
+    # light one timed out during warm-up and answered in 0.001s once settled.
+    # The separation is a precaution, not a diagnosis.
+    try:
+        raw_score = await api.diag_run("read.ai_governor_scorecard", {})
+    except Exception as exc:  # pragma: no cover - defensive
+        raw_score = {"error": f"{type(exc).__name__}: {exc}"}
+
     diag = _unwrap(raw)
     health = diag.get("health") if isinstance(diag.get("health"), dict) else {}
     bounds = diag.get("bounds") if isinstance(diag.get("bounds"), dict) else {}
+
+    blindness = diag.get("blindness") if isinstance(diag.get("blindness"), dict) else {}
+    scorecard = _unwrap(raw_score)
+    # `scorecard.error` is the ENGINE saying it could not compute; a transport
+    # failure is ops' own. Both render, and they are named apart because one is
+    # a deploy or a data question and the other is a network one.
+    score_state = classify_scorecard(raw_score)
+
+    # Each arm's refusals annotated the same way the lane's own are: iterate the
+    # ENGINE's counts and look the sentence up. An arm with no rows still
+    # renders — a missing arm reads as one that never fired, and those are
+    # opposite facts.
+    score_arms = []
+    for name, block in sorted((scorecard.get("arms") or {}).items()):
+        if not isinstance(block, dict):
+            continue
+        score_arms.append({
+            "arm": name,
+            "block": block,
+            "undecidable_rows": annotate(block.get("undecidable"), UNDECIDABLE_COPY),
+        })
 
     templates = request.app.state.templates
     return templates.TemplateResponse(
@@ -259,5 +365,19 @@ async def ai_governor(request: Request):
             # and the vendor already told us which.
             "provider_failures": list(reversed(health.get("provider_failures") or [])),
             "served_models": health.get("served_models") or {},
+            # How much context the recent verdicts actually had. The per-row
+            # stamp existed from the day the lane shipped and nothing
+            # aggregated it, so no surface could say whether a MAINTAIN was
+            # informed or blind — which makes every verdict on this page
+            # uninterpretable in EITHER direction, not merely unexplained.
+            "blindness": blindness,
+            "blindness_state": blindness_state(blindness),
+            # Every thesis graded against the closed-signal record. Read the
+            # coverage line before any delta: a scorecard over the rows that
+            # happened to close is not a scorecard over the book.
+            "scorecard": scorecard,
+            "score_state": score_state,
+            "score_arms": score_arms,
+            "shadow_note": str(scorecard.get("shadow_note") or ""),
         },
     )

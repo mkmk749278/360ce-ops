@@ -30,7 +30,7 @@ def _login(client: TestClient) -> None:
     client.post("/login", data={"password": "test-token"})
 
 
-def _get(monkeypatch, path="/signals/ai-governor", diag=None) -> str:
+def _get(monkeypatch, path="/signals/ai-governor", diag=None, score=None) -> str:
     """Render the page against the ENGINE'S OWN payload by default.
 
     Not a hand-written dict: `build_diag` is imported from the engine and
@@ -38,8 +38,14 @@ def _get(monkeypatch, path="/signals/ai-governor", diag=None) -> str:
     here rather than rendering a blank card in production.
     """
     payload = _engine_diag() if diag is None else diag
+    score_payload = STUB_SCORECARD if score is None else score
 
     async def fake_run(self, key, args=None):
+        # Routed BY KEY: the page now makes two calls, and a fake that returns
+        # one payload for both would hand the lane diag to the scorecard
+        # classifier and grade a healthy page NOT REPORTED.
+        if key == "read.ai_governor_scorecard":
+            return {"ok": True, "key": key, "result": score_payload}
         return {"ok": True, "key": key, "result": payload}
 
     monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
@@ -81,6 +87,41 @@ def test_a_literal_route_is_registered_before_the_catch_all():
 
 # ── The cross-repo contract, driven against the REAL engine ─────────────────
 
+#: A scorecard shaped like the engine's, for tests about RENDERING rather than
+#: about the contract. CI checks out this repo alone, so calling the real
+#: assembler here would skip every render test — including ones that predate
+#: this lane, which is how a stub requirement silently deletes coverage.
+#:
+#: It is kept honest by `test_the_stub_scorecard_matches_the_engines_shape`,
+#: which drives the real assembler when the engine IS beside us and asserts the
+#: keys agree. A fixture that nothing checks is one that agrees with whatever
+#: you assumed — the defect this file already records twice.
+STUB_SCORECARD: dict = {
+    "coverage": {
+        "theses": 0, "records": 0, "joined": 0,
+        "still_open_or_undelivered": 0, "records_without_thesis": 0,
+        "verdict_rows": 0, "record_error": None,
+    },
+    "mix": {},
+    "blindness": {"theses_with_stamp": 0, "avg_unknown_frac": None, "fully_blind": 0},
+    "selection": {
+        "fee_pct": 0.07,
+        "intervened": {"n": 0, "n_pnl": 0, "no_pnl": 0, "wins": 0, "losses": 0,
+                       "avg_pnl_pct": None, "net_avg_pnl_pct": None},
+        "maintain_only": {"n": 0, "n_pnl": 0, "no_pnl": 0, "wins": 0, "losses": 0,
+                          "avg_pnl_pct": None, "net_avg_pnl_pct": None},
+        "flip_flopped": 0,
+    },
+    "arms": {
+        "ADJUST_TP": {"n": 0, "decidable": 0, "undecidable": {}, "reached": 0,
+                      "unreached": 0, "avg_delta_pct": None},
+        "ADJUST_SL": {"n": 0, "decidable": 0, "undecidable": {}, "why": "dark"},
+        "PANIC_CLOSE": {"n": 0, "decidable": 0, "undecidable": {}, "why": "dark"},
+    },
+    "shadow_note": "Apply is OFF, so every recorded outcome is the MAINTAIN counterfactual.",
+}
+
+
 def _engine_diag() -> dict:
     """Call the engine's own `build_diag`, not a shape this repo invented."""
     import sys
@@ -93,6 +134,23 @@ def _engine_diag() -> dict:
     try:
         from src.execution import ai_governor as gov  # type: ignore
         return gov.build_diag()
+    finally:
+        sys.path.remove(str(engine))
+
+
+def _engine_scorecard():
+    """The engine's REAL scorecard assembler, for the same reason as above."""
+    import sys
+    from pathlib import Path
+
+    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    if not engine.exists():
+        pytest.skip("engine repo not checked out beside ops")
+    sys.path.insert(0, str(engine))
+    try:
+        from src.execution import ai_governor as gov
+
+        return gov.build_scorecard()
     finally:
         sys.path.remove(str(engine))
 
@@ -378,3 +436,238 @@ def test_the_client_never_reports_a_failure_with_no_cause():
 
     assert _named_failure(httpx.ReadTimeout("")) == "ReadTimeout (the client gave no message)"
     assert _named_failure(httpx.ReadTimeout("timed out")) == "timed out"
+
+
+# ---------------------------------------------------------------------------
+# D0 — blindness and the scorecard, pinned to the ENGINE'S real assembler
+# ---------------------------------------------------------------------------
+
+
+def test_the_engine_publishes_the_blindness_and_scorecard_blocks_this_page_reads():
+    """The cross-repo contract, driven rather than fixtured.
+
+    A fixture chooses a location and then agrees with you about it — every test
+    green over a card that renders NOT REPORTED against the real engine. So
+    these keys are asserted against `build_diag()` itself.
+    """
+    diag = _engine_diag()
+    assert "blindness" in diag, "engine no longer publishes the blindness block"
+    for key in ("rows", "measured"):
+        assert key in diag["blindness"], f"blindness.{key!r} is gone"
+
+    # The scorecard is its OWN entry. It parses the closed-signal record off
+    # disk, and folded into the light entry it made `read.ai_governor` blow its
+    # 25s budget in production while every other entry answered in 0.0s.
+    assert "scorecard" not in diag, "the record parse must not ride the light entry"
+    score = _engine_scorecard()
+    for key in ("coverage", "mix", "selection", "arms", "shadow_note"):
+        assert key in score, f"scorecard.{key!r} is gone"
+    for arm in ("ADJUST_TP", "ADJUST_SL", "PANIC_CLOSE"):
+        assert arm in score["arms"], f"arm {arm} must render even at n=0"
+
+
+def test_an_empty_lane_renders_not_measured_rather_than_zero_percent_blind():
+    """The flattering direction of this error is the dangerous one: 0% would
+    report a fully-informed governor on a lane nobody has asked anything."""
+    assert page.blindness_state({"rows": 0, "measured": False}) == "unmeasured"
+    assert page.blindness_state({}) == page.STATE_NOT_REPORTED
+    assert page.blindness_state(None) == page.STATE_NOT_REPORTED
+    assert page.blindness_state({"rows": 5, "measured": True}) == "measured"
+
+
+def test_the_blindness_card_says_not_measured_and_renders_no_figure(monkeypatch):
+    """An unmeasured lane must publish no blindness number at all.
+
+    Asserted on the card's STRUCTURE rather than on a substring: the copy
+    explaining *why* there is no 0% naturally contains "0%", and a substring
+    check would either fail on correct copy or force the sentence to be
+    worse. Substring assertions rot; this one pins the property that actually
+    holds — the unmeasured branch renders prose and no data table.
+    """
+    diag = _engine_diag()
+    diag["blindness"] = {"rows": 0, "measured": False}
+    html = _get(monkeypatch, diag=diag)
+    card = html.split("Blindness")[-1].split("Scorecard")[0]
+    assert "Not measured" in card
+    assert "<table" not in card, "an unmeasured lane must render no figures at all"
+    assert "Order-book blind" not in card and "Mean unknown fraction" not in card
+
+
+def test_book_and_flow_blindness_are_rendered_apart_because_the_fixes_differ(monkeypatch):
+    diag = _engine_diag()
+    diag["blindness"] = {
+        "rows": 10, "measured": True, "rows_with_split": 10,
+        "avg_unknown_frac": 0.5, "fully_blind": 1,
+        "book_blind": 9, "flow_blind": 1,
+        "book_reasons": {"not_subscribed": 9}, "flow_reasons": {"stale": 1},
+    }
+    html = _get(monkeypatch, diag=diag)
+    assert "Order-book blind" in html and "Flow (CVD) blind" in html
+    assert "not_subscribed" in html and "stale" in html
+
+
+def test_rows_predating_the_split_are_shown_as_their_own_count(monkeypatch):
+    diag = _engine_diag()
+    diag["blindness"] = {"rows": 10, "measured": True, "rows_with_split": 3,
+                         "avg_unknown_frac": 0.5, "fully_blind": 0,
+                         "book_blind": 1, "flow_blind": 0,
+                         "book_reasons": {}, "flow_reasons": {}}
+    html = _get(monkeypatch, diag=diag)
+    assert "Carrying the book/flow split" in html
+    assert "a missing stamp is not a pass" in html
+
+
+def test_the_scorecard_leads_with_coverage_not_with_a_delta(monkeypatch):
+    """A scorecard over the rows that happened to close is not a scorecard over
+    the book, and a reader who sees the delta first will not go looking."""
+    html = _get(monkeypatch)
+    body = html.split("Scorecard")[-1]
+    assert body.index("Read coverage first") < body.index("Selection")
+
+
+def test_selection_is_never_labelled_as_an_effect(monkeypatch):
+    html = _get(monkeypatch)
+    assert "not an effect estimate" in html
+    assert "counterfactual" in html.lower()
+
+
+def test_the_page_publishes_no_blended_scorecard_figure(monkeypatch):
+    """One number over four arms moves with the undecidable fraction rather
+    than with the mechanism. It must not appear, at any level."""
+    score = _engine_scorecard()
+    assert "governor_edge" not in score
+    assert "combined" not in score
+    assert "avg_delta_pct" not in score, "no cross-arm delta"
+    html = _get(monkeypatch)
+    assert "no blended across-arm number" in html
+
+
+def test_an_undecidable_reason_the_page_has_never_heard_of_is_badged_not_dropped(monkeypatch):
+    """The table iterates the ENGINE'S payload and looks the sentence up.
+    Iterating this page's own keys would be silent on the next reason."""
+    html = _get(monkeypatch, score={
+        "coverage": {}, "mix": {}, "selection": {},
+        "arms": {"ADJUST_TP": {"n": 1, "decidable": 0,
+                               "undecidable": {"a_reason_from_the_future": 1}}},
+        "shadow_note": "x",
+    })
+    assert "a_reason_from_the_future" in html
+    assert "unclassified" in html
+
+
+def test_an_arm_with_no_rows_still_renders(monkeypatch):
+    """A missing arm reads as one that never fired; those are opposite facts."""
+    html = _get(monkeypatch)
+    for arm in ("ADJUST_TP", "ADJUST_SL", "PANIC_CLOSE"):
+        assert arm in html
+
+
+def test_no_scorecard_row_uses_a_key_that_shadows_a_dict_method():
+    """`row.copy` resolved to `dict.copy` and rendered a builtin at the reader
+    once already. Derived, not a list of forbidden names."""
+    rows = page.annotate({"no_pnl": 1}, page.UNDECIDABLE_COPY)
+    for row in rows:
+        assert not (set(row) & set(dir({}))), f"key shadows a dict method: {row}"
+
+
+def test_every_undecidable_reason_the_engine_can_emit_has_copy():
+    """A reason with no sentence renders unclassified, which is honest but
+    useless. The engine's own vocabulary is the source of the requirement."""
+    import sys
+    from pathlib import Path
+
+    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    if not engine.exists():
+        import pytest as _pytest
+        _pytest.skip("engine repo not checked out beside ops")
+    sys.path.insert(0, str(engine))
+    try:
+        from src import ai_governor_score as sc
+        reasons = {
+            getattr(sc, name) for name in dir(sc)
+            if name.startswith("WHY_") and isinstance(getattr(sc, name), str)
+        }
+    finally:
+        sys.path.remove(str(engine))
+    missing = reasons - set(page.UNDECIDABLE_COPY)
+    assert not missing, f"no copy for engine reasons: {sorted(missing)}"
+
+
+def test_a_failing_scorecard_does_not_take_the_rest_of_the_page_with_it(monkeypatch):
+    """The whole point of the two-entry split.
+
+    The scorecard parses the closed-signal record off disk; the arms, bounds and
+    refusals do not. Fetched together, a slow or broken record would take the
+    lane's own state down with it.
+
+    Stated as the precaution it is: the production timeout that prompted the
+    split was later measured to be engine warm-up, not the parse. The property
+    below is still worth holding — the story first attached to it was not.
+    """
+    # The lane payload is built OUTSIDE the request. Calling a helper that can
+    # `pytest.skip` from inside an ASGI handler raises into the test client's
+    # portal ("This portal is not running") — a failure that reads like a
+    # transport bug and is really a fixture in the wrong place.
+    lane = {"measure_enabled": True, "apply_enabled": False, "armed_arms": ["tp"],
+            "provider": "google", "provider_configured": True,
+            "bounds": {"calls_per_signal": 8, "calls_per_hour": 30,
+                       "usd_per_day": 0.0, "panic_max_positions": 0,
+                       "panic_armed": False},
+            "health": {"refusals": {}, "throttles": {}, "by_action": {}},
+            "arms": [], "blindness": {"rows": 0, "measured": False}}
+
+    async def fake_run(self, key, args=None):
+        if key == "read.ai_governor_scorecard":
+            return {"ok": False, "key": key, "error": "engine bridge timed out"}
+        return {"ok": True, "key": key, "result": lane}
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/signals/ai-governor").text
+
+    # The scorecard says what went wrong, in the engine's own words.
+    assert "could not compute the scorecard" in html
+    assert "engine bridge timed out" in html
+    # ...and everything that did not depend on it still rendered.
+    assert "Blindness" in html
+    assert "Open arms" in html
+    assert "Bounds" in html
+
+
+def test_the_scorecard_is_graded_on_its_own_shape_not_the_lanes(monkeypatch):
+    """`classify` keys on `measure_enabled`, which only the lane entry carries.
+
+    Running a scorecard payload through it would grade every healthy scorecard
+    as an engine predating the page — the shape-vs-path defect this file already
+    records twice, one line away from shipping again.
+    """
+    healthy = {"ok": True, "result": {"coverage": {}, "arms": {}}}
+    assert page.classify_scorecard(healthy) == page.STATE_OK
+    assert page.classify(healthy) == page.STATE_NOT_REPORTED, (
+        "the lane classifier must NOT be what grades a scorecard"
+    )
+    assert page.classify_scorecard({"ok": False, "error": "unknown catalog entry: x"}) \
+        == page.STATE_NOT_REPORTED
+    assert page.classify_scorecard({"ok": False, "error": "boom"}) == page.STATE_ENGINE_ERROR
+    assert page.classify_scorecard({"error": "", "endpoint": "/x"}) == page.STATE_UNREACHABLE
+    assert page.classify_scorecard({"ok": True, "result": {"error": "no record"}}) \
+        == page.STATE_ENGINE_ERROR
+
+
+def test_the_stub_scorecard_matches_the_engines_shape():
+    """Keeps `STUB_SCORECARD` honest.
+
+    CI checks out this repo alone, so render tests run against a stub. A stub
+    nothing checks is one that agrees with whatever you assumed — which is the
+    `zone_distance_atr` failure and the price-action lane card, both of which
+    went green over a shape no producer had ever emitted. When the engine IS
+    beside us, this drives the real assembler and asserts the top-level keys
+    and the arm names agree.
+    """
+    real = _engine_scorecard()  # skips when the engine is not checked out
+    assert set(STUB_SCORECARD) == set(real), (
+        "STUB_SCORECARD has drifted from the engine's scorecard shape"
+    )
+    assert set(STUB_SCORECARD["arms"]) == set(real["arms"])
+    assert set(STUB_SCORECARD["coverage"]) >= set(real["coverage"]) - {"record_error"}
