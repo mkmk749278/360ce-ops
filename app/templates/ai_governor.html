@@ -1,0 +1,236 @@
+{% extends "base.html" %}
+{% block title %}AI Trade Governor · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>AI Trade Governor — what it decided, and what it refused</h1>
+
+<div class="card">
+  <h2>What this lane is</h2>
+  <p class="muted small">
+    An asynchronous critic attached to <em>already-open</em> positions. The
+    deterministic FSM places the trade; this asks a model, on the signal's own
+    bar clock, whether reality still supports the premise — and it may answer
+    only <code>MAINTAIN</code>, <code>ADJUST_TP</code>, <code>ADJUST_SL</code>
+    or <code>PANIC_CLOSE</code>. It <strong>never emits a price</strong>: the
+    engine builds a menu of pre-validated levels and the model returns a key,
+    so a hallucinated choice is bounded by a menu we wrote.
+  </p>
+  <p class="muted small">
+    Keyed on <strong>signals, not positions</strong> — one verdict fans out to
+    every user in the trade, so the model cost is flat in members. The
+    <em>apply</em> path is not: one <code>PANIC_CLOSE</code> at 1,000 members is
+    ~1,000 Firestore reads and ~5,000 signed Binance calls in a burst, from the
+    IP that got rate-limited on 2026-09-01. That is why it carries a second,
+    separate budget.
+  </p>
+</div>
+
+{% if state == 'unreachable' %}
+  <div class="card"><p class="warn">UNREACHABLE — the engine did not answer.
+  A network or container question, not a governor one.</p></div>
+{% elif state == 'not_reported' %}
+  <div class="card"><p class="warn">NOT REPORTED — the engine has no
+  <code>read.ai_governor</code> catalog entry. That is an engine predating this
+  page, so it is a deploy question.</p></div>
+{% else %}
+
+<div class="card">
+  <h2>Lane</h2>
+  {% if lane == 'off' %}
+    <p class="warn">MEASUREMENT OFF — nothing is being recorded. No window
+    accumulates while this is the case.</p>
+  {% elif lane == 'not_configured' %}
+    <p class="warn">NOT CONFIGURED — measurement is on, but no provider API key
+    is set, so <strong>no call is made and no verdict exists</strong>.</p>
+    <p class="muted small">This is a decision nobody has taken yet, not a
+    failure. Note the key must not land on <code>lumin-app</code>'s billing
+    account before somebody establishes what is refusing this project's
+    Firestore reads at the free tier.</p>
+  {% elif lane == 'enforcing' %}
+    <p class="warn">ENFORCING — verdicts are moving real orders on the armed
+    arms below.</p>
+  {% else %}
+    <p class="ok">MEASURING — verdicts are recorded and applied to nothing.
+    This is what dark means here.</p>
+  {% endif %}
+
+  <table>
+    <tr><th>Measurement</th><td>{{ 'ON' if diag.get('measure_enabled') else 'OFF' }}</td></tr>
+    <tr><th>Apply (user-visible effect)</th><td>{{ 'ON' if diag.get('apply_enabled') else 'OFF — owner sign-off to arm' }}</td></tr>
+    <tr><th>Armed arms</th><td>{{ (diag.get('armed_arms') or []) | join(', ') or '—' }}</td></tr>
+    <tr><th>Provider</th><td>{{ diag.get('provider') or '—' }}
+      {% if not diag.get('provider_configured') %}<span class="warn">(no key set)</span>{% endif %}</td></tr>
+    <tr><th>Model asked for</th><td><code>{{ diag.get('model_requested') or '—' }}</code></td></tr>
+    <tr><th>Model actually served</th>
+        <td>
+          {% if served_models %}
+            {% for name, n in served_models.items() %}<code>{{ name }}</code> ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}
+          {% else %}<span class="muted">— no call has returned yet</span>{% endif %}
+        </td></tr>
+  </table>
+  <p class="muted small">
+    The <strong>served</strong> version is stamped on every row, not the alias
+    we asked for. Gemini rotates aliases, and a rotation would otherwise
+    redefine every row in this ledger with no diff in the repo — so it shows up
+    here as a population split instead of as drift nobody can see.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Bounds</h2>
+  <table>
+    <tr><th>Calls per signal (lifetime)</th><td>{{ bounds.get('calls_per_signal', '—') }}</td></tr>
+    <tr><th>Calls per hour (global)</th><td>{{ bounds.get('calls_per_hour', '—') }}</td></tr>
+    <tr><th>USD per day</th>
+        <td>{% if (bounds.get('usd_per_day') or 0) > 0 %}${{ bounds.get('usd_per_day') }}
+            {% else %}<span class="muted">unset — the call-count bounds are what hold</span>{% endif %}</td></tr>
+    <tr><th>Panic close — max positions</th>
+        <td>
+          {% if bounds.get('panic_armed') %}{{ bounds.get('panic_max_positions') }}
+          {% else %}<span class="warn">UNSET — the panic arm refuses</span>{% endif %}
+        </td></tr>
+  </table>
+  <p class="muted small">
+    The panic ceiling is rendered <em>even when unset</em>, because unset is a
+    state: that arm refuses outright while it is zero. An owner-set
+    blast-radius cap that falls back to unbounded is not a cap, and this is the
+    one arm that cannot be paced — a queued emergency close is not an emergency
+    close. The daily USD cap is deliberately unset at ship; it comes from the
+    first week of this ledger, not from a guess.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Counters</h2>
+  <table>
+    <tr><th>Sweeps</th><td>{{ health.get('cycles', 0) }}</td></tr>
+    <tr><th>Arms open</th><td>{{ health.get('arms', 0) }}</td></tr>
+    <tr><th>Triggers fired</th><td>{{ health.get('triggers', 0) }}</td></tr>
+    <tr><th>Model calls</th><td>{{ health.get('calls', 0) }}</td></tr>
+    <tr><th>Verdicts</th><td>{{ health.get('verdicts', 0) }}</td></tr>
+    <tr><th>Applied</th><td>{{ health.get('applied', 0) }}</td></tr>
+    <tr><th>Spend today</th><td>${{ '%.4f' % (health.get('spend_usd') or 0) }}
+        <span class="muted small">(rate table v{{ diag.get('rate_table_version') }}, read {{ diag.get('rate_table_read_on') }})</span></td></tr>
+    {% if (health.get('spend_unpriced_calls') or 0) > 0 %}
+    <tr><th>Calls we could not price</th>
+        <td class="warn">{{ health.get('spend_unpriced_calls') }} — a model absent
+        from the rate table. Counted apart from zero, because a cost we cannot
+        bound must not read as free.</td></tr>
+    {% endif %}
+    <tr><th>Last latency</th><td>{{ health.get('latency_ms_last', 0) }} ms</td></tr>
+    <tr><th>Ledger rows</th><td>{{ diag.get('ledger_rows', 0) }}
+        {% if (diag.get('ledger_evicted') or 0) > 0 %}
+          <span class="muted small">({{ diag.get('ledger_evicted') }} rotated out of the cap —
+          every rate below is therefore a sample)</span>
+        {% endif %}</td></tr>
+    <tr><th>Verdict queue depth</th><td>{{ diag.get('queue_depth', 0) }}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Verdict mix</h2>
+  {% if actions %}
+    <table>
+      <tr><th>Outcome</th><th>n</th></tr>
+      {% for row in actions %}
+      <tr><td><code>{{ row.name }}</code></td><td>{{ row.count }}</td></tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">No verdicts yet.</p>
+  {% endif %}
+  <p class="muted small">
+    <code>MAINTAIN</code> is recorded like every other outcome. A lane that logs
+    only its interventions cannot compute a baseline and will look brilliant.
+  </p>
+  <p class="muted small">
+    <strong>There is no combined "did the governor help" figure here, and there
+    will not be one.</strong> Three of the four arms are decidable from the
+    closed-signal record and one is not: a <em>wider</em> stop on a loser asks
+    whether price would have come back, and the walk ended at the stop; a
+    <em>tighter</em> stop on a winner asks whether the drawdown preceded the
+    target, and MFE and MAE carry no ordering between them. Those remove
+    opposite ends of the distribution, so one number over all four would move
+    with the SL arm's refusal rate rather than with the mechanism.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Throttles <span class="muted small">— the lane working, not blocked</span></h2>
+  {% if throttles %}
+    <table>
+      <tr><th>Name</th><th>n</th><th>What it means</th></tr>
+      {% for row in throttles %}
+      <tr><td><code>{{ row.name }}</code>{% if row.unclassified %} <span class="warn">unclassified</span>{% endif %}</td>
+          <td>{{ row.count }}</td><td class="muted small">{{ row.copy }}</td></tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">Nothing throttled.</p>
+  {% endif %}
+  <p class="muted small">
+    Kept in its own table on purpose. A throttle pooled with a refusal reads as
+    a blocked governor when it is a working one — the mistake that cost a
+    session on the re-detection count, arriving from the display side.
+  </p>
+</div>
+
+<div class="card">
+  <h2>Refusals <span class="muted small">— each named, none silent</span></h2>
+  {% if refusals %}
+    <table>
+      <tr><th>Reason</th><th>n</th><th>What it means</th></tr>
+      {% for row in refusals %}
+      <tr><td><code>{{ row.name }}</code>{% if row.unclassified %} <span class="warn">unclassified</span>{% endif %}</td>
+          <td>{{ row.count }}</td><td class="muted small">{{ row.copy }}</td></tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">Nothing refused.</p>
+  {% endif %}
+  <p class="muted small">
+    A reason this page has never heard of renders under its raw name badged
+    <em>unclassified</em> rather than being dropped — the table iterates the
+    engine's payload, never this page's own list, so the next reason the engine
+    adds is visible instead of absent.
+  </p>
+</div>
+
+{% if provider_status %}
+<div class="card">
+  <h2>Provider outcomes</h2>
+  <table>
+    <tr><th>Status</th><th>n</th></tr>
+    {% for row in provider_status %}
+    <tr><td><code>{{ row.name }}</code></td><td>{{ row.count }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">
+    Every failure is a named result rather than an exception, so
+    "the provider was down" can never be read as "the model said maintain".
+  </p>
+</div>
+{% endif %}
+
+<div class="card">
+  <h2>Open arms <span class="muted small">— one per signal, never per position</span></h2>
+  {% if arms %}
+    <table>
+      <tr><th>Signal</th><th>Symbol</th><th>TF</th><th>Calls</th><th>Standing verdict</th></tr>
+      {% for a in arms %}
+      <tr>
+        <td><code>{{ a.get('signal_id') }}</code></td>
+        <td>{{ a.get('symbol') }}</td>
+        <td>{{ a.get('trigger_tf') }}</td>
+        <td>{{ a.get('calls_made') }}</td>
+        <td>{{ a.get('standing') or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">No arms open. With no signals active that is the correct
+    and uninteresting answer — it is not a fault.</p>
+  {% endif %}
+</div>
+
+{% endif %}
+{% endblock %}

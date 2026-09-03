@@ -62,6 +62,7 @@ from app.routes import (
     sar_exit,
     dark_signals_live,
     sar_live,
+    ai_governor,
     signal_detail,
     signals,
     strategy_lab,
@@ -159,6 +160,10 @@ app.include_router(dark_signals_live.router)
 # /signals/<literal> and would swallow this page into a 404.
 app.include_router(entry_features.router)
 app.include_router(structural_snap.router)
+# Before signal_detail, same reason: /signals/{signal_id} swallows any
+# literal. The route object sits in app.routes looking registered either
+# way — the route list is not the authority, the request is.
+app.include_router(ai_governor.router)
 # Before signal_detail, same reason: /signals/{signal_id} swallows any literal.
 app.include_router(structural_veto.router)
 # Before signal_detail, same reason: /signals/{signal_id} swallows any literal.
