@@ -175,3 +175,17 @@ def test_lane_state_separates_not_configured_from_off_and_from_working():
         {"measure_enabled": True, "provider_configured": True, "apply_enabled": True}
     ) == "enforcing"
     assert page.lane_state({}) == "unknown"
+
+
+def test_a_partial_payload_renders_rather_than_500ing(monkeypatch):
+    """An engine that publishes SOME of the block must not take the page down.
+
+    `classify` short-circuits a wholly-absent payload to NOT REPORTED, so the
+    dangerous case is the partial one: a build that reports `measure_enabled`
+    and not yet `armed_arms`. This repo's convention is that a template adapts
+    to the engine's shape rather than crashing on drift — the engine REST
+    surface is the source of truth and ops follows it.
+    """
+    body = _get(monkeypatch, diag={"measure_enabled": True})
+    assert "AI Trade Governor" in body
+    assert "NOT CONFIGURED" in body or "MEASUREMENT OFF" in body

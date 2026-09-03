@@ -56,7 +56,7 @@
   <table>
     <tr><th>Measurement</th><td>{{ 'ON' if diag.get('measure_enabled') else 'OFF' }}</td></tr>
     <tr><th>Apply (user-visible effect)</th><td>{{ 'ON' if diag.get('apply_enabled') else 'OFF — owner sign-off to arm' }}</td></tr>
-    <tr><th>Armed arms</th><td>{{ diag.get('armed_arms') | join(', ') or '—' }}</td></tr>
+    <tr><th>Armed arms</th><td>{{ (diag.get('armed_arms') or []) | join(', ') or '—' }}</td></tr>
     <tr><th>Provider</th><td>{{ diag.get('provider') or '—' }}
       {% if not diag.get('provider_configured') %}<span class="warn">(no key set)</span>{% endif %}</td></tr>
     <tr><th>Model asked for</th><td><code>{{ diag.get('model_requested') or '—' }}</code></td></tr>
