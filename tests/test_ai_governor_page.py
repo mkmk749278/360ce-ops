@@ -560,10 +560,12 @@ def test_a_failing_scorecard_does_not_take_the_rest_of_the_page_with_it(monkeypa
     """The whole point of the two-entry split.
 
     The scorecard parses the closed-signal record off disk; the arms, bounds and
-    refusals do not. Fetched together, a slow or broken record took the lane's
-    own state down with it — which is exactly what happened in production, where
-    `read.ai_governor` blew its 25s budget while every other catalog entry
-    answered in 0.0s.
+    refusals do not. Fetched together, a slow or broken record would take the
+    lane's own state down with it.
+
+    Stated as the precaution it is: the production timeout that prompted the
+    split was later measured to be engine warm-up, not the parse. The property
+    below is still worth holding — the story first attached to it was not.
     """
     async def fake_run(self, key, args=None):
         if key == "read.ai_governor_scorecard":

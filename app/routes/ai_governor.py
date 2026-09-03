@@ -303,11 +303,15 @@ async def ai_governor(request: Request):
         raw = {"error": f"{type(exc).__name__}: {exc}"}
 
     # A SECOND call, on purpose. The scorecard parses the closed-signal record
-    # off disk; folded into the entry above it made `read.ai_governor` blow its
-    # 25s budget in production while every other catalog entry answered in
-    # 0.0s. Two costs, two entries — and fetched separately here so a slow or
-    # absent scorecard cannot take the arms, bounds and refusals down with it.
-    # This page renders whatever half it got.
+    # off disk, and a read that touches the filesystem should not be able to
+    # take the lane's own state down with it — this page renders whatever half
+    # it got.
+    #
+    # It is NOT split because the parse was slow. That was the first
+    # explanation for a 25s timeout on `read.ai_governor`, and measuring the
+    # deployed engine refuted it: the parsing entry answers in 0.145s while the
+    # light one timed out during warm-up and answered in 0.001s once settled.
+    # The separation is a precaution, not a diagnosis.
     try:
         raw_score = await api.diag_run("read.ai_governor_scorecard", {})
     except Exception as exc:  # pragma: no cover - defensive
