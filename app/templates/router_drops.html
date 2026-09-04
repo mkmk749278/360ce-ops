@@ -126,6 +126,157 @@
 </div>
 
 <div class="card">
+  <h2>The per-channel cap — armed, or the book left unbounded</h2>
+
+  {% if not chancap.available %}
+    <span class="badge badge-warn">NOT REPORTED</span>
+    <p class="muted small">
+      This engine publishes no <code>channel_cap</code> block — almost certainly
+      one predating it. That is <strong>not</strong> a cap that blocked nothing,
+      which would report zeroes with a mode beside them; the next move is a
+      deploy, not a reading.
+    </p>
+  {% else %}
+    {% if not chancap.mode_known %}
+      <span class="badge badge-bad">UNKNOWN MODE</span>
+    {% elif chancap.unbounded %}
+      <span class="badge badge-warn">OFF — BOOK UNBOUNDED</span>
+    {% elif chancap.armed %}
+      <span class="badge badge-ok">ENFORCING</span>
+    {% else %}
+      <span class="badge badge-ok">OFF — BOOK CEILING SET</span>
+    {% endif %}
+
+    <p class="small">
+      {% if chancap.armed %}
+        A channel may hold at most its own limit of concurrent signals.
+        <code>360_SCALP</code> is the only fully-live channel, so this is in
+        practice a cap on the <strong>whole book</strong> across 17 paths — at
+        most that many paths can be represented at once, and the path
+        submitting the most candidates holds the slots by arithmetic.
+      {% elif chancap.mode_known %}
+        The per-channel cap holds nothing (owner, 2026-09-04). Each path is
+        bounded by its own same-direction budget instead — see the panel below
+        for what that budget is and whether it has ever fired.
+      {% else %}
+        The engine reported a mode this page has never heard of
+        (<code>{{ chancap.mode }}</code>). The counts below are still the
+        engine's own; the wording above is not, so read the raw payload.
+      {% endif %}
+      Book ceiling:
+      {% if chancap.book_off %}
+        <strong>off</strong> — a decision, not an unset value.
+      {% else %}
+        <strong>{{ chancap.book_limit }}</strong> concurrent signals across
+        every channel and path.
+      {% endif %}
+    </p>
+
+    {% if chancap.unbounded %}
+      <p class="small">
+        <strong>With both bounds off, nothing bounds the SIZE of the book.</strong>
+        A per-path budget bounds a path, never the sum of them, so the ceiling
+        is live paths x per-path budget x 2 directions. Nothing bounds a user's
+        concurrent <em>position count</em> either — <code>assert_position_cap</code>
+        bounds an order's notional — so that number is each auto-trade user's
+        maximum simultaneous exposure divided by their position size. The book
+        ceiling is re-armable from Control without a redeploy.
+      </p>
+    {% endif %}
+
+    <h3>What the bound that is NOT armed would have done</h3>
+    <p class="muted small">
+      Both bounds are evaluated on every candidate whatever the engine applies,
+      so this is one evaluation read two ways rather than a second
+      implementation — a panel built on its own copy of the rule is how it ends
+      up disagreeing with the gate it is used to justify switching.
+    </p>
+    <table>
+      <thead><tr><th>Outcome</th><th>n</th><th>Share of evaluated</th></tr></thead>
+      <tbody>
+        {% set ev = chancap.evaluated %}
+        <tr><td>Both bounds block</td><td>{{ chancap.both_block }}</td>
+          <td>{{ '%.1f'|format(100 * chancap.both_block / ev) ~ '%' if ev else '—' }}</td></tr>
+        <tr><td>Only the per-channel cap blocks
+            <span class="muted">— these are the candidates arming it would cost</span></td>
+          <td>{{ chancap.channel_only }}</td>
+          <td>{{ '%.1f'|format(100 * chancap.channel_only / ev) ~ '%' if ev else '—' }}</td></tr>
+        <tr><td>Only the book ceiling blocks</td><td>{{ chancap.book_only }}</td>
+          <td>{{ '%.1f'|format(100 * chancap.book_only / ev) ~ '%' if ev else '—' }}</td></tr>
+        <tr><td>Neither blocks</td><td>{{ chancap.neither_blocks }}</td>
+          <td>{{ '%.1f'|format(100 * chancap.neither_blocks / ev) ~ '%' if ev else '—' }}</td></tr>
+      </tbody>
+    </table>
+    <p class="small">
+      {% if chancap.armed %}Switching the cap off{% else %}Re-arming the cap{% endif %}
+      would change the fate of <strong>{{ chancap.would_have_blocked }}</strong>
+      candidate(s) at this hop
+      {% if chancap.would_have_blocked_share is not none %}
+        ({{ '%.1f'|format(100 * chancap.would_have_blocked_share) }}% of the
+        {{ chancap.evaluated }} it saw).
+      {% else %}
+        (no candidate has reached this gate yet).
+      {% endif %}
+      <strong>Past this hop is not delivered, and delivered is not
+      profitable.</strong> Every candidate in that number still faces the
+      correlation-group limit, the same-direction cap, TP/SL sanity, four
+      staleness checks, the channel confidence floor and the risk manager below
+      this gate, and none of their outcomes is knowable — they never traded.
+      Read it as an upper bound on volume, never as an expected gain.
+    </p>
+    <p class="muted small">
+      Counters are cumulative since engine start and <strong>reset on
+      restart</strong>: in-process integers, not a ledger, so a low number after
+      a deploy is a young process rather than a quiet market.
+    </p>
+
+    {% if chancap.by_setup %}
+      <h3>Which paths that disagreement is about</h3>
+      <table>
+        <thead><tr><th>Bucket · setup</th><th>n</th></tr></thead>
+        <tbody>
+          {% for row in chancap.by_setup %}
+            <tr><td><code>{{ row.key }}</code></td><td>{{ row.n }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted small">
+        Read against each path's own volume, not alone. The path submitting the
+        most candidates loses the most to any cap — that is arithmetic, not
+        crowding out.
+      </p>
+    {% endif %}
+
+    <h3>Held right now, per channel</h3>
+    <p class="muted small">
+      A saturated bound and an absence of candidates produce the same drop
+      counter. This is what separates them.
+    </p>
+    <table>
+      <thead><tr><th>Channel</th><th>Held</th><th>Cap (if armed)</th></tr></thead>
+      <tbody>
+        {% set limits = {} %}
+        {% for lim in chancap.channel_limits %}{% set _ = limits.update({lim.channel: lim.limit}) %}{% endfor %}
+        {% for row in chancap.held_by_channel %}
+          <tr>
+            <td><code>{{ row.channel or '—' }}</code></td>
+            <td>{{ row.n }}</td>
+            <td>{{ limits.get(row.channel, '—') }}</td>
+          </tr>
+        {% else %}
+          <tr><td colspan="3" class="muted">Nothing held — the book is empty.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="small">
+      {{ chancap.held_total }} signal(s) active in total
+      {% if not chancap.book_off %} against a book ceiling of
+        {{ chancap.book_limit }}{% endif %}.
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>The same-direction cap — which budget, and what the other mode would do</h2>
 
   {% if not dircap.available %}
