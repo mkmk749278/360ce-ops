@@ -72,7 +72,17 @@ SHARED_CAPS = {
     ),
     "per_channel_cap": (
         "MAX_CONCURRENT_SIGNALS_PER_CHANNEL — 5 for 360_SCALP, 3 elsewhere. "
-        "Shared by every setup that emits on the same channel."
+        "Shared by every setup that emits on the same channel, and 360_SCALP "
+        "is the only fully-live channel, so this was in practice a cap on the "
+        "whole book across 17 paths. Switched OFF 2026-09-04 "
+        "(<code>CHANNEL_CAP_MODE</code>) — the panel below says whether these "
+        "counts came from it armed or are the counterfactual."
+    ),
+    "book_cap": (
+        "MAX_CONCURRENT_SIGNALS_BOOK — the ceiling on concurrent signals "
+        "across every channel and path. Ships at 0 (off); re-armable from ops. "
+        "Named apart from the per-channel cap on purpose: a full book and a "
+        "full channel are different findings with different fixes."
     ),
     "correlation_group_limit": (
         "MAX_SAME_DIRECTION_PER_GROUP — 3 per correlated group (~25 named "
@@ -92,6 +102,32 @@ PER_CANDIDATE = {
     "sl_sanity": "SL on the wrong side of entry",
     "channel_min_confidence": "below the channel floor, re-checked after AI enrichment",
     "watchlist_tier": "defensive — the tier was removed in the app-era reset",
+    # The three exits BELOW the twelve counted gates, stamped 2026-09-04.
+    # Until then they were bare `return`s: their drops appeared in no funnel
+    # and left a promoted dark row reading `promoted_enqueued` forever. On the
+    # live box 11 of 65 dequeued candidates (17%) went out this way.
+    "risk_manager_rr_floor": (
+        "designed R:R below the setup's floor (1.2 for most families), "
+        "re-checked here after the four geometry rewrites above"
+    ),
+    "risk_manager_symbol_concurrency": "already 2 concurrent signals on this symbol",
+    "risk_manager_same_direction_symbol": (
+        "already a same-direction signal on this symbol"
+    ),
+    "risk_manager_order_book_imbalance": "the order book opposed the entry",
+    "risk_manager_other": (
+        "the risk manager refused for a cause this page has not classified — "
+        "the engine's log carries its own words"
+    ),
+    "risk_manager_unspecified": "the risk manager refused and named no reason",
+    "no_channel_configured": (
+        "no Telegram channel id for this channel — configuration, not a market "
+        "condition, and silent for EVERY candidate on that channel until fixed"
+    ),
+    "delivery_failed": (
+        "three failed sends: the candidate never reached a channel, the app "
+        "feed, or the auto-trade fan-out"
+    ),
 }
 
 
@@ -313,6 +349,94 @@ def reduce_direction_cap(payload: dict) -> dict:
     }
 
 
+def reduce_channel_cap(payload: dict) -> dict:
+    """Whether the per-channel cap is armed, and what the unarmed bound costs.
+
+    Added 2026-09-04 with engine ``CHANNEL_CAP_MODE``, for the owner: *"we have
+    only one channel … each path has its own cap so don't keep any cap on max
+    signals of channel"*.
+
+    He is right about the shape and this panel exists because of what he is
+    right about: ``360_SCALP`` is the only fully-live channel, so a cap named
+    per-channel was a cap of 5 on the WHOLE BOOK across 17 paths — at most five
+    paths represented at once, with the highest-volume path holding the slots
+    by arithmetic. It took 45 of 56 router drops over one measured 4.9h boot,
+    and 32 of 101 promoted ``LIQUIDITY_SWEEP_REVERSAL`` rows.
+
+    Four rules, each already in this file arriving at a second cap:
+
+    * **The mode is read off the engine's payload**, never mirrored from a copy
+      of its config. The fix for a drifting mirror is not a second mirror.
+    * **The counterfactual is published whether or not the cap is armed**, and
+      it counts candidates that would survive *this hop* — not signals
+      delivered, and certainly not trades that would be profitable. Everything
+      in it still faces the correlation-group limit, the same-direction cap,
+      TP/SL sanity, four staleness checks, the channel floor and the risk
+      manager below this gate.
+    * **``0`` on the book ceiling is OFF — a decision, not an unset value**, and
+      the page says which. With both bounds off nothing bounds book SIZE at all
+      (a per-path budget bounds a path, never the sum of them), and that is
+      stated rather than left for the reader to work out.
+    * **A saturated bound and an absence of candidates read identically**
+      without occupancy, so the per-channel held table renders regardless.
+    """
+    if not isinstance(payload, dict):
+        return {"available": False, "reason": "no payload"}
+    cap = payload.get("channel_cap")
+    if not isinstance(cap, dict) or not cap:
+        # An engine predating the block, NOT a cap that dropped nothing —
+        # different next moves (deploy vs. read the numbers).
+        return {"available": False, "reason": "not_reported"}
+
+    cf = cap.get("counterfactual") or {}
+    evaluated = _i(cap.get("evaluated"))
+    mode = str(cap.get("mode") or "")
+    book_limit = _i(cap.get("book_limit"))
+    blocked = _i(cap.get("would_have_blocked"))
+
+    held = [
+        {"channel": str(k), "n": _i(v)}
+        for k, v in sorted(
+            (cap.get("held_by_channel") or {}).items(), key=lambda kv: -_i(kv[1])
+        )
+    ]
+
+    return {
+        "available": True,
+        "mode": mode,
+        "mode_known": mode in ("enforce", "off"),
+        "armed": mode == "enforce",
+        "channel_limits": [
+            {"channel": str(k), "limit": _i(v)}
+            for k, v in sorted((cap.get("channel_limits") or {}).items())
+        ],
+        "book_limit": book_limit,
+        "book_off": book_limit == 0,
+        # The state the owner switched into: neither bound armed, so the only
+        # thing bounding book size is the per-path same-direction budget.
+        "unbounded": mode != "enforce" and book_limit == 0,
+        "evaluated": evaluated,
+        "both_block": _i(cf.get("both_block")),
+        "channel_only": _i(cf.get("channel_only")),
+        "book_only": _i(cf.get("book_only")),
+        "neither_blocks": _i(cf.get("neither_blocks")),
+        "would_have_blocked": blocked,
+        "would_have_blocked_share": cap.get("would_have_blocked_share"),
+        # Which paths the unarmed bound would have taken from. "This cap costs
+        # 45 drops" and "this cap costs ONE path 45 drops" are different
+        # findings and only the second one is crowding-out.
+        "by_setup": [
+            {"key": k, "n": _i(v)}
+            for k, v in sorted(
+                (cap.get("counterfactual_by_setup") or {}).items(),
+                key=lambda kv: -_i(kv[1]),
+            )
+        ],
+        "held_by_channel": held,
+        "held_total": _i(cap.get("held_total")),
+    }
+
+
 def concentration(reduced: dict) -> list[dict]:
     """Per setup, across the SHARED caps only — the crowding-out question.
 
@@ -357,6 +481,7 @@ async def router_drops(request: Request):
             "lock": reduce_position_lock(payload),
             "by_setup": concentration(reduced),
             "dircap": reduce_direction_cap(payload),
+            "chancap": reduce_channel_cap(payload),
             "error": error,
             "raw": payload,
         },
