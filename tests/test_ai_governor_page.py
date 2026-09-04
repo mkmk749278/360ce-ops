@@ -671,3 +671,49 @@ def test_the_stub_scorecard_matches_the_engines_shape():
     )
     assert set(STUB_SCORECARD["arms"]) == set(real["arms"])
     assert set(STUB_SCORECARD["coverage"]) >= set(real["coverage"]) - {"record_error"}
+
+
+# ── Verdict age — the counter that could not name its own cause ─────────────
+
+
+def test_the_verdict_age_block_is_where_the_engine_ACTUALLY_puts_it():
+    """Driven against the engine's own assembler, not a shape this page hoped
+    for. The price-action lane card shipped reading a block off the top level
+    while the engine nested it under `derived` — every ops test green over a
+    card that would render NOT REPORTED in production.
+    """
+    diag = _engine_diag()
+    assert "verdict_age" in diag["health"], "the age block is under health"
+    assert "verdict_max_age_sec" in diag["bounds"], (
+        "the bound must travel with the payload — a duration with no threshold "
+        "beside it cannot be read, and a second copy of the config here is the "
+        "drifting mirror this repo has paid for under several names"
+    )
+
+
+def test_the_age_panel_renders_the_bound_beside_the_age(monkeypatch):
+    diag = _engine_diag()
+    diag["health"]["verdict_age"] = {
+        "n": 18, "stale_n": 6, "max_sec": 41.2,
+        "samples": [
+            {"action": "MAINTAIN", "age_sec": 3.1, "stale": False},
+            {"action": "ADJUST_SL", "age_sec": 41.2, "stale": True},
+        ],
+    }
+    diag["bounds"]["verdict_max_age_sec"] = 10.0
+
+    html = _get(monkeypatch, diag=diag)
+    assert "Verdict age" in html
+    assert "41.2" in html, "the oldest age is on screen"
+    assert "aged out" in html, "and a late verdict is badged, not left to arithmetic"
+    assert "ADJUST_SL" in html
+
+
+def test_an_unmeasured_age_says_NOTHING_MEASURED_never_zero(monkeypatch):
+    """Blank needs a cause before it gets a caption. `0.0s` over a lane that
+    has never reached the apply path reads as a healthy clock."""
+    diag = _engine_diag()
+    diag["health"]["verdict_age"] = {"n": 0, "stale_n": 0, "max_sec": 0.0, "samples": []}
+
+    html = _get(monkeypatch, diag=diag)
+    assert "nothing measured" in html.lower()

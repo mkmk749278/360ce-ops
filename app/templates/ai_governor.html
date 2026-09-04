@@ -222,6 +222,49 @@
   </p>
 </div>
 
+<div class="card">
+  <h2>Verdict age <span class="muted small">— how late, not just that it was late</span></h2>
+  {% if verdict_age.get('n') %}
+    <table>
+      <tr><th>Verdicts measured</th><td>{{ verdict_age.n }}</td></tr>
+      <tr><th>Aged out</th>
+          <td>{{ verdict_age.stale_n }}
+            {%- if verdict_age.n %} <span class="muted small">of {{ verdict_age.n }}</span>{% endif %}</td></tr>
+      <tr><th>Oldest seen</th><td>{{ verdict_age.max_sec | secs }}</td></tr>
+      <tr><th>The bound it is judged against</th>
+          <td>{% if bounds.get('verdict_max_age_sec') is not none %}{{ bounds.verdict_max_age_sec | secs }}{% else %}<span class="muted">not reported</span>{% endif %}</td></tr>
+    </table>
+    {% if verdict_age_samples %}
+      <table>
+        <tr><th>Recent (newest first)</th><th>Age</th><th></th></tr>
+        {% for row in verdict_age_samples %}
+        <tr><td><code>{{ row.action }}</code></td>
+            <td>{{ row.age_sec | secs }}</td>
+            <td>{% if row.stale %}<span class="warn">aged out</span>{% else %}<span class="muted small">in time</span>{% endif %}</td></tr>
+        {% endfor %}
+      </table>
+      <p class="muted small">
+        The last {{ verdict_age_samples | length }} of {{ verdict_age.n }}. A bounded
+        ring, published beside the unbounded count so the newest few can never
+        read as the whole population.
+      </p>
+    {% endif %}
+    <p class="muted small">
+      Measured for <strong>every</strong> verdict, <code>MAINTAIN</code> included.
+      <code>MAINTAIN</code> returns before the staleness check, so the refusal is
+      only ever observable on the arms that would have acted — measured only
+      there, an "all of them aged out" reading is a fact about those arms rather
+      than about the lane's clock, and there is no denominator to read it
+      against.
+    </p>
+  {% else %}
+    <p class="muted">
+      No verdict has reached the apply path yet.
+      Not zero lateness — nothing measured.
+    </p>
+  {% endif %}
+</div>
+
 {% if provider_status %}
 <div class="card">
   <h2>Provider outcomes</h2>
