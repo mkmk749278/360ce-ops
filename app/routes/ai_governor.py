@@ -342,6 +342,11 @@ async def ai_governor(request: Request):
             "undecidable_rows": annotate(block.get("undecidable"), UNDECIDABLE_COPY),
         })
 
+    # Read the SAMPLES newest-first, like the provider-failure ring: the most
+    # recent verdict is the one a reader is asking about.
+    _age = health.get("verdict_age") or {}
+    _age_samples = list(reversed(_age.get("samples") or []))
+
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "ai_governor.html",
@@ -356,6 +361,13 @@ async def ai_governor(request: Request):
             "bounds": bounds,
             "arms": diag.get("arms") or [],
             "refusals": annotate(health.get("refusals"), REFUSAL_COPY),
+            # How OLD the verdicts were when the apply path looked at them.
+            # `stale_verdict` counted the event and never the age, and one
+            # second and ninety seconds are the same integer there with
+            # opposite fixes — widen the bound, or fix the drain cadence.
+            # `place_failed` on the trail-governor page, one lane over.
+            "verdict_age": _age,
+            "verdict_age_samples": _age_samples,
             "throttles": annotate(health.get("throttles"), THROTTLE_COPY),
             "actions": annotate(health.get("by_action"), {}),
             "provider_status": annotate(health.get("provider_status"), {}),
