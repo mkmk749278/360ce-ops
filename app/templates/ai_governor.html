@@ -258,6 +258,66 @@
         read as the whole population.
       </p>
     {% endif %}
+    {% if age_floor.get('measurable') %}
+      <h3>…and the floor it cannot go under</h3>
+      <table>
+        <tr><th>Model round trip <span class="muted small">(mean)</span></th>
+            <td>{{ age_floor.model_mean_sec | secs }}</td></tr>
+        <tr><th>Achieved sweep interval <span class="muted small">(p50)</span></th>
+            <td>{{ age_floor.sweep_p50_sec | secs }}
+              {%- if sweep_period.get('max_sec') %}
+                <span class="muted small">· worst {{ sweep_period.max_sec | secs }}
+                  over {{ sweep_period.get('n') }} intervals</span>
+              {%- endif %}</td></tr>
+        <tr><th>Floor — the fastest a verdict can arrive</th>
+            <td><strong>{{ age_floor.floor_sec | secs }}</strong></td></tr>
+        <tr><th>The bound</th><td>{{ age_floor.bound_sec | secs }}</td></tr>
+        <tr><th>Headroom</th>
+            <td>{% if age_floor.get('bound_below_floor') %}
+                  <span class="warn">{{ age_floor.headroom_sec | secs }} — the bound is BELOW the floor</span>
+                {% else %}{{ age_floor.headroom_sec | secs }}{% endif %}</td></tr>
+      </table>
+      {% if age_floor.get('bound_below_floor') %}
+        <p class="warn">
+          <strong>At the cadence measured right now, no verdict can pass this
+          bound.</strong> It is not acting as a staleness rule in this state —
+          what it refuses is decided by our own loop rather than by the world
+          having moved.
+        </p>
+      {% endif %}
+      <p class="muted small">
+        <strong>Read the floor as a reading, not a constant.</strong> It tracks
+        the monitor loop, and the loop moves: measured 2026-09-06 at
+        <code>10.83s</code> on one window and <code>9.57s</code> about an hour
+        later, entirely because the achieved sweep interval fell from
+        <code>7.98s</code> to <code>6.97s</code> — a swing wider than the
+        headroom either reading showed. So a bound sitting within a second of
+        this figure is not reliably passing or reliably failing; which verdicts
+        survive is decided by loop jitter. That is consistent with the
+        historical <code>41.7%</code> aged-out rate and it is the reason to
+        watch the worst interval above rather than the p50 alone. One window is
+        not a verdict on the bound.
+      </p>
+      <p class="muted small">
+        A verdict is stamped at the sweep tick that <em>launches</em> its
+        request, the model answers some seconds later, and the queue is not
+        drained until the <strong>next</strong> sweep — so the floor is the
+        round trip plus one sweep interval and nothing can be younger. The two
+        terms have opposite fixes: the round trip moves with the provider, the
+        batch size or the bound; the sweep interval moves with the drain cadence
+        and no model change touches it.
+        <code>MONITOR_POLL_INTERVAL</code> is the sleep the loop asks for, not
+        the period it achieves — the figure above is measured.
+        Every number here is the engine's own; ops computes none of it.
+      </p>
+    {% elif age_floor.get('reason') %}
+      <p class="muted small">
+        Floor not yet measurable —
+        <code>{{ age_floor.get('reason') }}</code>. Not a floor of zero:
+        nothing has been measured. A bound with an unmeasured floor beside it
+        cannot be told from one with headroom.
+      </p>
+    {% endif %}
     <p class="muted small">
       The bound is <strong>derived from the loop, not configured</strong>: the
       floor above, the slowest recent tick x1.5, and a hard 60s cap. A verdict is

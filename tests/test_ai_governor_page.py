@@ -174,6 +174,85 @@ def test_the_keys_this_page_reads_are_the_keys_the_engine_writes():
     for key in ("calls_per_signal", "calls_per_hour", "usd_per_day",
                 "panic_max_positions", "panic_armed"):
         assert key in diag["bounds"], f"engine no longer publishes bounds.{key!r}"
+    # The floor block, and it is at the TOP level rather than under `bounds` —
+    # the price-action lane card rendered NOT REPORTED against a real engine
+    # because an ops fixture put a block where the reader assumed it and then
+    # agreed with itself about the location. Asserted where it actually lands.
+    assert "verdict_age_floor" in diag, "engine no longer publishes the floor"
+    assert "verdict_age_floor" not in diag["bounds"], (
+        "the floor is top-level; if it moves under bounds this page reads a dash"
+    )
+    assert "sweep_period" in diag["health"], (
+        "engine no longer publishes the achieved sweep interval"
+    )
+
+
+def test_the_floor_renders_and_names_a_bound_it_sits_under(monkeypatch):
+    """The defect this block exists to make visible.
+
+    Measured in production 2026-09-06, minutes after the engine deploy:
+    `floor_sec` 10.83 against `bound_sec` 10.0 — the bound is unreachable, and
+    the dominant term is the achieved sweep interval (7.98s) rather than the
+    model round trip (2.85s). Those have opposite fixes. Before this block the
+    page could only show that verdicts were late, never that they could not
+    possibly be early.
+    """
+    payload = _engine_diag()
+    payload["verdict_age_floor"] = {
+        "measurable": True, "bound_sec": 10.0, "floor_sec": 10.83,
+        "model_mean_sec": 2.851, "sweep_p50_sec": 7.979,
+        "bound_below_floor": True, "headroom_sec": -0.83,
+        "stale_frac": 0.0, "n": 4,
+    }
+    payload.setdefault("health", {})["verdict_age"] = {
+        "n": 4, "stale_n": 0, "max_sec": 9.4, "samples": [],
+    }
+    payload["health"]["sweep_period"] = {"n": 120, "p50_sec": 7.979, "max_sec": 11.4}
+    body = _get(monkeypatch, diag=payload)
+    assert "the bound is BELOW the floor" in body
+    # Scoped to the measured cadence, not asserted as a permanent property.
+    # The floor tracks the monitor loop and the loop MOVES: measured 10.83s on
+    # one window and 9.57s an hour later, flipping `bound_below_floor` from
+    # true to false. An absolute caption over a moving measurement is the
+    # constant-asserting-a-property-of-a-moving-system defect, and this page's
+    # first cut carried one.
+    assert "At the cadence measured right now" in body
+    assert "Read the floor as a reading, not a constant" in body
+    # Both terms on screen, because one is the provider's and one is ours.
+    assert "Achieved sweep interval" in body
+    assert "Model round trip" in body
+    # The WORST interval beside the p50, because the bound sits inside the
+    # spread and a median alone cannot show that.
+    assert "worst" in body
+
+
+def test_an_unmeasured_floor_is_not_a_floor_of_zero(monkeypatch):
+    """Three states, not two. An unmeasured floor rendered as a clean one is
+    the flattering direction of the same error, and it would make a bound look
+    like it had headroom nobody has ever shown it to have."""
+    payload = _engine_diag()
+    payload["verdict_age_floor"] = {"measurable": False, "reason": "no_split_samples",
+                                    "bound_sec": 10.0}
+    payload.setdefault("health", {})["verdict_age"] = {
+        "n": 1, "stale_n": 0, "max_sec": 1.0, "samples": [],
+    }
+    body = _get(monkeypatch, diag=payload)
+    assert "Floor not yet measurable" in body
+    assert "no_split_samples" in body
+    assert "the bound is BELOW the floor" not in body
+
+
+def test_an_engine_predating_the_floor_renders_the_page_anyway(monkeypatch):
+    """A missing block is an older engine, never a floor of zero — and it must
+    not take the rest of the card down with it."""
+    payload = _engine_diag()
+    payload.pop("verdict_age_floor", None)
+    payload.setdefault("health", {})["verdict_age"] = {
+        "n": 1, "stale_n": 0, "max_sec": 1.0, "samples": [],
+    }
+    body = _get(monkeypatch, diag=payload)
+    assert "Verdict age" in body
+    assert "the bound is BELOW the floor" not in body
 
 
 def test_classify_grades_the_real_engine_payload_as_ok():

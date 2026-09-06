@@ -368,6 +368,26 @@ async def ai_governor(request: Request):
             # `place_failed` on the trail-governor page, one lane over.
             "verdict_age": _age,
             "verdict_age_samples": _age_samples,
+            # The bound read against what the pipeline can actually DELIVER.
+            # A duration with no threshold beside it was the first half of this
+            # defect; a threshold with no FLOOR beside it is the second, and it
+            # is the one that let a 10s bound sit under an 10.8s floor while
+            # every row on the page looked merely unlucky. Ops computes none of
+            # it — the engine measures its own cadence and publishes the
+            # arithmetic, because a second implementation of a floor is a mirror
+            # that drifts in the flattering direction.
+            "age_floor": (
+                diag.get("verdict_age_floor")
+                if isinstance(diag.get("verdict_age_floor"), dict)
+                else {}
+            ),
+            # The achieved sweep interval, which is one of the floor's two
+            # terms and the one nobody had ever measured.
+            "sweep_period": (
+                health.get("sweep_period")
+                if isinstance(health.get("sweep_period"), dict)
+                else {}
+            ),
             "throttles": annotate(health.get("throttles"), THROTTLE_COPY),
             "actions": annotate(health.get("by_action"), {}),
             "provider_status": annotate(health.get("provider_status"), {}),
