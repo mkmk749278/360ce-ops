@@ -207,12 +207,23 @@ def test_the_floor_renders_and_names_a_bound_it_sits_under(monkeypatch):
     payload.setdefault("health", {})["verdict_age"] = {
         "n": 4, "stale_n": 0, "max_sec": 9.4, "samples": [],
     }
+    payload["health"]["sweep_period"] = {"n": 120, "p50_sec": 7.979, "max_sec": 11.4}
     body = _get(monkeypatch, diag=payload)
     assert "the bound is BELOW the floor" in body
-    assert "No verdict can pass this bound" in body
+    # Scoped to the measured cadence, not asserted as a permanent property.
+    # The floor tracks the monitor loop and the loop MOVES: measured 10.83s on
+    # one window and 9.57s an hour later, flipping `bound_below_floor` from
+    # true to false. An absolute caption over a moving measurement is the
+    # constant-asserting-a-property-of-a-moving-system defect, and this page's
+    # first cut carried one.
+    assert "At the cadence measured right now" in body
+    assert "Read the floor as a reading, not a constant" in body
     # Both terms on screen, because one is the provider's and one is ours.
     assert "Achieved sweep interval" in body
     assert "Model round trip" in body
+    # The WORST interval beside the p50, because the bound sits inside the
+    # spread and a median alone cannot show that.
+    assert "worst" in body
 
 
 def test_an_unmeasured_floor_is_not_a_floor_of_zero(monkeypatch):

@@ -255,7 +255,11 @@
         <tr><th>Model round trip <span class="muted small">(mean)</span></th>
             <td>{{ age_floor.model_mean_sec | secs }}</td></tr>
         <tr><th>Achieved sweep interval <span class="muted small">(p50)</span></th>
-            <td>{{ age_floor.sweep_p50_sec | secs }}</td></tr>
+            <td>{{ age_floor.sweep_p50_sec | secs }}
+              {%- if sweep_period.get('max_sec') %}
+                <span class="muted small">· worst {{ sweep_period.max_sec | secs }}
+                  over {{ sweep_period.get('n') }} intervals</span>
+              {%- endif %}</td></tr>
         <tr><th>Floor — the fastest a verdict can arrive</th>
             <td><strong>{{ age_floor.floor_sec | secs }}</strong></td></tr>
         <tr><th>The bound</th><td>{{ age_floor.bound_sec | secs }}</td></tr>
@@ -266,11 +270,25 @@
       </table>
       {% if age_floor.get('bound_below_floor') %}
         <p class="warn">
-          <strong>No verdict can pass this bound.</strong> It is not a staleness
-          rule in this state — it refuses everything, and what it refuses is
-          decided by our own cadence rather than by the world having moved.
+          <strong>At the cadence measured right now, no verdict can pass this
+          bound.</strong> It is not acting as a staleness rule in this state —
+          what it refuses is decided by our own loop rather than by the world
+          having moved.
         </p>
       {% endif %}
+      <p class="muted small">
+        <strong>Read the floor as a reading, not a constant.</strong> It tracks
+        the monitor loop, and the loop moves: measured 2026-09-06 at
+        <code>10.83s</code> on one window and <code>9.57s</code> about an hour
+        later, entirely because the achieved sweep interval fell from
+        <code>7.98s</code> to <code>6.97s</code> — a swing wider than the
+        headroom either reading showed. So a bound sitting within a second of
+        this figure is not reliably passing or reliably failing; which verdicts
+        survive is decided by loop jitter. That is consistent with the
+        historical <code>41.7%</code> aged-out rate and it is the reason to
+        watch the worst interval above rather than the p50 alone. One window is
+        not a verdict on the bound.
+      </p>
       <p class="muted small">
         A verdict is stamped at the sweep tick that <em>launches</em> its
         request, the model answers some seconds later, and the queue is not
