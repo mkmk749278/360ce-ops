@@ -232,7 +232,16 @@
             {%- if verdict_age.n %} <span class="muted small">of {{ verdict_age.n }}</span>{% endif %}</td></tr>
       <tr><th>Oldest seen</th><td>{{ verdict_age.max_sec | secs }}</td></tr>
       <tr><th>The bound it is judged against</th>
+          <td>{% if bounds.get('verdict_max_age_effective_sec') is not none %}{{ bounds.verdict_max_age_effective_sec | secs }}
+                <span class="muted small">enforced</span>
+              {% elif bounds.get('verdict_max_age_sec') is not none %}{{ bounds.verdict_max_age_sec | secs }}
+              {% else %}<span class="muted">not reported</span>{% endif %}</td></tr>
+      <tr><th>Configured floor</th>
           <td>{% if bounds.get('verdict_max_age_sec') is not none %}{{ bounds.verdict_max_age_sec | secs }}{% else %}<span class="muted">not reported</span>{% endif %}</td></tr>
+      <tr><th>Observed monitor tick</th>
+          <td>{% if bounds.get('observed_tick_sec') %}{{ bounds.observed_tick_sec | secs }}
+                <span class="muted small">slowest recent</span>
+              {% else %}<span class="muted">not measured yet</span>{% endif %}</td></tr>
     </table>
     {% if verdict_age_samples %}
       <table>
@@ -250,6 +259,12 @@
       </p>
     {% endif %}
     <p class="muted small">
+      The bound is <strong>derived from the loop, not configured</strong>: the
+      floor above, the slowest recent tick x1.5, and a hard 60s cap. A verdict is
+      queued in one tick and drained in the next, so a fixed bound smaller than
+      the tick refuses everything &mdash; which is what 7-of-8 aged out meant, on
+      a loop measured at 7&ndash;20s against a 10s constant. Both numbers render
+      because a reader needs to know which one binds.
       Measured for <strong>every</strong> verdict, <code>MAINTAIN</code> included.
       <code>MAINTAIN</code> returns before the staleness check, so the refusal is
       only ever observable on the arms that would have acted — measured only

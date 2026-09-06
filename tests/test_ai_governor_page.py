@@ -717,3 +717,33 @@ def test_an_unmeasured_age_says_NOTHING_MEASURED_never_zero(monkeypatch):
 
     html = _get(monkeypatch, diag=diag)
     assert "nothing measured" in html.lower()
+
+
+def test_the_enforced_bound_leads_and_the_configured_floor_sits_beside_it(monkeypatch):
+    """The floor is not what refuses a verdict. Rendering only the configured
+    number would tell a reader a 15s verdict was late against a 30s bound.
+    """
+    diag = _engine_diag()
+    diag["health"]["verdict_age"] = {
+        "n": 8, "stale_n": 7, "max_sec": 20.1,
+        "samples": [{"action": "ADJUST_SL", "age_sec": 20.1, "stale": True}],
+    }
+    diag["bounds"]["verdict_max_age_sec"] = 10.0
+    diag["bounds"]["verdict_max_age_effective_sec"] = 30.0
+    diag["bounds"]["observed_tick_sec"] = 20.0
+
+    html = _get(monkeypatch, diag=diag)
+    assert "Observed monitor tick" in html
+    assert "Configured floor" in html
+    assert "enforced" in html
+
+
+def test_an_unmeasured_tick_says_so_rather_than_rendering_zero(monkeypatch):
+    """`observed_tick_sec: None` is an engine that has not swept twice — not a
+    loop running at 0s. Blank needs a cause before it gets a caption."""
+    diag = _engine_diag()
+    diag["health"]["verdict_age"] = {"n": 1, "stale_n": 0, "max_sec": 1.0, "samples": []}
+    diag["bounds"]["observed_tick_sec"] = None
+
+    html = _get(monkeypatch, diag=diag)
+    assert "not measured yet" in html
