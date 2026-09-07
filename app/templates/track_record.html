@@ -146,6 +146,104 @@
   {% endif %}
 </section>
 
+<section class="card">
+  <h2>Entry fidelity
+    <span class="muted small">— the same exits, priced from the tape</span>
+  </h2>
+
+  <p class="muted small">
+    <code>entry</code> on every row above is the close of the candle the evaluator
+    triggered on. The order goes out seconds later, and on a continuation setup price
+    has usually kept moving in the signal&#39;s direction over those seconds &mdash; so the
+    stamped entry is systematically <em>better</em> than the price that was available,
+    and the difference is booked as profit. Measured against Binance&#39;s own 1m tape
+    (2026-09-07, 605 of the 652 rows closed in the 30 days to 09-06): mean drift
+    <strong>+0.226%</strong>, already moved with the trade on <strong>67%</strong> of
+    rows. Nothing above is recomputed &mdash; this is published <strong>beside</strong> the
+    recorded book, and there is deliberately no blended third number.
+  </p>
+
+  <div class="summary-row">
+    <span class="stat"><span class="n">{{ fidelity.priced }}/{{ fidelity.rows }}</span>
+      priced ({{ "%.1f"|format(fidelity.coverage_pct) }}% coverage)</span>
+  </div>
+
+  {% if fidelity.priced %}
+  <div class="summary-row">
+    <span class="stat"><span class="n">{{ "%+.3f"|format(fidelity.drift_mean_pct) }}%</span> mean drift</span>
+    <span class="stat muted"><span class="n">{{ "%+.3f"|format(fidelity.drift_median_pct) }}%</span> median</span>
+    <span class="stat"><span class="n">{{ "%.0f"|format(fidelity.drift_positive_pct) }}%</span> already moved with the trade</span>
+  </div>
+  <table class="tight">
+    <thead><tr><th></th><th>avg / trade</th><th>total</th><th>win</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Recorded</td>
+        <td class="{% if fidelity.book_avg_pct > 0 %}pos{% elif fidelity.book_avg_pct < 0 %}neg{% endif %}">{{ "%+.3f"|format(fidelity.book_avg_pct) }}%</td>
+        <td>{{ "%+.2f"|format(fidelity.book_total_pct) }}%</td>
+        <td>{{ "%.0f"|format(fidelity.book_win_pct) }}%</td>
+      </tr>
+      <tr>
+        <td>Rebased on the observed price</td>
+        <td class="{% if fidelity.rebased_avg_pct > 0 %}pos{% elif fidelity.rebased_avg_pct < 0 %}neg{% endif %}">{{ "%+.3f"|format(fidelity.rebased_avg_pct) }}%</td>
+        <td>{{ "%+.2f"|format(fidelity.rebased_total_pct) }}%</td>
+        <td>{{ "%.0f"|format(fidelity.rebased_win_pct) }}%</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="muted small">
+    Both rows are measured on the <strong>same {{ fidelity.priced }} trades</strong> &mdash;
+    the ones carrying an observation &mdash; so the two are comparable to each other and
+    neither is comparable to the whole-book figures above it. Fees are not charged in
+    this panel; the recorded card above states the net.
+  </p>
+  {% else %}
+  <p class="muted small">
+    <strong>No row in this selection carries a first-observation stamp yet.</strong> That is
+    the expected state until a window accumulates behind the engine change &mdash; the price
+    that existed at dispatch is knowable exactly once, so there is no backfill and older
+    rows are refused rather than guessed. Not a fault.
+  </p>
+  {% endif %}
+
+  {% if fidelity.refusals %}
+  <table class="tight">
+    <thead><tr><th>Not priced</th><th>n</th><th>What it means</th></tr></thead>
+    <tbody>
+      {% for row in fidelity.refusals %}
+      <tr>
+        <td><code>{{ row.reason }}</code>{% if not row.known %} <span class="warn small">unclassified</span>{% endif %}</td>
+        <td>{{ row.n }}</td>
+        <td class="muted small">{{ row.copy }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <h3 class="small">Why some rows read &uarr;+0.00%</h3>
+  <p class="muted small">
+    <code>max_favorable_excursion_pct</code> starts at zero and only ratchets, so it
+    cannot be negative: a trade whose best moment was &minus;0.4% is recorded identically
+    to one that printed exactly its entry and to one nobody ever priced. The engine now
+    stamps an unclamped peak beside it, and the two read together are the detector.
+  </p>
+  <div class="summary-row">
+    <span class="stat"><span class="n">{{ mfe_floor.zero_mfe }}</span> rows at exactly +0.00% ({{ "%.1f"|format(mfe_floor.zero_mfe_pct) }}%)</span>
+    {% if mfe_floor.with_peak %}
+    <span class="stat"><span class="n">{{ mfe_floor.floor_rows }}</span> of those confirmed as the floor, not a reading</span>
+    <span class="stat muted"><span class="n">{{ mfe_floor.with_peak }}</span> rows carry the unclamped peak</span>
+    {% endif %}
+  </div>
+  {% if not mfe_floor.with_peak %}
+  <p class="muted small">
+    No row here carries the unclamped peak yet, so this page cannot say which of the
+    {{ mfe_floor.zero_mfe }} zeroes were measurements and which were the floor. It will
+    once the window fills &mdash; and it is not backfillable.
+  </p>
+  {% endif %}
+</section>
+
 {% if summary.n_pnl %}
 <section class="card">
   <h2>Could you hold it?

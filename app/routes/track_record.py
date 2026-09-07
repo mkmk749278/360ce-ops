@@ -55,6 +55,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
 
+from app.data_sources import entry_fidelity
 from app.reports import csv_response
 
 router = APIRouter()
@@ -301,6 +302,7 @@ def reduce_records(records: Any) -> list[dict]:
             continue
         closed = _close_time(rec)
         opened = _open_time(rec)
+        _fidelity = entry_fidelity.rebase_record(rec)
         out.append({
             "signal_id": str(rec.get("signal_id", "")),
             "symbol": str(rec.get("symbol", "")),
@@ -332,6 +334,29 @@ def reduce_records(records: Any) -> list[dict]:
             "entry": rec.get("entry"),
             "stop_loss": rec.get("stop_loss"),
             "pnl_pct": rec.get("pnl_pct"),
+            # The price that actually existed when the engine first priced this
+            # signal, and the same exit re-scored from it. ``entry`` above is
+            # the close of the candle the evaluator triggered on — not a price
+            # the trade started at — and every figure on this page divides by
+            # it. See ``app/data_sources/entry_fidelity.py``.
+            #
+            # Additive: nothing existing is recomputed. The rebased number is a
+            # SECOND column beside the recorded one, never instead of it, and
+            # there is deliberately no blended third.
+            "first_observed_price": rec.get("first_observed_price"),
+            "first_observed_source": str(rec.get("first_observed_source") or ""),
+            "first_observed_stale": bool(rec.get("first_observed_stale")),
+            "entry_drift_pct": _fidelity["drift_pct"],
+            "rebased_pnl_pct": _fidelity["rebased_pnl_pct"],
+            "rebase_refusal": _fidelity["refusal"],
+            # MFE as recorded, and the unclamped peak beside it. The recorded
+            # pair cannot cross zero, so "+0.00%" means "never went positive",
+            # "printed exactly its entry" and "never measured" at once; the
+            # peak is what tells them apart, and ``None`` is the fourth state —
+            # a row closed before the engine stamped it.
+            "mfe_pct": rec.get("max_favorable_excursion_pct"),
+            "peak_pnl_pct": rec.get("peak_pnl_pct"),
+            "trough_pnl_pct": rec.get("trough_pnl_pct"),
             "geometry_stamp_reason": geometry_stamp_reason(rec),
             "outcome": str(rec.get("outcome_label") or ""),
             "hit_sl": bool(rec.get("hit_sl")),
@@ -778,6 +803,12 @@ _TRADE_COLS = [
     "closed_iso", "entry_iso", "symbol", "direction", "setup", "regime", "outcome",
     "pair_admission", "promotion_age_sec", "promotion_change_pct",
     "entry", "pnl_pct", "net_pct", "gross_usd", "fee_usd", "net_usd",
+    # The rebased book rides the export because a spreadsheet is exactly where
+    # two populations get averaged into one. ``rebase_refusal`` travels with
+    # them so a blank is a named state rather than a missing number, and
+    # ``peak_pnl_pct`` travels beside ``mfe_pct`` for the same reason.
+    "first_observed_price", "entry_drift_pct", "rebased_pnl_pct", "rebase_refusal",
+    "mfe_pct", "peak_pnl_pct",
 ]
 
 
@@ -879,6 +910,11 @@ async def track_record(
     rows, all_rows, scoped = ctx["rows"], ctx["all_rows"], ctx["scoped"]
     decorate_money(rows, amount=amount_usdt, fee_pct=fee)
     summary = summarize(rows, amount=amount_usdt, fee_pct=fee)
+    # Measured on the rows the page is SHOWING, filters already applied — a
+    # panel computed over the whole ledger above a filtered table is not a
+    # summary of anything the reader is looking at (#90).
+    fidelity = entry_fidelity.summarise(rows)
+    mfe_floor = entry_fidelity.mfe_floor(rows)
     concurrency = peak_concurrency(rows)
     required_usdt = concurrency["peak"] * amount_usdt
     # The row cap is a RENDER bound: applied here, after every filter, never
@@ -896,6 +932,8 @@ async def track_record(
             getattr(request.app.state.settings, "local_tz_hint", "")
         ),
         "summary": summary,
+        "fidelity": fidelity,
+        "mfe_floor": mfe_floor,
         "trades": ordered[:PER_TRADE_LIMIT],
         "trades_shown": min(len(ordered), PER_TRADE_LIMIT),
         "trades_capped": len(ordered) > PER_TRADE_LIMIT,
