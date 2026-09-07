@@ -181,7 +181,13 @@ def summarise(rows: Iterable[dict]) -> dict:
             {
                 "reason": reason,
                 "n": count,
-                "copy": REFUSAL_COPY.get(reason, ""),
+                # NOT ``copy``: Jinja resolves ``row.copy`` to ``dict.copy``
+                # and renders the builtin at the reader. This repo has paid for
+                # that collision twice — ``/system/redis`` on ``keys`` and the
+                # AI-governor throttle table on ``copy`` itself — and I hit it a
+                # third time here, caught by RENDERING the page rather than by a
+                # test, because dict access in Python works perfectly.
+                "meaning": REFUSAL_COPY.get(reason, ""),
                 "known": reason in REFUSAL_COPY,
             }
             for reason, count in sorted(refusals.items(), key=lambda kv: -kv[1])

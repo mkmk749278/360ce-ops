@@ -222,6 +222,23 @@ class TestSummarise:
         # or the two rows of the table would describe different populations.
         assert out["book_avg_pct"] == pytest.approx(-3.0)
 
+    def test_no_refusal_row_uses_a_key_that_shadows_a_dict_method(self):
+        """``row.copy`` resolves to ``dict.copy`` in Jinja and renders the
+        builtin at the reader. This repo has paid for that on ``keys`` and on
+        ``copy``; it happened again here and was caught by rendering the page,
+        not by a test, because dict access in Python works perfectly.
+
+        Derived over the whole vocabulary rather than one sample row, so the
+        next refusal reason is covered without anybody remembering.
+        """
+        rows = ef.summarise(
+            [{"rebase_refusal": reason} for reason in ef.REFUSAL_COPY]
+        )["refusals"]
+        assert rows, "no refusal rows produced to check"
+        for row in rows:
+            clash = set(row) & set(dir({}))
+            assert not clash, f"row key(s) {clash} shadow a dict method in Jinja"
+
     def test_an_unknown_refusal_renders_under_its_raw_name_badged(self):
         rows = [{"rebase_refusal": "some_future_reason"}]
         out = ef.summarise(rows)
