@@ -57,6 +57,7 @@ from app.routes import (
     positions,
     profit,
     pulse,
+    path_scorecard,
     raw_edge,
     referrals,
     sar_exit,
@@ -184,6 +185,7 @@ app.include_router(invalidations.router)
 app.include_router(performance.router)
 app.include_router(track_record.router)
 app.include_router(raw_edge.router)
+app.include_router(path_scorecard.router)
 app.include_router(strategy_lab.router)
 app.include_router(emission_controller.router)
 app.include_router(positions.router)

@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Path scorecard · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Per-path verdict — is this path earning its place, and can we tell yet?</h1>
+
+<div class="card">
+  <h2>What this is</h2>
+  <p class="muted small">
+    Every <code>(setup_class, side)</code> of the <strong>delivered</strong>
+    book — signals subscribers actually received — with n, distinct symbols,
+    net %, a symbol-clustered 95% interval and a verdict. It is the standing
+    version of the analysis the <strong>2026-08-13 retirements</strong> were
+    decided from, which was run by hand, once.
+  </p>
+  <p class="muted small">
+    Why it exists now. On <strong>2026-08-30</strong> the same-direction and
+    per-channel caps came off so every path could reach the feed rather than
+    <code>MOVER_TREND_PULLBACK</code> holding the slots by arithmetic. It
+    worked — MVRTP's share fell <strong>76% → 59%</strong> and every other path
+    is running 3–7× its old delivery rate. Over the ten days that followed the
+    delivered book went from <strong>+0.506%/trade</strong> (310 trades, 21
+    days) to <strong>−0.113%/trade</strong> (374 trades, 10 days), and nothing
+    in either repo could say which path, if any, was responsible.
+  </p>
+  <p class="muted small">
+    <strong>The sample floor is applied before the interval</strong>, engine
+    side. A cell under the floor reads <code>INSUFFICIENT</code> however
+    decisive its interval looks — the worst-looking cell in the current window
+    is <em>three trades</em> with an interval excluding zero, which is
+    <code>FAILED_AUCTION_RECLAIM</code>'s +0.846R on three rows with the sign
+    flipped. The interval is still shown, because hiding it would leave you
+    wondering; it just cannot produce a finding.
+  </p>
+  <p class="muted small">
+    Ops computes none of this. The interval, the floor and the verdict are the
+    engine's — a second implementation of a statistical rule is a mirror that
+    drifts in the flattering direction, and this one would drift toward
+    retiring paths.
+  </p>
+</div>
+
+{% if state == 'unreachable' %}
+  <div class="card"><p class="warn">UNREACHABLE — the engine did not answer.
+  A network or container question, not a signal-quality one.</p></div>
+{% elif state == 'not_reported' %}
+  <div class="card"><p class="warn">NOT REPORTED — the engine has no
+  <code>read.path_scorecard</code> entry. That is an engine predating this
+  page, so it is a deploy question.</p></div>
+{% elif state == 'empty' %}
+  <div class="card"><p class="muted">Reporting, and no closed signals fall in
+  the window. On a fresh ledger that is the correct and uninteresting
+  answer — it is not a fault.</p></div>
+{% else %}
+
+<div class="card">
+  <h2>The window</h2>
+  <table>
+    <tr><th>Cells drawn</th><td>{{ card.get('cells_drawn') }}
+      <span class="muted small">“best of N” is not a fact about the winner
+      until N is on screen — and here the winner is a path somebody might
+      retire</span></td></tr>
+    <tr><th>Cells carrying a verdict</th><td>{{ card.get('cells_decidable') }}
+      <span class="muted small">everything else is below the floor or spans
+      zero</span></td></tr>
+    <tr><th>Window</th><td>{{ card.get('window_days') }} days
+      <span class="muted small">bounded by age, never by count — a
+      count-bounded window on a low-volume path holds evidence from whenever
+      that path last emitted</span></td></tr>
+    <tr><th>Sample floor</th>
+        <td>{{ card.get('floor', {}).get('min_trades') }} trades
+            <em>and</em> {{ card.get('floor', {}).get('min_symbols') }} distinct symbols
+        <span class="muted small">two bounds, two failures: a handful of
+        outcomes, and one instrument's week wearing a path's name</span></td></tr>
+    <tr><th>Fee charged</th><td>{{ card.get('fee_pct') }}%
+      <span class="muted small">both legs; gross is published beside net on
+      every row, because a net figure whose fee nobody can see is a gross one
+      with a caption</span></td></tr>
+    <tr><th>Interval</th>
+        <td>symbol-clustered bootstrap, {{ card.get('bootstrap', {}).get('iters') }}
+            resamples, seed {{ card.get('bootstrap', {}).get('seed') }}
+        <span class="muted small">fixed seed — two reads of an unchanged ledger
+        must return the same interval, or resampling noise cannot be told from
+        the book moving</span></td></tr>
+    <tr><th>Rows in window</th>
+        <td>{{ card.get('coverage', {}).get('in_window') }}
+          <span class="muted small">of {{ card.get('coverage', {}).get('records_considered') }}
+          considered · {{ card.get('coverage', {}).get('undated') }} undated
+          · {{ card.get('coverage', {}).get('no_pnl') }} with no readable PnL</span></td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Retirement candidates</h2>
+  {% if card.get('retirement_error') %}
+    <p class="warn">The retirement list could not be read:
+      <code>{{ card.get('retirement_error') }}</code>. Every cell below is
+      therefore shown as live — a frozen one may be among them, and this
+      panel cannot say which.</p>
+  {% endif %}
+  {% if candidates %}
+    <table>
+      <tr><th>Path</th><th>Side</th><th>n</th><th>Net avg %</th><th>Interval top</th></tr>
+      {% for c in candidates %}
+      <tr><td><code>{{ c.setup_class }}</code></td><td>{{ c.side }}</td>
+          <td>{{ c.n }}</td><td class="warn">{{ c.net_avg_pct | pct }}</td>
+          <td>{{ c.ci_high | pct }}</td></tr>
+      {% endfor %}
+    </table>
+    <p class="muted small">
+      Named, not retired. <code>path_retirement</code> is the arming surface
+      and it is the owner's — as it was in August. A retired path keeps
+      stamping into the dark lane, so the decision can be re-read on fresh
+      evidence instead of frozen at the moment it was taken.
+    </p>
+  {% else %}
+    <p class="muted">None. No cell has both cleared the sample floor and
+    produced an interval entirely below zero.</p>
+    <p class="muted small">
+      That is a finding rather than a blank: over the current window the
+      diversified book has not yet produced enough evidence to convict any
+      path, including the ones with the worst means. Read <code>n</code> on
+      the table below before reading any average on it.
+    </p>
+  {% endif %}
+  {% if retired %}
+    <p class="muted small">Already diverted:
+      {% for r in retired %}<code>{{ r.setup_class }}:{{ r.side }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+      — retirement {{ 'is acting' if card.get('retirement_acting') else 'is SWITCHED OFF, so these are delivering' }}.
+    </p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Every cell, worst mean first</h2>
+  <table>
+    <tr><th>Path</th><th>Side</th><th>n</th><th>Symbols</th>
+        <th>Net avg %</th><th>Gross avg %</th><th>Win</th>
+        <th>95% interval</th><th>Verdict</th></tr>
+    {% for c in cells %}
+    <tr>
+      <td><code>{{ c.setup_class }}</code>
+        {%- if c.delivered_evidence_frozen %}
+          <span class="muted small" title="retired — delivered evidence stopped accumulating when it was armed">frozen</span>
+        {%- endif %}</td>
+      <td>{{ c.side }}</td>
+      <td>{{ c.n }}</td>
+      <td>{{ c.symbols }}</td>
+      <td class="{{ 'warn' if c.net_avg_pct < 0 else '' }}">{{ c.net_avg_pct | pct }}</td>
+      <td class="muted">{{ c.gross_avg_pct | pct }}</td>
+      <td>{{ (c.win_rate * 100) | round(0) | int }}%</td>
+      <td>{% if c.ci_low is not none %}[{{ c.ci_low | pct }}, {{ c.ci_high | pct }}]{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+      <td>
+        <code>{{ c.verdict }}</code>
+        {%- if c.unclassified %} <span class="warn small">unclassified</span>{% endif %}
+        <div class="muted small">{{ c.verdict_why }}</div>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted small">
+    Ordered by the engine, worst mean first, and deliberately not re-sorted
+    here. Sorting by the interval puts the thinnest and most extreme cell on
+    the top line, which is the one arrangement this page exists to avoid.
+  </p>
+  <p class="muted small">
+    A <code>frozen</code> badge means the cell is already retired: it stops
+    producing delivered rows the moment retirement is armed, so its n has
+    stopped growing and its verdict is a reading about <em>then</em>. Its live
+    evidence is in the dark lane, not here.
+  </p>
+</div>
+
+<div class="card">
+  <h2>What each verdict means</h2>
+  <table>
+    <tr><th>Verdict</th><th>What it means</th></tr>
+    {% for name, meaning in verdict_copy.items() %}
+    <tr><td><code>{{ name }}</code></td><td class="muted small">{{ meaning }}</td></tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% endif %}
+{% endblock %}

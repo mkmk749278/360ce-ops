@@ -102,6 +102,59 @@
   </p>
 </div>
 
+{% if reach %}
+<div class="card">
+  <h2>Would arming the effect flag do anything?</h2>
+  {% if reach.get('all_armed_arms_unchosen') %}
+    <p class="warn">
+      <strong>NO — every armed arm has never been chosen.</strong>
+      {{ reach.get('actionable_verdicts') }} actionable verdict(s) recorded and
+      <strong>{{ reach.get('reachable_verdicts') }}</strong> of them belong to an
+      arm that is armed. Turning apply on today would change nothing: those
+      verdicts would move from the <code>apply_off</code> refusal to
+      <code>arm_off</code>.
+    </p>
+  {% elif reach.get('actionable_verdicts') %}
+    <p>{{ reach.get('reachable_verdicts') }} of
+      {{ reach.get('actionable_verdicts') }} actionable verdict(s) belong to an
+      armed arm.</p>
+  {% else %}
+    <p class="muted">No actionable verdict yet — every verdict so far is
+    <code>MAINTAIN</code>. A lane that has not asked for anything is quiet,
+    not blocked.</p>
+  {% endif %}
+
+  <table>
+    <tr><th>Arm</th><th>Armed</th><th>Verdicts chosen it</th><th></th></tr>
+    {% for row in reach.get('arms') or [] %}
+    <tr>
+      <td><code>{{ row.arm }}</code></td>
+      <td>{{ 'yes' if row.armed else 'no' }}</td>
+      <td>{{ row.verdicts_seen }}</td>
+      <td>{% if row.armed_and_never_chosen %}<span class="warn">armed and never chosen</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+
+  <p class="muted small">
+    <code>AI_GOV_ARMS_ENABLED</code> defaults to <code>tp</code> alone, and the
+    reasoning is sound on its own terms: the TP arm is the only one fully
+    decidable from the closed-signal record, because the adjustment moves the
+    target <em>nearer</em> and <code>max_favorable_excursion_pct</code> settles
+    it with no ordering ambiguity. What nothing checked is whether the model
+    ever chooses it.
+  </p>
+  <p class="muted small">
+    Every arm renders whether or not it has fired, because the fault here is an
+    <em>absence</em>. The engine's action counter creates a key the first time
+    it is incremented, so an arm nobody has chosen has no row rather than a zero
+    one — reading it off the verdict mix means noticing something missing beside
+    a config echo in another table, which is the one thing a table of counts
+    cannot show. This is the join, published by the engine.
+  </p>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>Bounds</h2>
   <table>
@@ -242,6 +295,17 @@
           <td>{% if bounds.get('observed_tick_sec') %}{{ bounds.observed_tick_sec | secs }}
                 <span class="muted small">slowest recent</span>
               {% else %}<span class="muted">not measured yet</span>{% endif %}</td></tr>
+      <tr><th>Which one bound</th>
+          <td>{% if bounds.get('verdict_max_age_source') %}<code>{{ bounds.verdict_max_age_source }}</code>
+                <span class="muted small">
+                  {%- if bounds.verdict_max_age_source == 'derived' %}
+                    widened to the slowest recent tick
+                  {%- else %}
+                    the configured floor stands &mdash; either the loop is quick
+                    enough, or no period has been measured yet, and those are
+                    different states: check the tick above
+                  {%- endif %}</span>
+              {% else %}<span class="muted">not reported</span>{% endif %}</td></tr>
     </table>
     {% if verdict_age_samples %}
       <table>
@@ -320,11 +384,23 @@
     {% endif %}
     <p class="muted small">
       The bound is <strong>derived from the loop, not configured</strong>: the
-      floor above, the slowest recent tick x1.5, and a hard 60s cap. A verdict is
+      configured number is a <em>floor</em>, and the enforced one is that floor
+      against the slowest recent tick &times;1.5, capped at 60s. A verdict is
       queued in one tick and drained in the next, so a fixed bound smaller than
       the tick refuses everything &mdash; which is what 7-of-8 aged out meant, on
       a loop measured at 7&ndash;20s against a 10s constant. Both numbers render
       because a reader needs to know which one binds.
+      <strong>This paragraph described a derivation that did not exist until
+      2026-09-08.</strong> Ops has rendered
+      <code>verdict_max_age_effective_sec</code> and
+      <code>observed_tick_sec</code> since the panel shipped and the engine sent
+      neither, so the page fell to its &ldquo;not measured yet&rdquo; branch under
+      a sentence promising the opposite &mdash; while the enforced number stayed
+      the flat constant and sat <strong>4.1s below its own floor</strong>, where
+      no verdict could pass it. <code>verdict_age_floor</code> had published that
+      reading since #1015 and nothing consumed it. A reading with no reader, in
+      the panel an owner reads to decide whether the staleness rule is doing
+      anything.
       Measured for <strong>every</strong> verdict, <code>MAINTAIN</code> included.
       <code>MAINTAIN</code> returns before the staleness check, so the refusal is
       only ever observable on the arms that would have acted — measured only

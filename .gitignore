@@ -24,3 +24,4 @@ build/
 # that conflicted on every merge from #839 to #845, one directory over.
 logs/
 .venv-ops/
+.venv-ops/
