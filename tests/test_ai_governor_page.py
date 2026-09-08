@@ -826,3 +826,116 @@ def test_an_unmeasured_tick_says_so_rather_than_rendering_zero(monkeypatch):
 
     html = _get(monkeypatch, diag=diag)
     assert "not measured yet" in html
+
+
+# ── Would arming the effect flag do anything? ───────────────────────────────
+#
+# `AI_GOV_ARMS_ENABLED` defaults to `tp` alone, and the reasoning is sound on
+# its own terms: the TP arm is the only one fully decidable from the
+# closed-signal record. What nothing checked is whether the model ever chooses
+# it. Live 2026-09-08: 90 verdicts, MAINTAIN 56, ADJUST_SL 34, ADJUST_TP zero
+# — so arming apply would move 18 verdicts from `apply_off` to `arm_off` and
+# change nothing else. The fault is an ABSENCE in one table read against a
+# config echo in another, which is the one thing a table of counts cannot show.
+
+
+def _reach_payload(**over):
+    diag = _engine_diag()
+    block = {
+        "arms": [
+            {"arm": "tp", "armed": True, "verdicts_seen": 0,
+             "armed_and_never_chosen": True},
+            {"arm": "sl", "armed": False, "verdicts_seen": 34,
+             "armed_and_never_chosen": False},
+            {"arm": "panic", "armed": False, "verdicts_seen": 0,
+             "armed_and_never_chosen": False},
+        ],
+        "actionable_verdicts": 34,
+        "reachable_verdicts": 0,
+        "all_armed_arms_unchosen": True,
+    }
+    block.update(over)
+    diag["arm_reachability"] = block
+    return diag
+
+
+def test_the_engine_publishes_the_reachability_join():
+    """Driven against the engine's real assembler — a key this page reads that
+    the engine does not write is #817 with the arrow reversed, and the
+    producing side's own test passes either way."""
+    diag = _engine_diag()
+    assert "arm_reachability" in diag
+    block = diag["arm_reachability"]
+    for key in ("arms", "actionable_verdicts", "reachable_verdicts",
+                "all_armed_arms_unchosen"):
+        assert key in block, f"engine no longer publishes arm_reachability.{key!r}"
+    assert {r["arm"] for r in block["arms"]} == {"tp", "sl", "panic"}
+
+
+def test_the_live_shape_renders_as_a_fault(monkeypatch):
+    body = _get(monkeypatch, diag=_reach_payload())
+    assert "every armed arm has never been chosen" in body
+    assert "armed and never chosen" in body
+
+
+def test_every_arm_gets_a_row_even_with_no_verdicts(monkeypatch):
+    """The engine's action counter creates a key when first incremented, so an
+    arm nobody chose has no row rather than a zero one. A missing row reads as
+    an arm that is simply quiet, which is the opposite fact."""
+    body = _get(monkeypatch, diag=_reach_payload(
+        arms=[{"arm": a, "armed": False, "verdicts_seen": 0,
+               "armed_and_never_chosen": False} for a in ("tp", "sl", "panic")],
+        actionable_verdicts=0, reachable_verdicts=0,
+        all_armed_arms_unchosen=False))
+    for arm in ("tp", "sl", "panic"):
+        assert f"<code>{arm}</code>" in body
+
+
+def test_no_actionable_verdict_is_quiet_not_blocked(monkeypatch):
+    body = _get(monkeypatch, diag=_reach_payload(
+        actionable_verdicts=0, reachable_verdicts=0,
+        all_armed_arms_unchosen=False,
+        arms=[{"arm": a, "armed": a == "tp", "verdicts_seen": 0,
+               "armed_and_never_chosen": False} for a in ("tp", "sl", "panic")]))
+    assert "quiet,\n    not blocked" in body or "quiet" in body
+    assert "every armed arm has never been chosen" not in body
+
+
+def test_an_engine_predating_the_join_renders_no_panel(monkeypatch):
+    """Not an empty panel claiming everything is reachable — absent."""
+    diag = _engine_diag()
+    diag.pop("arm_reachability", None)
+    body = _get(monkeypatch, diag=diag)
+    assert "Would arming the effect flag do anything?" not in body
+
+
+# ── The bound the page has always described ─────────────────────────────────
+
+
+def test_the_engine_sends_the_two_bound_keys_this_page_renders(monkeypatch):
+    """This page has read `verdict_max_age_effective_sec` and
+    `observed_tick_sec` since it shipped and the engine sent neither, so it
+    fell to its "not measured yet" branch under a paragraph promising a
+    derivation — while the enforced bound stayed a flat constant sitting 4.1s
+    below its own measured floor."""
+    bounds = _engine_diag()["bounds"]
+    for key in ("verdict_max_age_sec", "verdict_max_age_effective_sec",
+                "verdict_max_age_source"):
+        assert key in bounds, f"engine no longer publishes bounds.{key!r}"
+    assert "observed_tick_sec" in bounds
+
+
+def test_which_bound_actually_bound_is_on_screen(monkeypatch):
+    diag = _engine_diag()
+    # The card is gated on there being ages to read, like its sibling above —
+    # a fresh `build_diag` has recorded no verdicts.
+    diag["health"]["verdict_age"] = {
+        "n": 8, "stale_n": 7, "max_sec": 20.1,
+        "samples": [{"action": "ADJUST_SL", "age_sec": 20.1, "stale": True}],
+    }
+    diag["bounds"]["verdict_max_age_effective_sec"] = 30.0
+    diag["bounds"]["observed_tick_sec"] = 20.0
+    diag["bounds"]["verdict_max_age_source"] = "derived"
+    body = _get(monkeypatch, diag=diag)
+    assert "Which one bound" in body
+    assert "widened to the slowest recent tick" in body

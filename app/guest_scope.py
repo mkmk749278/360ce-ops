@@ -135,6 +135,7 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/performance",
         "/performance/export.csv",
         "/performance/export.json",
+        "/path-scorecard",
         "/raw-edge",
         "/raw-edge/export.csv",
         "/raw-edge/export.json",

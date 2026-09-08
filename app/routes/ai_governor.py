@@ -359,6 +359,16 @@ async def ai_governor(request: Request):
             "lane": lane_state(diag),
             "health": health,
             "bounds": bounds,
+            # Armed arms against the arms the model actually asks for. The
+            # lane ships armed on `tp` alone and has produced ZERO ADJUST_TP
+            # verdicts against 34 ADJUST_SL, so arming the effect flag today
+            # would act on nothing — a state neither the config echo nor the
+            # verdict mix can show, because the fault is an absence in one
+            # read against a constant in the other. The ENGINE publishes the
+            # join; this page renders it.
+            "reach": diag.get("arm_reachability")
+            if isinstance(diag.get("arm_reachability"), dict)
+            else None,
             "arms": diag.get("arms") or [],
             "refusals": annotate(health.get("refusals"), REFUSAL_COPY),
             # How OLD the verdicts were when the apply path looked at them.
