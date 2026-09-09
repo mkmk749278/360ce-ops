@@ -1137,10 +1137,19 @@ def test_an_engine_predating_the_paired_entry_renders_a_deploy_question(monkeypa
     """`not_reported` is an engine that has never heard of the key, and only
     the engine's own marker means that. Every other `ok: false` is the engine
     failing to answer a key it HAS — a different next move."""
+    # Resolved BEFORE the TestClient context, never inside `fake_run`.
+    # `_engine_diag` calls `pytest.skip()` when the engine repo is not checked
+    # out beside ops — which is the case on CI — and raising that from inside
+    # the coroutine means raising it on the TestClient's anyio portal, where it
+    # surfaces as `RuntimeError: This portal is not running` instead of a skip.
+    # `_get` already resolves the payload up front for exactly this reason;
+    # these two tests build their own fake and did not.
+    lane = _engine_diag()
+
     async def fake_run(self, key, args=None):
         if key == "read.ai_governor_paired":
             return {"ok": False, "key": key, "error": "unknown catalog entry"}
-        return {"ok": True, "key": key, "result": _engine_diag()}
+        return {"ok": True, "key": key, "result": lane}
 
     monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
     with TestClient(app) as client:
@@ -1155,10 +1164,12 @@ def test_a_paired_read_that_times_out_is_not_read_as_a_missing_entry(monkeypatch
     """The 2026-09-03 defect, at the third entry. `str(ReadTimeout())` is `""`,
     so a transport failure carries a falsy `error` and no `ok` — and grading it
     on shape would tell the owner to check a deploy that is fine."""
+    lane = _engine_diag()  # before the portal — see the test above
+
     async def fake_run(self, key, args=None):
         if key == "read.ai_governor_paired":
             return {"endpoint": "/internal/diag/catalog/run", "error": ""}
-        return {"ok": True, "key": key, "result": _engine_diag()}
+        return {"ok": True, "key": key, "result": lane}
 
     monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
     with TestClient(app) as client:
