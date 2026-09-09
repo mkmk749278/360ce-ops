@@ -13,6 +13,7 @@ test green over a card that would render NOT REPORTED against the real engine.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test-secret")
@@ -1196,3 +1197,107 @@ def test_the_three_classifiers_key_on_three_different_shapes():
     assert page.classify_paired(lane) == page.STATE_NOT_REPORTED
     assert page.classify_paired(score) == page.STATE_NOT_REPORTED
     assert page.classify(pair) == page.STATE_NOT_REPORTED
+
+
+def test_the_three_engine_reads_run_concurrently_not_in_series(monkeypatch):
+    """Sequential reads made this page's latency the SUM of three deadlines.
+
+    Each `diag_run` polls the engine up to its own `DIAG_POLL_TIMEOUT_SEC`
+    (25s), and ops' client timeout is deliberately longer than that. Awaited in
+    series, three of them can exceed a minute — and the gateway in front of this
+    app gives up at 30s. Measured 2026-09-09, immediately after the third call
+    shipped: three consecutive 504s at 30.5s each, on a page that had been
+    loading in 1.3–7.2s with two.
+
+    Pinned by making each read take longer than a third of that budget: in
+    series this sleeps 0.9s, concurrently ~0.3s. A generous bound, so the
+    assertion fails on the *shape* of the change rather than on runner speed.
+    """
+    import time
+
+    lane, pair = _engine_diag(), _engine_paired()  # before the portal
+
+    async def slow_run(self, key, args=None):
+        await asyncio.sleep(0.3)
+        if key == "read.ai_governor_scorecard":
+            return {"ok": True, "key": key, "result": STUB_SCORECARD}
+        if key == "read.ai_governor_paired":
+            return {"ok": True, "key": key, "result": pair}
+        return {"ok": True, "key": key, "result": lane}
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", slow_run)
+    with TestClient(app) as client:
+        _login(client)
+        started = time.monotonic()
+        assert client.get("/signals/ai-governor").status_code == 200
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 0.75, (
+        f"the page took {elapsed:.2f}s for three 0.3s reads — they are running "
+        f"in series, and in production that is the sum of three 25s engine "
+        f"deadlines against a 30s gateway"
+    )
+
+
+def test_one_read_raising_does_not_take_the_other_two_with_it(monkeypatch):
+    """`return_exceptions=True` is what preserves the isolation the separate
+    calls exist for. Gathering without it lets one raise cancel its siblings and
+    lose all three — the opposite of the property the split was for."""
+    lane = _engine_diag()  # before the portal
+
+    async def one_raises(self, key, args=None):
+        if key == "read.ai_governor_paired":
+            raise RuntimeError("ledger read exploded")
+        if key == "read.ai_governor_scorecard":
+            return {"ok": True, "key": key, "result": STUB_SCORECARD}
+        return {"ok": True, "key": key, "result": lane}
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", one_raises)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/signals/ai-governor").text
+
+    # The lane's own state still rendered.
+    assert "Verdict mix" in html or "Counters" in html
+    # ...and the failed read is named as a transport failure, not graded on
+    # shape as an engine that has never heard of the entry.
+    body = html.split("Against the engine")[-1]
+    assert "Could not reach the engine" in body
+    assert "deploy question" not in body
+
+
+def test_no_async_fake_resolves_an_engine_payload_inside_the_portal():
+    """Derived guard, and it exists because I wrote this defect three times.
+
+    `_engine_diag` / `_engine_paired` call `pytest.skip()` when the engine repo
+    is not checked out beside ops — which is CI's situation. Called from inside
+    an `async def` fake, that skip is raised on the TestClient's anyio portal
+    rather than in the test body, and it does not skip. It surfaces as
+    `RuntimeError: This portal is not running`, or — once the route gathers with
+    `return_exceptions=True` — as a *rendered error card* reading
+    "Skipped: engine repo not checked out beside ops", which is worse, because
+    the page looks like it merely failed a read.
+
+    Both shapes cost a CI cycle each. Resolve the payload BEFORE the
+    `with TestClient(...)` block, the way `_get` does, and pass the value in.
+
+    Parsed from this module's own AST rather than kept as a list of known-good
+    tests, so the next fake is covered without anyone remembering.
+    """
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path(__file__).read_text())
+    offenders = [
+        f"{fn.name} calls {call.func.id}()"
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.AsyncFunctionDef)
+        for call in ast.walk(fn)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id in {"_engine_diag", "_engine_paired"}
+    ]
+    assert not offenders, (
+        "engine payloads resolved inside an async fake, where `pytest.skip()` "
+        f"cannot skip: {offenders}. Hoist them above the TestClient block."
+    )

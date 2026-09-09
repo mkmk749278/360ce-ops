@@ -29,6 +29,7 @@ Three rules this page carries, each already in this file's siblings:
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List
 
 from fastapi import APIRouter, Request
@@ -364,33 +365,48 @@ def lane_state(diag: dict) -> str:
 @router.get("/signals/ai-governor")
 async def ai_governor(request: Request):
     api = request.app.state.engine_api
-    try:
-        raw = await api.diag_run("read.ai_governor", {})
-    except Exception as exc:  # pragma: no cover - defensive
-        raw = {"error": f"{type(exc).__name__}: {exc}"}
 
-    # A SECOND call, on purpose. The scorecard parses the closed-signal record
-    # off disk, and a read that touches the filesystem should not be able to
-    # take the lane's own state down with it — this page renders whatever half
-    # it got.
+    # THREE reads, and they run CONCURRENTLY — which is a correctness
+    # requirement here, not a nicety.
     #
-    # It is NOT split because the parse was slow. That was the first
-    # explanation for a 25s timeout on `read.ai_governor`, and measuring the
-    # deployed engine refuted it: the parsing entry answers in 0.145s while the
-    # light one timed out during warm-up and answered in 0.001s once settled.
-    # The separation is a precaution, not a diagnosis.
-    try:
-        raw_score = await api.diag_run("read.ai_governor_scorecard", {})
-    except Exception as exc:  # pragma: no cover - defensive
-        raw_score = {"error": f"{type(exc).__name__}: {exc}"}
+    # Each `diag_run` queues a catalog key to the engine over Redis and polls
+    # for the answer up to the engine's own `DIAG_POLL_TIMEOUT_SEC` (25s), so
+    # ops' client timeout is deliberately longer than that. Awaited in series,
+    # three of them can therefore spend well over a minute — and the gateway in
+    # front of this app gives up at **30 seconds**, measured 2026-09-09 as three
+    # consecutive 504s at 30.5s each on the deploy that added the third call.
+    # The page had loaded in ~1.3-7.2s with two. Sequential reads made the
+    # page's own latency the sum of three independent deadlines.
+    #
+    # `return_exceptions=True` is what preserves the property the separate calls
+    # were for in the first place: the scorecard parses the closed-signal record
+    # off disk and the paired read walks the arm ledger, and neither may take
+    # the lane's own state down with it. Gathering without it would let one
+    # raise cancel the siblings and lose all three — the opposite of the
+    # isolation this split exists to provide.
+    keys = (
+        "read.ai_governor",
+        "read.ai_governor_scorecard",
+        "read.ai_governor_paired",
+    )
+    results = await asyncio.gather(
+        *(api.diag_run(key, {}) for key in keys), return_exceptions=True
+    )
 
-    # A THIRD call, for the same reason the second one is separate: this reads
-    # the arm ledger off disk, and a slow or broken read of it must not be able
-    # to take the lane's own state down with it.
-    try:
-        raw_paired = await api.diag_run("read.ai_governor_paired", {})
-    except Exception as exc:  # pragma: no cover - defensive
-        raw_paired = {"error": f"{type(exc).__name__}: {exc}"}
+    def _settle(outcome: Any) -> dict:
+        """One task's result, with a raised exception rendered as this page's
+        own transport failure rather than propagated.
+
+        Shaped like `engine_api`'s wrapper — `error` present, no `ok` — so
+        `classify` reads it as "our client failed" rather than grading it on
+        shape. A bare exception here would otherwise reach the classifiers as a
+        non-dict and read as unreachable for the wrong reason.
+        """
+        if isinstance(outcome, BaseException):
+            return {"error": f"{type(outcome).__name__}: {outcome}"}
+        return outcome
+
+    raw, raw_score, raw_paired = (_settle(r) for r in results)
 
     diag = _unwrap(raw)
     health = diag.get("health") if isinstance(diag.get("health"), dict) else {}
