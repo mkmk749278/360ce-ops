@@ -1045,6 +1045,108 @@ name. Narrowed to the card's own `<h2>` heading rather than deleted, and the
 general rule stands: **a substring assertion of that shape can just as easily
 start passing over the wrong region.**
 
+## `/signals/governor-live` — a third mechanism, and the binaries it exposed (2026-09-09)
+
+Owner: *"make AI governor a separate mechanism / signal fired / live continues
+as usual / but AI reviews it, make adjustment if needed and also cancels signal
+if not worthy / and runs in ops real like signal (how actually SAR live
+happening)"*.
+
+**"Like SAR live" is an argument for the SAR-live handler**, and that is most of
+the value: what makes that page worth reading is not its level function but six
+sessions of guards behind the arms it renders — the stale-anchor refusal (#836),
+the per-advance replay guard (#846), the regressed-vs-rolled-off split, the
+per-arm freshness stamps (#835/#108), the two fills and the two denominators. A
+second page would have re-derived all of it, which is the *"a measurement lane
+does not need a resolver"* rule arriving at the display layer.
+
+**But this mechanism is not a trailing stop, and forcing it through handover
+prose would have been correct numbers under false sentences.** SAR and the
+chandelier *govern*: once onside they cancel the signal's own stop and own the
+exit from that bar. The governor never does — its `onside` is permanently
+`False`, the engine's geometry stays in force for the arm's whole life, and a
+verdict only *edits* it. The engine publishes that as `governs` /
+`edits_geometry` on the mechanism manifest, and **every branch on this page keys
+off those flags rather than off the mechanism's name** — a membership list is a
+floor. The flags are **tri-state**: an engine predating them sends neither, and
+`None` keeps the original wording, because defaulting to `False` would rewrite
+SAR's page into the governor's and defaulting to `True` would assert handover
+over a mechanism that never hands over.
+
+So the handover columns, the alignment split and the risk-parked denominator are
+**absent rather than empty** — they are questions this mechanism cannot be
+asked, and a blank in a column that cannot apply reads as missing data.
+
+### The third member is what exposed the binaries
+
+Four `X if key == 'sar' else Y` expressions, each correct while there were two
+mechanisms and each silently wrong the moment there were three. None would have
+crashed:
+
+- the **mechanism selector** was two hardcoded buttons whose second was selected
+  by `key != 'sar'` — so the ATR-trail button lit up on the governor's own page,
+  a selector lying about where you are;
+- the **nav token** (`"sar_live" if mechanism == "sar" else "atr_live"`) lit the
+  ATR pill, which is what *"Price action"* cost in #889;
+- the **cross-link** offered "the other mechanism", singular, and sent the third
+  to SAR's page — a cross-link that lies is worse than none, because a reader
+  follows it;
+- the template's mechanism explainer had the chandelier in its `{% else %}`, so
+  the governor rendered ATR prose **with `mult` defaulted to 3.0** for a
+  mechanism that has no such parameter.
+
+All four are now derived from the registries. The general form: **a two-member
+special case reads as a total function until a third member arrives**, and the
+tell is an `else` that names one member rather than handling the remainder.
+
+### The lane that does not exist, and a truthiness bug in the guard for it
+
+There is deliberately **no dark governor lane** — it reviews positions the
+engine actually opened — so `(governor, True)` is absent from `TRAIL_ARM_FILES`.
+That absence needed its own state: falling into `unavailable` told the reader to
+*"check SAR_LIVE_SHADOW_ENABLED"* for a file nothing will ever write, which is
+`/invalidations`' WRITER STALE and `/dark-signals`' hardcoded ban cause arriving
+a third time. `no_such_lane` says nothing is coming, and the lane selector does
+not offer the tab at all — a control that can only refuse is indistinguishable
+from a broken page.
+
+**The first cut of that guard was `if not provenance.get("file")`, and it broke
+three healthy SAR tests.** `trail_arms_provenance` always sets `file` — to a
+name or to `None` — so `None` means "no lane"; a dict that **omits** the key is
+an older or partial one and says nothing either way. That is the 2026-09-03
+`ok`/`error` rule verbatim — **tell states apart by key presence, never by
+whether a shared key is truthy** — and it is the second time in eight days.
+
+### "Cannot tell" was the wrong answer to a question with a definite one
+
+The shared page asks *"which of these arms is actually being traded?"* and
+renders `CANNOT TELL` when the engine does not report the governor's state —
+correct there, and badly wrong here, because it implies uncertainty about
+whether a model is moving a real stop. It is not uncertain:
+`trail_governor.GOVERNABLE` is built from `trail_mechanisms.MECHANISMS`, and the
+governor is **deliberately outside it** (`ARM_MECHANISMS` is what the arm engine
+may step). The page says **NONE — AND NONE CAN BE**, and a test pins the
+exclusion at both ends, because *a set named for what exists is read somewhere
+as what is permitted*.
+
+### Found by rendering, not by testing — for the fourth time
+
+Two defects survived a green suite and one render caught both: the
+`CANNOT TELL` above, and the copy asserting **"Four populations, four files"**
+over a table that now holds five. The count is derived from
+`TRAIL_ARM_FILES` now. **A constant asserting a property of a moving system**,
+for the eighth time in these two repos, and this one was made false by the very
+change that shipped beside it.
+
+### The environment note bit again
+
+`requirements.txt` pins `fastapi==0.110.0`; I had installed 0.141 earlier in the
+session to clear an unrelated import error, and the whole suite failed on
+`TypeError: unhashable type: 'dict'` inside Jinja — on a page I had not touched.
+That is recorded above almost word for word, and I still spent a minute
+believing I had broken the app. **Check a page you did not touch before
+believing that**, and check the installed version against the pin first.
+
 ## The read-only door (`/guest`) — a second tier that can never write
 
 Added 2026-08-06 (`docs/READ_ONLY_ACCESS.md`) for the owner's question: *"give
@@ -1573,7 +1675,7 @@ refusal.**
 | Monitoring agent's active-alert Redis state | `app/data_sources/agent_alerts.py` |
 | Binance Futures public 1m klines (no key, read-only) | `app/data_sources/binance_klines.py` |
 | Closed-signal record — `signal_performance.json` (`/track-record`, `/performance`) | `app/data_sources/data_volume.py` |
-| Trailing-exit arms, four lanes — `sar_live_arms_v1` · `dark_sar_arms_v1` · `atr_trail_arms_v1` · `dark_atr_trail_arms_v1` (`/signals/sar-live`, `/signals/atr-live`) | `app/data_sources/data_volume.py` (`trail_arms`) |
+| Trailing-exit + governor arms, five lanes — `sar_live_arms_v1` · `dark_sar_arms_v1` · `atr_trail_arms_v1` · `dark_atr_trail_arms_v1` · `ai_gov_arms_v1` (`/signals/sar-live`, `/signals/atr-live`, `/signals/governor-live`) | `app/data_sources/data_volume.py` (`trail_arms`) |
 | Dark emission lane — `dark_signals_live_v1.json` (`/signals/dark-live`) | `app/data_sources/data_volume.py` |
 | Live marks for open rows (whole futures book, one request, TTL-cached) | `binance_klines.BinanceKlinesClient.fetch_all_prices` |
 | Live-arm freshness test fixture — real engine output, regenerate with 360-v2 `scripts/gen_ops_sar_live_fixture.py` | `tests/fixtures_sar_live_freshness.json` |

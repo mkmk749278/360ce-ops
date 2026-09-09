@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 from app.data_sources.data_volume import (
+    AI_GOV_ARMS_FILE,
     ATR_TRAIL_FILE,
     DARK_ATR_TRAIL_FILE,
     DARK_SAR_FILE,
@@ -125,8 +126,17 @@ def test_every_lane_maps_to_its_own_file():
         ("sar", True): DARK_SAR_FILE,
         ("chandelier", False): ATR_TRAIL_FILE,
         ("chandelier", True): DARK_ATR_TRAIL_FILE,
+        # The AI governor is DELIVERED-ONLY, and the missing dark entry is the
+        # assertion rather than an omission: that mechanism reviews positions
+        # the engine actually opened, so there is no dark lane for it to read.
+        # A key added here would point the page at a file nothing writes.
+        ("governor", False): AI_GOV_ARMS_FILE,
     }
-    assert len(set(TRAIL_ARM_FILES.values())) == 4
+    # The property, stated separately from the literal above: no two
+    # (mechanism, lane) pairs may share a file. The literal catches an
+    # accidental addition; this catches an accidental ALIAS, which is the
+    # failure that would silently pool two populations.
+    assert len(set(TRAIL_ARM_FILES.values())) == len(TRAIL_ARM_FILES)
 
 
 def test_the_filenames_are_the_ones_the_engine_writes():
@@ -299,7 +309,11 @@ def test_the_paths_table_is_the_only_place_a_url_is_spelled():
     assert MECHANISM_PATHS == {
         "sar": "/signals/sar-live",
         "chandelier": "/signals/atr-live",
+        "governor": "/signals/governor-live",
     }
+    # One URL per mechanism, never shared: two mechanisms behind one path would
+    # render the second under the first's heading over the first's file.
+    assert len(set(MECHANISM_PATHS.values())) == len(MECHANISM_PATHS)
 
 
 # --------------------------------------------------------------------------- #
