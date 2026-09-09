@@ -6,11 +6,11 @@
 <section class="card">
   <p class="small">
     <strong>Mechanism:</strong>
-    <a class="btn{% if mech.key == 'sar' %} sel{% endif %}" href="/signals/sar-live?tab={{ tab }}&lane={{ lane }}">Parabolic SAR</a>
-    <a class="btn{% if mech.key != 'sar' %} sel{% endif %}" href="/signals/atr-live?tab={{ tab }}&lane={{ lane }}">ATR-trail (Chandelier)</a>
+    {% for m in mechanism_tabs %}<a class="btn{% if m.selected %} sel{% endif %}" href="{{ m.path }}?tab={{ tab }}&lane={{ lane }}">{{ m.label }}</a>
+    {% endfor %}
     &nbsp;&nbsp;<strong>Population:</strong>
-    <a class="btn{% if lane == 'delivered' %} sel{% endif %}" href="{{ page_path }}?tab={{ tab }}&lane=delivered">Delivered signals</a>
-    <a class="btn{% if lane == 'dark' %} sel{% endif %}" href="{{ page_path }}?tab={{ tab }}&lane=dark">Dark feed</a>
+    {% for l in lane_tabs %}<a class="btn{% if l.selected %} sel{% endif %}" href="{{ page_path }}?tab={{ tab }}&lane={{ l.key }}">{{ l.label }}</a>
+    {% endfor %}
   </p>
   <p class="small">
     {% if lane == 'dark' %}<span class="badge sev-high">DARK FEED</span>
@@ -23,7 +23,8 @@
     {% endif %}
   </p>
   <p class="muted small">
-    Four populations, four files, and <strong>none of them is ever pooled with another</strong>.
+    {{ population_count }} populations across the mechanisms, one file each, and <strong>none of
+    them is ever pooled with another</strong>.
     <strong>Delivered</strong> rows belong to signals a subscriber received — they are the only
     evidence allowed to justify changing what subscribers get. <strong>Dark feed</strong> rows
     belong to signals the scanner was willing to send on a path the gates normally silence, and
@@ -41,7 +42,8 @@
     <br>Parameters, from the engine's own manifest:
     {% for k, v in mech.params.items() %}<code>{{ k }}={{ "%g"|format(v) }}</code> {% endfor %}
     {% endif %}
-    <br>Comparing? The same window under <a href="{{ other_path }}?tab={{ tab }}&lane={{ lane }}">{{ other_label }}</a>.
+    <br>Comparing? The same window under
+    {% for o in others %}<a href="{{ o.path }}?tab={{ tab }}&lane={{ lane }}">{{ o.label }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
   </p>
 </section>
 
@@ -53,6 +55,7 @@
     {% elif live_state.state == 'stalled' %}<span class="badge sev-high">ARMS STALLED</span>
     {% elif live_state.state == 'frozen' %}<span class="badge sev-high">FROZEN</span>
     {% elif live_state.state == 'orphan' %}<span class="badge sev-high">ORPHAN</span>
+    {% elif live_state.state == 'no_such_lane' %}<span class="badge st-partial">NO SUCH LANE</span>
     {% else %}<span class="badge sev-high">UNAVAILABLE</span>{% endif %}
     {{ live_state.detail }}
   </p>
@@ -91,7 +94,7 @@
     or in full at TP1. Measured on <strong>5m and 15m as independent arms</strong> on the same
     signals, so the timeframe question and the mechanism question share one window.
   </p>
-  {% else %}
+  {% elif mech.key == 'chandelier' %}
   <p class="muted small">
     <strong>The mechanism.</strong> The stop sits <code>{{ "%g"|format(mech.params.get('mult', 3.0)) }}</code>
     ATRs (Wilder, {{ "%g"|format(mech.params.get('period', 22)) }}-period) behind the running
@@ -108,6 +111,37 @@
     <strong>wider</strong> than the trade was sized for. That is what <strong>R @risk</strong> below
     is for, and it is why a chandelier verdict must never be read in R alone.
   </p>
+  {% elif mech.key == 'governor' %}
+  <p class="muted small">
+    <strong>The mechanism — and it is the one mechanism here that never governs.</strong>
+    The signal fires and runs on the evaluator's own SL and TP1 exactly as it does live. On this
+    arm's own bar clock a model reviews the open position: the <strong>first</strong> review asks
+    whether the trade was worth taking at all, and every later one is a conservative critic of a
+    trade already running. A verdict may tighten the stop, move TP1 nearer, or close the position at
+    the next bar's open — <em>tighter and nearer only, never wider or further</em>.
+  </p>
+  <p class="muted small">
+    <strong>So there is no handover on this page, and no second denominator.</strong> SAR and the
+    chandelier cancel the signal's own stop once they come onside and own the exit from that bar.
+    This mechanism's <code>onside</code> is permanently false: the engine's geometry stays in force
+    for the arm's whole life and a verdict only <em>edits</em> it. That is why the handover columns,
+    the alignment split and the risk-parked denominator are absent rather than empty — they are
+    questions this mechanism does not answer, and a blank in a column that cannot apply reads as
+    missing data.
+  </p>
+  <p class="muted small">
+    <strong>Nothing here moved a real order.</strong> The apply flag is off, so every edit on this
+    page happened to a shadow arm only. The paired comparison against the engine's own untouched
+    geometry — same signal, same bars, frozen at open — is on
+    <a href="/signals/ai-governor">the AI governor page</a>; this page is the running book, not the
+    verdict on the mechanism.
+  </p>
+  {% else %}
+  <p class="muted small">
+    <strong>This build has not been told what this mechanism does.</strong> The rows below are the
+    engine's, and they are real; the explanation is missing because ops has no copy for
+    <code>{{ mech.key }}</code>. Read the columns, not an analogy to another mechanism.
+  </p>
   {% endif %}
   <p class="muted small">
     <strong>These arms place no orders and change no exit.</strong> The rows here are a
@@ -121,7 +155,19 @@
 
 <section class="card">
   <h2 class="small">Which of these arms is actually being traded?</h2>
-  {% if not executing.reported %}
+  {% if mech.governs is sameas false %}
+    <div class="badge st-done">NONE — AND NONE CAN BE</div>
+    <p class="small">
+      This mechanism is not selectable as a per-user exit at all: the engine's
+      <code>trail_governor.GOVERNABLE</code> set is built from the mechanisms that may take a live
+      position over, and this one is deliberately outside it. So the answer here is not
+      <em>could not tell</em> — it is <strong>no</strong>, by construction, and it stays no until
+      somebody changes that set in the engine.
+      <strong>That exclusion is the point</strong>: these levels come from a model, and a model's
+      choice must not reach a resting stop through a collection nobody reads as a permission list.
+      The arms below place no orders and move no stop.
+    </p>
+  {% elif not executing.reported %}
     <div class="badge badge-warn">CANNOT TELL</div>
     <p class="small">
       The engine did not report the governor's state, so this page cannot say whether any arm
@@ -150,7 +196,7 @@
       <strong>{{ executing.mechanism_label or 'another mechanism' }}</strong>{% if executing.mechanism and not executing.mechanism_known %}
       <span class="badge badge-warn" title="this page has no label for that mechanism key — the engine's own word is shown rather than another mechanism's name">UNKNOWN MECHANISM</span>{% endif %}, not the one on this page.
       Every arm below is a measurement; the executed one is on
-      <a href="{{ other_path }}">{{ other_label }}</a>.
+      {% for o in others %}<a href="{{ o.path }}">{{ o.label }}</a>{% if not loop.last %}, {% endif %}{% endfor %}.
     </p>
   {% else %}
     <div class="badge badge-good">
@@ -201,6 +247,19 @@
     never been measured anywhere in this system, and picking one fill before it is known would be
     choosing the answer rather than measuring it.
   </p>
+  {% if mech.governs is sameas false %}
+  <p class="muted small">
+    <strong>One denominator here, because nothing cancels the stop.</strong> The two-denominator
+    rule on the trailing pages exists because SAR and the chandelier <em>replace</em> the
+    evaluator's stop with one of their own, frequently wider, so the risk designed and the risk
+    parked are different numbers. This mechanism never takes the exit over — it edits the engine's
+    own geometry in place — so the risk parked <em>is</em> the engine's stop as last edited, and a
+    second column would be the same number under a second name. <strong>R</strong> divides by the SL
+    distance at entry, which keeps it comparable with the edge matrix and
+    <a href="/track-record">Track record</a>. Figures are <strong>gross</strong> — no fees, no
+    funding — so a row reading flat is a real cost live.
+  </p>
+  {% else %}
   <p class="muted small">
     <strong>R is reported against two denominators, and neither is called “the” R.</strong>
     <strong>R</strong> divides by the <strong>SL distance at entry</strong>, which keeps it
@@ -211,6 +270,7 @@
     both are true and quoting one silently picks the answer. Figures are <strong>gross</strong> — no
     fees, no funding — so a row reading flat is a real cost live.
   </p>
+  {% endif %}
 </section>
 
 <section class="card">
@@ -489,10 +549,12 @@
     <strong class="{% if summary.avg_confirm_slippage_pct is not none and summary.avg_confirm_slippage_pct < 0 %}neg{% endif %}">
       {% if summary.avg_confirm_slippage_pct is not none %}{{ "%+.3f"|format(summary.avg_confirm_slippage_pct) }}%{% else %}—{% endif %}</strong>
     per trade — what waiting for the bar to close costs against filling at the parked stop.
-    Exits: {% if mech.key == 'sar' %}{{ summary.by_exit.sar_flip }} on a SAR flip{% else %}{{ summary.by_exit.trail_stop }} on the trail stop{% endif %}, {{ summary.by_exit.static_sl }} on the
+    Exits: {% if mech.key == 'sar' %}{{ summary.by_exit.sar_flip }} on a SAR flip{% elif mech.key == 'chandelier' %}{{ summary.by_exit.trail_stop }} on the trail stop{% endif %}{% if mech.governs is not sameas false %}, {% endif %}{{ summary.by_exit.static_sl }} on the
     original stop, {{ summary.by_exit.static_tp1 }} on TP1.
+    {% if mech.governs is not sameas false %}
     {{ summary.handovers }} of {{ summary.measurable }} handed over to the {{ mech.short }} at some point — an arm
     that never handed over contributes nothing to the exit comparison, however large the total looks.
+    {% endif %}
     {% if summary.no_r %}<br><strong>{{ summary.no_r }}</strong> resolved rows carry no usable R (no
     SL distance at entry): counted in the trade count, excluded from every R figure above rather than
     scored 0R.{% endif %}
@@ -514,6 +576,7 @@
   {% endif %}
 </section>
 
+{% if mech.governs is not sameas false %}
 <section class="card">
   <h2 class="small">Was the {{ mech.short }} stop inside the risk the trade was sized for?</h2>
   <p class="muted small">
@@ -553,6 +616,7 @@
     at the signal's SL stays available as a decision, now with data behind it.
   </p>
 </section>
+{% endif %}
 
 <section class="card">
   <h2 class="small">Max profit before the original stop — and why it is not the MFE column</h2>
@@ -700,13 +764,13 @@
 <section class="card">
   <h2 class="small">5m vs 15m — same signals, different arms</h2>
   <table class="tbl">
-    <thead><tr><th>Timeframe</th><th>Resolved</th><th>Handovers</th><th>Win @level</th><th>Avg PnL @level</th><th>Avg PnL @confirm</th><th class="muted">Avg R @level</th><th class="muted">Avg R @confirm</th><th>Confirm cost</th></tr></thead>
+    <thead><tr><th>Timeframe</th><th>Resolved</th>{% if mech.governs is not sameas false %}<th>Handovers</th>{% endif %}<th>Win @level</th><th>Avg PnL @level</th><th>Avg PnL @confirm</th><th class="muted">Avg R @level</th><th class="muted">Avg R @confirm</th><th>Confirm cost</th></tr></thead>
     <tbody>
       {% for tf in by_timeframe %}
       <tr>
         <td><strong>{{ tf.timeframe }}</strong></td>
         <td>{{ tf.measurable }}</td>
-        <td>{{ tf.handovers }}</td>
+        {% if mech.governs is not sameas false %}<td>{{ tf.handovers }}</td>{% endif %}
         <td>{% if tf.win_rate_level is not none %}{{ "%.0f"|format(tf.win_rate_level * 100) }}%{% else %}—{% endif %}</td>
         <td class="{% if tf.avg_pnl_level_pct is not none and tf.avg_pnl_level_pct > 0 %}pos{% elif tf.avg_pnl_level_pct is not none and tf.avg_pnl_level_pct < 0 %}neg{% endif %}">
           <strong>{% if tf.avg_pnl_level_pct is not none %}{{ "%+.3f"|format(tf.avg_pnl_level_pct) }}%{% else %}—{% endif %}</strong></td>
@@ -746,11 +810,11 @@
     <thead>
       <tr>
         <th>Symbol</th><th>Side</th><th>TF</th><th>Setup</th>
-        <th>{{ mech.short }}@entry</th><th>Governor</th><th>Entry</th>
+        {% if mech.governs is not sameas false %}<th>{{ mech.short }}@entry</th><th>Governor</th>{% endif %}<th>Entry</th>
         {% if tab == 'resolved' %}
-        <th>Anchor</th><th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th title="the money this arm returned — sizing is a fixed notional, so a percent is proportional to money and R is not">PnL @level</th><th>PnL @confirm</th><th class="muted">R @level</th><th class="muted">R @confirm</th><th class="muted">R @level, risk</th><th>Confirm cost</th><th>Bars</th>
+        <th>Anchor</th><th>Exit</th><th>Fill @level</th><th>Fill @confirm</th><th title="the money this arm returned — sizing is a fixed notional, so a percent is proportional to money and R is not">PnL @level</th><th>PnL @confirm</th><th class="muted">R @level</th><th class="muted">R @confirm</th>{% if mech.governs is not sameas false %}<th class="muted">R @level, risk</th>{% endif %}<th>Confirm cost</th><th>Bars</th>
         {% else %}
-        <th>Last advance</th><th>Price</th><th>Unrealized</th><th>Parked stop</th><th>Dist. to stop</th><th>{{ mech.short }} risk</th><th title="maximum favourable excursion">MFE</th><th title="maximum adverse excursion — how far this arm went against us first">MAE</th><th>Bars</th>
+        <th>Last advance</th><th>Price</th><th>Unrealized</th><th>{% if mech.governs is sameas false %}Stop in force{% else %}Parked stop{% endif %}</th><th>Dist. to stop</th>{% if mech.governs is not sameas false %}<th>{{ mech.short }} risk</th>{% endif %}<th title="maximum favourable excursion">MFE</th><th title="maximum adverse excursion — how far this arm went against us first">MAE</th><th>Bars</th>
         {% endif %}
       </tr>
     </thead>
@@ -761,6 +825,7 @@
         <td class="{% if r.side == 'LONG' %}pos{% else %}neg{% endif %}">{{ r.side }}</td>
         <td>{{ r.timeframe }}</td>
         <td class="small muted">{{ r.setup_class }}</td>
+        {% if mech.governs is not sameas false %}
         <td>{% if r.aligned_at_entry is true %}<span class="badge st-done">agreed</span>
             {% elif r.aligned_at_entry is false %}<span class="badge st-open">opposed</span>
             {% else %}<span class="muted">—</span>{% endif %}</td>
@@ -768,6 +833,7 @@
             {% elif r.governor == 'GEOMETRY' %}<span class="badge st-partial">SL/TP</span>
             {% else %}<span class="muted">—</span>{% endif %}
             {% if r.ambiguous_bar %}<span class="badge sev-high" title="SL and TP1 both touched in one bar; resolved pessimistically">ambig</span>{% endif %}</td>
+        {% endif %}
         <td>{{ r.entry }}</td>
         {% if tab == 'resolved' %}
         {# The anchor verdict leads the realized columns for the same reason
@@ -793,10 +859,12 @@
         <td class="muted small" title="normalised by this trade's own stop — not proportional to money, because sizing is a fixed notional">
           {% if r.r_level is not none %}{{ "%+.2f"|format(r.r_level) }}R{% else %}—{% endif %}</td>
         <td class="muted small">{% if r.r_confirm is not none %}{{ "%+.2f"|format(r.r_confirm) }}R{% else %}—{% endif %}</td>
+        {% if mech.governs is not sameas false %}
         <td class="{% if r.get('r_level_risk') is not none and r.get('r_level_risk') > 0 %}pos{% elif r.get('r_level_risk') is not none and r.get('r_level_risk') < 0 %}neg{% endif %}">
           {% if r.get('r_level_risk') is not none %}{{ "%+.2f"|format(r.get('r_level_risk')) }}
             <span class="muted small" title="the risk this arm actually parked — the mechanism's stop at handover, or the original SL when it never handed over">/ {{ "%.2f"|format(r.get('risk_denominator_pct')) }}%</span>
           {% else %}—{% endif %}</td>
+        {% endif %}
         <td class="{% if r.confirm_slippage_pct is not none and r.confirm_slippage_pct < 0 %}neg{% endif %}">
           {% if r.confirm_slippage_pct is not none %}{{ "%+.3f"|format(r.confirm_slippage_pct) }}%{% else %}—{% endif %}</td>
         <td>{{ r.bars_seen }}</td>
@@ -814,7 +882,9 @@
         <td>{% if r.get('current_price') is not none %}{{ "%.6g"|format(r.get('current_price')) }}{% else %}—{% endif %}</td>
         <td class="{% if r.get('unrealized_pct') is not none and r.get('unrealized_pct') > 0 %}pos{% elif r.get('unrealized_pct') is not none and r.get('unrealized_pct') < 0 %}neg{% endif %}">
           {% if r.get('unrealized_pct') is not none %}{{ "%+.2f"|format(r.get('unrealized_pct')) }}%{% else %}—{% endif %}</td>
-        <td>{% if r.governor == 'SAR' and r.sar_stop is not none %}{{ "%.6g"|format(r.sar_stop) }}
+        <td>{% if mech.governs is sameas false %}
+              {% if r.stop_loss is not none %}<span title="the engine's own stop, as this mechanism has edited it — it is in force from bar one and nothing here takes it over">{{ "%.6g"|format(r.stop_loss) }}</span>{% else %}—{% endif %}
+            {% elif r.governor == 'SAR' and r.sar_stop is not none %}{{ "%.6g"|format(r.sar_stop) }}
             {% elif r.governor == 'GEOMETRY' %}<span class="muted" title="the mechanism has not taken over; the original stop is still live">{{ r.stop_loss }}</span>
             {% else %}—{% endif %}</td>
         <td>{% if r.get('stop_distance_pct') is not none %}
@@ -824,10 +894,12 @@
         {# .get() throughout: arms persisted before the risk stamps shipped do
            not carry these keys, and they stay in the ledger until they resolve.
            A direct dereference would 500 the tab on exactly those rows. #}
+        {% if mech.governs is not sameas false %}
         <td>{% if r.get('sar_risk_pct') is not none %}<span class="{% if r.get('handover_wider_than_sl') %}neg{% endif %}">{{ "%+.2f"|format(r.get('sar_risk_pct')) }}%</span>
             <span class="muted small">/ {{ "%.2f"|format(r.sl_distance_pct) }}%</span>
             {% if r.get('handover_wider_than_sl') %}<span class="badge sev-high" title="the mechanism took over at a stop wider than the signal's own SL — this arm carries more risk than the trade was sized for">wider</span>{% endif %}
             {% else %}<span class="muted">—</span>{% endif %}</td>
+        {% endif %}
         <td>{% if r.mfe_pct is not none %}{{ "%.2f"|format(r.mfe_pct) }}%{% else %}—{% endif %}</td>
         <td class="{% if r.get('mae_pct') %}neg{% endif %}"
             title="how far this arm went against us before it resolved">
@@ -841,9 +913,12 @@
   </div>
   {% if tab != 'resolved' %}
   <p class="muted small">
-    <strong>Dist. to stop</strong> is how far price sits from the parked {{ mech.short }} level — the only
-    column on any exit-mechanism surface that says “this mechanism is about to act”. It is blank while
-    the original SL/TP is still governing, because that distance means nothing before the handover.
+    <strong>Dist. to stop</strong> is how far price sits from the level actually in force — the only
+    column on any exit-mechanism surface that says “this mechanism is about to act”.
+    {% if mech.governs is sameas false %}Here that level is the engine's own stop as this mechanism
+    has edited it: nothing takes the exit over, so the distance is meaningful from bar one.
+    {% else %}It is blank while the original SL/TP is still governing, because that distance means
+    nothing before the handover.{% endif %}
     Realized columns stay empty on this tab by construction: an unrealized number in a realized
     column is how a still-open trade gets read as a finished one.
   </p>

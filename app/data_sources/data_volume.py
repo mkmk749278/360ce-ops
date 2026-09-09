@@ -94,6 +94,12 @@ ATR_TRAIL_FILE = f"atr_trail_arms_v{ATR_TRAIL_VERSION}.json"
 DARK_ATR_TRAIL_VERSION = 1
 DARK_ATR_TRAIL_FILE = f"dark_atr_trail_arms_v{DARK_ATR_TRAIL_VERSION}.json"
 
+#: AI-governor arms (engine ``src/ai_governor_live.py``). Same ``SarLiveLedger``
+#: writer, same envelope, same six sessions of anchor/replay/stall guards — the
+#: arm engine is shared and only the level function differs.
+AI_GOV_ARMS_VERSION = 1
+AI_GOV_ARMS_FILE = f"ai_gov_arms_v{AI_GOV_ARMS_VERSION}.json"
+
 #: Mechanism keys, mirroring the engine's ``trail_mechanisms.MECH_*``. These are
 #: the only mirrored strings in this lane, and they are *keys* rather than
 #: copy — every label, parameter and direction flag is read out of the
@@ -101,6 +107,21 @@ DARK_ATR_TRAIL_FILE = f"dark_atr_trail_arms_v{DARK_ATR_TRAIL_VERSION}.json"
 #: never heard of therefore renders under its raw key rather than vanishing.
 MECH_SAR = "sar"
 MECH_CHANDELIER = "chandelier"
+
+#: The AI governor, added 2026-09-09 on the owner's *"make AI governor a separate
+#: mechanism … and runs in ops real like signal (how actually SAR live
+#: happening)"*.
+#:
+#: **It is in this table but it is not a trailing stop, and the manifest says
+#: so.** SAR and the chandelier *govern*: once onside they cancel the signal's
+#: own stop and own the exit from that bar. The governor never does — its
+#: ``onside`` is permanently ``False``, so the engine's own geometry stays in
+#: force for the whole arm and a verdict only *edits* it. The engine publishes
+#: that difference as ``governs`` / ``edits_geometry`` on the mechanism
+#: manifest, and every sentence on the page branches on those flags rather than
+#: on this key: a mechanism list is a floor, and the page must not assert
+#: handover prose over a mechanism that never hands over.
+MECH_GOVERNOR = "governor"
 
 #: ``(mechanism, dark) -> filename``. One table, so a page cannot reach a lane
 #: by assembling a filename of its own — the drift that would silently point two
@@ -110,6 +131,12 @@ TRAIL_ARM_FILES: dict[tuple[str, bool], str] = {
     (MECH_SAR, True): DARK_SAR_FILE,
     (MECH_CHANDELIER, False): ATR_TRAIL_FILE,
     (MECH_CHANDELIER, True): DARK_ATR_TRAIL_FILE,
+    # Delivered only, and the ABSENCE of a dark entry is the point. The
+    # governor reviews positions the engine actually opened, so there is no
+    # dark governor lane to read — and a missing key here makes the page refuse
+    # by name rather than render an empty book, which would be indistinguishable
+    # from a lane that is running and quiet.
+    (MECH_GOVERNOR, False): AI_GOV_ARMS_FILE,
 }
 
 #: MVRTP entry-feature stamps (engine ``src/entry_features.py``). What CVD,

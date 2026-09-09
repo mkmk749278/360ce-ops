@@ -91,7 +91,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request
 
-from app.data_sources import sar_hold
+from app.data_sources import data_volume, sar_hold
 
 router = APIRouter()
 
@@ -140,6 +140,14 @@ MECHANISM_FALLBACK = {
             "has_direction": True, "params": {}},
     "chandelier": {"key": "chandelier", "label": "ATR-trail (Chandelier)",
                    "short": "ATR trail", "has_direction": False, "params": {}},
+    # `governs: False` is the whole difference and it is not cosmetic. SAR and
+    # the chandelier take the exit over once onside; the governor never does —
+    # the engine's own geometry stays in force for the arm's whole life and a
+    # verdict only edits it. Every handover sentence on this page branches on
+    # that flag.
+    "governor": {"key": "governor", "label": "AI governor (verdict-edited geometry)",
+                 "short": "AI governor", "has_direction": False,
+                 "governs": False, "edits_geometry": True, "params": {}},
 }
 
 #: Short forms for the table headings.  Not a second label list: the engine's
@@ -147,7 +155,8 @@ MECHANISM_FALLBACK = {
 #: header needs, keyed off the same ``key``.  A mechanism absent from here
 #: renders under its full label rather than under another mechanism's short
 #: name — badged, never renamed.
-MECHANISM_SHORT = {"sar": "SAR", "chandelier": "ATR trail"}
+MECHANISM_SHORT = {"sar": "SAR", "chandelier": "ATR trail",
+                   "governor": "AI governor"}
 
 #: The two lanes each page can show.  ``delivered`` rows reached a subscriber;
 #: ``dark`` rows reached nobody.  Never pooled, and never defaulted into one
@@ -432,7 +441,9 @@ def count_live_freshness(rows: list[dict]) -> dict:
     }
 
 
-def mark_distance_to_stop(rows: list[dict], prices: dict[str, float]) -> list[dict]:
+def mark_distance_to_stop(
+    rows: list[dict], prices: dict[str, float], *, governs: Optional[bool] = None
+) -> list[dict]:
     """Add the live mark and how far price sits from the parked stop.
 
     Distance-to-stop is the number the live tab exists for: it is the only thing
@@ -465,10 +476,28 @@ def mark_distance_to_stop(rows: list[dict], prices: dict[str, float]) -> list[di
         row["current_price"] = price
         move = (price - entry) if is_long else (entry - price)
         row["unrealized_pct"] = move / entry * 100.0
-        stop = _f(row.get("sar_stop"))
-        if stop is None or stop <= 0 or row.get("governor") != GOV_SAR:
-            # The geometry leg's stop is the original SL, which the row already
-            # carries; distance-to-SAR is meaningless until the handover.
+        # WHICH level is actually in force decides what this distance means,
+        # and that is not the same question for every mechanism.
+        #
+        # A mechanism that GOVERNS (SAR, the chandelier) only owns the exit once
+        # it comes onside, so before the handover the distance to its level is
+        # meaningless — the original SL is what would fill.
+        #
+        # A mechanism that EDITS GEOMETRY (the AI governor) never takes over:
+        # the engine's own stop is in force from bar one and a verdict moves it
+        # in place. So the level to measure against is `stop_loss`. Gating this
+        # column on a handover that never happens would leave the single most
+        # useful column on the live tab permanently blank, which is most of what
+        # makes a running book worth opening.
+        if governs is False:
+            stop = _f(row.get("stop_loss"))
+            row["stop_source"] = "geometry"
+        else:
+            row["stop_source"] = "mechanism"
+            stop = _f(row.get("sar_stop"))
+            if row.get("governor") != GOV_SAR:
+                stop = None
+        if stop is None or stop <= 0:
             continue
         gap = (price - stop) if is_long else (stop - price)
         row["stop_distance_pct"] = gap / price * 100.0
@@ -781,6 +810,18 @@ def reduce_mechanism(payload: Any, mechanism: str) -> dict:
     out.setdefault("short", MECHANISM_SHORT.get(str(out.get("key")), out.get("label")))
     if not out.get("short"):
         out["short"] = out.get("label") or str(mechanism)
+    # Whether the mechanism TAKES THE EXIT OVER or only EDITS the signal's own
+    # geometry. Tri-state on purpose: an engine predating these flags sends
+    # neither, and `None` keeps the page's original handover wording for the two
+    # mechanisms that were the only ones when it was written. Defaulting to
+    # False would silently rewrite SAR's page into the governor's; defaulting to
+    # True would assert handover over a mechanism that never hands over. Absence
+    # of knowledge is not a value.
+    for flag in ("governs", "edits_geometry"):
+        if flag in out and out[flag] is not None:
+            out[flag] = bool(out[flag])
+        else:
+            out[flag] = None
     return out
 
 
@@ -801,6 +842,30 @@ def reduce_live_state(
     # than the monitor loop's 60s heartbeat, so one staleness bound for both
     # would report a fault on a perfectly healthy dark lane.
     stale_sec = LANE_STALE_SEC.get(str(lane), LIVE_STALE_SEC)
+    # A lane with no file MAPPED is not a lane whose file is missing, and the
+    # next move differs: one is "wait for the engine to write", the other is
+    # "this combination does not exist and never will". The governor reviews
+    # positions the engine actually opened, so it has no dark lane at all —
+    # rendering that as `unavailable` would tell the reader to go and check an
+    # enable flag for a lane nothing will ever write. Naming a cause the page
+    # cannot observe is the defect `/invalidations` and `/dark-signals` both
+    # paid for; an empty book would be worse still, because it is
+    # indistinguishable from a lane that is running and quiet.
+    # KEY PRESENCE, never truthiness — the `ok`/`error` discriminator rule.
+    # `trail_arms_provenance` always sets `file`, to the name or to None, so
+    # `file: None` means "no file is mapped for this (mechanism, lane)". A
+    # provenance dict that omits the key entirely is an older or partial one
+    # and says nothing either way; grading it as "no such lane" would report a
+    # missing lane over a perfectly healthy book.
+    if "file" in provenance and not provenance["file"]:
+        return {
+            "state": "no_such_lane",
+            "detail": (
+                "This mechanism has no such lane. Nothing is wrong and nothing "
+                "is coming: no file is mapped for this combination, so there is "
+                "no measurement to wait for. Use the lane selector to go back."
+            ),
+        }
     if not provenance.get("exists"):
         return {
             "state": "unavailable",
@@ -921,7 +986,14 @@ def _view(
 #: measurement with a different level function, and two handlers would be two
 #: places for a panel to be added to — which is how one surface silently stops
 #: showing what the other does.
-MECHANISM_PATHS = {"sar": "/signals/sar-live", "chandelier": "/signals/atr-live"}
+MECHANISM_PATHS = {"sar": "/signals/sar-live", "chandelier": "/signals/atr-live",
+                   "governor": "/signals/governor-live"}
+
+#: Nav token per mechanism, keyed the same way. Kept beside ``MECHANISM_PATHS``
+#: so a mechanism added to one and not the other is visible in a two-line diff
+#: rather than as a pill highlighting the wrong page.
+MECHANISM_NAV = {"sar": "sar_live", "chandelier": "atr_live",
+                 "governor": "governor_live"}
 
 
 async def executing_arm(request: Request, mechanism: str, lane: str) -> dict:
@@ -1039,7 +1111,7 @@ async def _render(
     # render bound and the template says when it bit.
     rows = selected[:TABLE_ROW_CAP]
     mark_freshness(rows, now=now)
-    mark_distance_to_stop(rows, prices)
+    mark_distance_to_stop(rows, prices, governs=ctx["mechanism"].get("governs"))
 
     return templates.TemplateResponse("sar_live.html", {
         "request": request,
@@ -1047,19 +1119,49 @@ async def _render(
         # `/signals/structural-veto` both shipped setting the *Feed* tab's key,
         # so the Feed pill lit up on a page that was not the feed — that is what
         # looked wrong on screen before anyone read a label.
-        "active": "sar_live" if mechanism == "sar" else "atr_live",
+        # Nav token per mechanism. Another binary that quietly sent the third
+        # mechanism to another page's tab — a nav pill lighting up on a page
+        # that is not the one it names is what "Price action" cost in #889.
+        "active": MECHANISM_NAV.get(mechanism, "sar_live"),
         "mech": ctx["mechanism"],
         "lane": lane,
         "page_path": MECHANISM_PATHS.get(mechanism, "/signals/sar-live"),
         # The OTHER mechanism, so the comparison is one click away rather than a
-        # URL the reader has to know.  The whole point of the second lane is
-        # "which one actually suits this setup".
-        "other_path": MECHANISM_PATHS.get(
-            "chandelier" if mechanism == "sar" else "sar"
-        ),
-        "other_label": MECHANISM_FALLBACK[
-            "chandelier" if mechanism == "sar" else "sar"
-        ]["label"],
+        # Every mechanism EXCEPT this one. This was a binary flip while there
+        # were two, which silently sent the third to SAR's page under the words
+        # "the other mechanism" — a cross-link that lies is worse than none,
+        # because a reader follows it.
+        "others": [
+            {"key": k, "label": MECHANISM_FALLBACK[k]["label"],
+             "path": MECHANISM_PATHS[k]}
+            for k in MECHANISM_PATHS
+            if k != mechanism and k in MECHANISM_FALLBACK
+        ],
+        # The mechanism selector, derived rather than written out. It was two
+        # hardcoded buttons whose second was selected by `key != 'sar'`, so the
+        # third mechanism lit the ATR-trail button on its own page — a selector
+        # that lies about where you are. A hand-written list of members is a
+        # floor, and this repo has paid for that under six names.
+        # Derived, never asserted. The copy beside it read "four populations,
+        # four files" and a third mechanism made that sentence false the day it
+        # shipped — a constant asserting a property of a moving system, which is
+        # the defect these repos have recorded under seven names.
+        "population_count": len(data_volume.TRAIL_ARM_FILES),
+        "mechanism_tabs": [
+            {"key": k, "label": MECHANISM_FALLBACK[k]["label"],
+             "path": MECHANISM_PATHS[k], "selected": k == mechanism}
+            for k in MECHANISM_PATHS if k in MECHANISM_FALLBACK
+        ],
+        # Which lanes this mechanism actually HAS, from the same table the
+        # loader reads. Offering a lane with no file mapped is offering a link
+        # to a refusal — and this repo already treats a control that can only
+        # 403 as indistinguishable from a broken page.
+        "lane_tabs": [
+            {"key": ln, "label": lb, "selected": ln == lane}
+            for ln, lb in ((LANE_DELIVERED, "Delivered signals"),
+                           (LANE_DARK, "Dark feed"))
+            if (mechanism, ln == LANE_DARK) in data_volume.TRAIL_ARM_FILES
+        ],
         "executing": executing,
         "tab": tab,
         "rows": rows,
@@ -1150,6 +1252,50 @@ async def atr_live(
     )
 
 
+@router.get("/signals/governor-live")
+async def governor_live(
+    request: Request,
+    tab: str = Query("live"),
+    lane: str = Query(LANE_DELIVERED),
+    timeframe: str = Query(""),
+    governor: str = Query(""),
+    alignment: str = Query(""),
+    status: str = Query(""),
+    fee: float = Query(sar_hold.DEFAULT_FEE_PCT),
+):
+    """The AI governor's running book — the same arms, the same guards.
+
+    Owner, 2026-09-09: *"make AI governor a separate mechanism / signal fired /
+    live continues as usual / but AI reviews it, make adjustment if needed and
+    also cancels signal if not worthy / and runs in ops real like signal (how
+    actually SAR live happening)"*.
+
+    **"Like SAR live" is an argument for this handler, not for a new page.**
+    What makes `/signals/sar-live` worth reading is not its level function — it
+    is six sessions of guards behind the arms it renders: the stale-anchor
+    refusal, the per-advance replay guard, the regressed-vs-rolled-off split,
+    the per-arm freshness stamps, the two fills and the two denominators. A
+    second page would have re-derived those, and this repo has a rule about
+    lanes that grow their own resolver.
+
+    **What is genuinely different is that this mechanism never governs.** SAR
+    and the chandelier cancel the signal's own stop once onside and own the exit
+    from that bar; the governor's `onside` is permanently False, so the engine's
+    geometry stays in force for the arm's whole life and a verdict only edits
+    it. That is published on the mechanism manifest as `governs` /
+    `edits_geometry`, and every handover sentence here branches on it rather
+    than on the mechanism's name.
+
+    There is deliberately **no dark lane**: the governor reviews positions the
+    engine actually opened, so `lane=dark` renders a named refusal rather than
+    an empty book.
+    """
+    return await _render(
+        request, mechanism="governor", tab=tab, lane=lane, timeframe=timeframe,
+        governor=governor, alignment=alignment, status=status, fee=fee,
+    )
+
+
 _ARM_COLS = [
     "arm_id", "signal_id", "symbol", "side", "setup_class", "timeframe",
     "entry", "stop_loss", "tp1", "sl_distance_pct",
@@ -1213,7 +1359,7 @@ async def _export(
     mark_anchor_integrity(rows, now=now)
     mark_risk_adjusted_r(rows)
     mark_freshness(rows, now=now)
-    mark_distance_to_stop(rows, prices)
+    mark_distance_to_stop(rows, prices, governs=ctx["mechanism"].get("governs"))
     for r in rows:
         r.setdefault("mechanism", ctx["mechanism"].get("key"))
         r["lane"] = lane
@@ -1251,5 +1397,21 @@ async def atr_live_export_csv(
 ):
     return await _export(
         request, mechanism="chandelier", tab=tab, lane=lane, timeframe=timeframe,
+        governor=governor, alignment=alignment, status=status,
+    )
+
+
+@router.get("/signals/governor-live/export.csv")
+async def governor_live_export_csv(
+    request: Request,
+    tab: str = Query("live"),
+    lane: str = Query(LANE_DELIVERED),
+    timeframe: str = Query(""),
+    governor: str = Query(""),
+    alignment: str = Query(""),
+    status: str = Query(""),
+):
+    return await _export(
+        request, mechanism="governor", tab=tab, lane=lane, timeframe=timeframe,
         governor=governor, alignment=alignment, status=status,
     )
