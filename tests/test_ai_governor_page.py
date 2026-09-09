@@ -1215,13 +1215,15 @@ def test_the_three_engine_reads_run_concurrently_not_in_series(monkeypatch):
     """
     import time
 
+    lane, pair = _engine_diag(), _engine_paired()  # before the portal
+
     async def slow_run(self, key, args=None):
         await asyncio.sleep(0.3)
         if key == "read.ai_governor_scorecard":
             return {"ok": True, "key": key, "result": STUB_SCORECARD}
         if key == "read.ai_governor_paired":
-            return {"ok": True, "key": key, "result": _engine_paired()}
-        return {"ok": True, "key": key, "result": _engine_diag()}
+            return {"ok": True, "key": key, "result": pair}
+        return {"ok": True, "key": key, "result": lane}
 
     monkeypatch.setattr(EngineApiClient, "diag_run", slow_run)
     with TestClient(app) as client:
@@ -1241,12 +1243,14 @@ def test_one_read_raising_does_not_take_the_other_two_with_it(monkeypatch):
     """`return_exceptions=True` is what preserves the isolation the separate
     calls exist for. Gathering without it lets one raise cancel its siblings and
     lose all three — the opposite of the property the split was for."""
+    lane = _engine_diag()  # before the portal
+
     async def one_raises(self, key, args=None):
         if key == "read.ai_governor_paired":
             raise RuntimeError("ledger read exploded")
         if key == "read.ai_governor_scorecard":
             return {"ok": True, "key": key, "result": STUB_SCORECARD}
-        return {"ok": True, "key": key, "result": _engine_diag()}
+        return {"ok": True, "key": key, "result": lane}
 
     monkeypatch.setattr(EngineApiClient, "diag_run", one_raises)
     with TestClient(app) as client:
@@ -1260,3 +1264,40 @@ def test_one_read_raising_does_not_take_the_other_two_with_it(monkeypatch):
     body = html.split("Against the engine")[-1]
     assert "Could not reach the engine" in body
     assert "deploy question" not in body
+
+
+def test_no_async_fake_resolves_an_engine_payload_inside_the_portal():
+    """Derived guard, and it exists because I wrote this defect three times.
+
+    `_engine_diag` / `_engine_paired` call `pytest.skip()` when the engine repo
+    is not checked out beside ops — which is CI's situation. Called from inside
+    an `async def` fake, that skip is raised on the TestClient's anyio portal
+    rather than in the test body, and it does not skip. It surfaces as
+    `RuntimeError: This portal is not running`, or — once the route gathers with
+    `return_exceptions=True` — as a *rendered error card* reading
+    "Skipped: engine repo not checked out beside ops", which is worse, because
+    the page looks like it merely failed a read.
+
+    Both shapes cost a CI cycle each. Resolve the payload BEFORE the
+    `with TestClient(...)` block, the way `_get` does, and pass the value in.
+
+    Parsed from this module's own AST rather than kept as a list of known-good
+    tests, so the next fake is covered without anyone remembering.
+    """
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path(__file__).read_text())
+    offenders = [
+        f"{fn.name} calls {call.func.id}()"
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.AsyncFunctionDef)
+        for call in ast.walk(fn)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id in {"_engine_diag", "_engine_paired"}
+    ]
+    assert not offenders, (
+        "engine payloads resolved inside an async fake, where `pytest.skip()` "
+        f"cannot skip: {offenders}. Hoist them above the TestClient block."
+    )
