@@ -229,6 +229,38 @@ def classify_scorecard(payload: Any) -> str:
     return STATE_OK
 
 
+def classify_paired(payload: Any) -> str:
+    """Grade the paired read on ITS OWN shape key.
+
+    `classify` keys on ``measure_enabled`` and `classify_scorecard` on
+    ``coverage``; neither appears in this payload, so running it through either
+    would grade a perfectly healthy lane as an engine predating the page. That
+    is the shape-vs-path defect this file already records twice, and a third
+    classifier is cheaper than a shared one that has to know three shapes.
+
+    The transport and envelope rules are identical and are reused rather than
+    re-implemented — the difference between the three is one key.
+    """
+    if not isinstance(payload, dict):
+        return STATE_UNREACHABLE
+    if "ok" in payload:
+        if payload.get("ok") is False:
+            if UNKNOWN_ENTRY_MARKER in str(payload.get("error") or ""):
+                return STATE_NOT_REPORTED
+            return STATE_ENGINE_ERROR
+    elif "error" in payload:
+        return STATE_UNREACHABLE
+
+    out = payload.get("result") if "result" in payload else payload
+    if not isinstance(out, dict):
+        return STATE_UNREACHABLE
+    if out.get("error"):
+        return STATE_ENGINE_ERROR
+    if "paired" not in out:
+        return STATE_NOT_REPORTED
+    return STATE_OK
+
+
 def engine_error(payload: Any) -> str:
     """What the engine said, for the page to quote rather than paraphrase.
 
@@ -275,6 +307,41 @@ def annotate(counts: Any, copy: Dict[str, str]) -> List[Dict[str, Any]]:
     return rows
 
 
+#: Why a row could not be paired. Looked up FROM the engine's payload, never
+#: iterated — a reason ops has never heard of renders under its raw name.
+UNPAIRABLE_COPY: Dict[str, str] = {
+    "treatment_still_walking": "The arm is still open. A wait, not a fault.",
+    "baseline_still_walking": "The engine's own geometry has not reached its "
+                              "stop or its target yet. Also a wait.",
+    "treatment_unscored": "The arm's walk broke — a stalled feed, a rolled-off "
+                          "window, a series that jumped. Terminal and "
+                          "deliberately unscored: a row whose walk broke has no "
+                          "outcome, and giving it one would be a fabrication "
+                          "arriving as a rate.",
+    "baseline_unscored": "The control walked its whole window and touched "
+                         "neither level. Marking it to the last close would "
+                         "book a fill the market never gave, so it stays blank "
+                         "and the row is excluded rather than guessed at.",
+    "pre_control_row": "Written before the geometry control shipped. Owed "
+                       "nothing, and the population shrinks on its own.",
+}
+
+
+def paired_arms(payload: dict) -> List[Dict[str, Any]]:
+    """One row per arm, rendered whether or not it has ever fired.
+
+    An arm with no rows still renders: a missing arm reads as one that never
+    fired, and those are opposite facts — the whole reason `arm_reachability`
+    exists two cards above. Two of the three have never fired.
+    """
+    block = payload.get("paired") if isinstance(payload.get("paired"), dict) else {}
+    per_arm = block.get("per_arm") if isinstance(block.get("per_arm"), dict) else {}
+    return [
+        {"arm": name, "block": stats if isinstance(stats, dict) else {}}
+        for name, stats in sorted(per_arm.items())
+    ]
+
+
 def lane_state(diag: dict) -> str:
     """Which of the lane's worlds we are in, in the order an operator reads.
 
@@ -316,6 +383,14 @@ async def ai_governor(request: Request):
         raw_score = await api.diag_run("read.ai_governor_scorecard", {})
     except Exception as exc:  # pragma: no cover - defensive
         raw_score = {"error": f"{type(exc).__name__}: {exc}"}
+
+    # A THIRD call, for the same reason the second one is separate: this reads
+    # the arm ledger off disk, and a slow or broken read of it must not be able
+    # to take the lane's own state down with it.
+    try:
+        raw_paired = await api.diag_run("read.ai_governor_paired", {})
+    except Exception as exc:  # pragma: no cover - defensive
+        raw_paired = {"error": f"{type(exc).__name__}: {exc}"}
 
     diag = _unwrap(raw)
     health = diag.get("health") if isinstance(diag.get("health"), dict) else {}
@@ -421,5 +496,26 @@ async def ai_governor(request: Request):
             "score_state": score_state,
             "score_arms": score_arms,
             "shadow_note": str(scorecard.get("shadow_note") or ""),
+            # The paired counterfactual — the one comparison the scorecard
+            # above CANNOT make. While apply is off the closed-signal record is
+            # the MAINTAIN counterfactual, so for the SL and panic arms it says
+            # what happened WITHOUT the intervention and is structurally silent
+            # on what acting would have produced. This reads the arm ledger
+            # instead, where each row carries BOTH exits walked over one set of
+            # bars: the geometry a verdict edited, and the geometry the
+            # evaluator shipped. That is an effect estimate rather than a
+            # selection statistic, and the two are rendered in separate cards
+            # with the difference stated, because a reader who pools them gets
+            # the sign wrong — the selection split reads +2.5% against −0.5%
+            # over a touched population that is 37/47 winners, and the only arm
+            # the model chooses can do nothing to a winner but clip it.
+            "paired": _unwrap(raw_paired),
+            "paired_state": classify_paired(raw_paired),
+            "paired_error": engine_error(raw_paired),
+            "paired_arms": paired_arms(_unwrap(raw_paired)),
+            "unpairable_rows": annotate(
+                (_unwrap(raw_paired).get("paired") or {}).get("unpairable"),
+                UNPAIRABLE_COPY,
+            ),
         },
     )

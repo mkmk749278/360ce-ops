@@ -624,5 +624,183 @@
   {% endif %}
 </div>
 
+<div class="card">
+  <h2>Against the engine's own exit
+      <span class="muted small">— paired on one row, not two populations</span></h2>
+
+  <p class="muted"><strong>This is the card that answers "does the governor beat
+  what we do now", and it is a different question from the Scorecard above.</strong>
+  That panel compares the signals the governor <em>wanted to touch</em> against the
+  ones it left alone — a <em>selection</em> statistic, and it is labelled as one.
+  Read as an endorsement it points the wrong way: the only arm the model ever
+  chooses is <code>ADJUST_SL</code>, the menu is tighter-only, and most of the
+  touched population were winners. Tightening a stop on a winner can only clip it.</p>
+
+  <p class="muted">Here every arm walks <strong>two exits over one set of bars</strong>
+  under one set of fill rules: the geometry a verdict edited, and the geometry the
+  evaluator shipped, frozen when the arm opened. Their difference is that signal's
+  own delta, so there is no population to select and market conditions are removed
+  rather than averaged over.</p>
+
+  {% if paired_state == 'not_reported' %}
+    <p class="muted">Not reported. The engine has no
+    <code>read.ai_governor_paired</code> entry — a deploy question, not a quiet
+    lane.</p>
+  {% elif paired_state == 'unreachable' %}
+    <p class="muted">Could not reach the engine for this block. The panels above
+    may still be current; this one is not.</p>
+  {% elif paired_state == 'engine_error' %}
+    <p class="muted">The engine could not assemble this block. It said:
+    <code>{{ paired.get('error') or paired_error or 'no reason given' }}</code>.</p>
+  {% else %}
+    {% set pr = paired.get('paired') or {} %}
+    {% set res = paired.get('resolution') or {} %}
+
+    {% if not paired.get('enabled') %}
+      <p class="warn"><strong>The lane is switched off.</strong>
+      <code>AI_GOV_LIVE_ARMS_ENABLED</code> is false, so no arm is being opened or
+      walked. Nothing below will change until it is on.</p>
+    {% endif %}
+
+    <h3>Read these two before any average</h3>
+    <table>
+      <tr><th>Walks that disagreed when they must not</th>
+          <td>{% if (pr.get('agreement_violations') or 0) > 0 %}
+                <span class="warn">{{ pr.get('agreement_violations') }} — every
+                delta below is suspect</span>
+              {% else %}
+                <span class="muted">0</span>
+              {% endif %}
+              <span class="muted small">— a <code>MAINTAIN</code>-only signal edits
+              nothing, so its two walks are <em>required</em> to agree exactly.
+              Anything above zero means the control is not independent of the
+              treatment.</span></td></tr>
+      <tr><th>Rows that could be paired</th>
+          <td>{{ res.get('pairable') if res.get('pairable') is not none else '—' }}
+          <span class="muted small">— both halves scored, on one row, over one
+          walk. Every mean below divides by this and nothing else.</span></td></tr>
+      <tr><th>Self-check population</th>
+          <td>{{ (pr.get('untouched') or {}).get('n') if pr.get('untouched') else '—' }}
+          <span class="muted small">— untouched rows. This is the size of the
+          check, never of a finding: they are the rows the governor left alone,
+          so their delta is zero by construction.</span></td></tr>
+    </table>
+
+    {% if pr.get('agreement_violation_rows') %}
+    <table>
+      <tr><th>Signal</th><th>Symbol</th><th>Delta</th></tr>
+      {% for row in pr.get('agreement_violation_rows') %}
+      <tr><td><code>{{ row.get('signal_id') }}</code></td>
+          <td>{{ row.get('symbol') }}</td>
+          <td class="warn">{{ row.get('delta_pct') | pct }}</td></tr>
+      {% endfor %}
+    </table>
+    <p class="muted small">Published as rows rather than a count alone: a
+    violation invalidates the panel above it, so it has to be inspectable.</p>
+    {% endif %}
+
+    <h3>Per arm — and deliberately no pooled figure</h3>
+    <table>
+      <tr><th>Arm</th><th>n</th><th>Better / worse</th>
+          <th>Mean delta</th><th>Governor</th><th>Engine</th></tr>
+      {% for row in paired_arms %}
+      <tr>
+        <td><code>{{ row.arm }}</code></td>
+        <td>{{ row.block.get('n') }}</td>
+        <td>{% if row.block.get('n') %}{{ row.block.get('better') }} /
+            {{ row.block.get('worse') }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if row.block.get('mean_delta_pct') is not none %}
+              {{ row.block.get('mean_delta_pct') | pct }}
+            {% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if row.block.get('mean_treatment_pct') is not none %}
+              {{ row.block.get('mean_treatment_pct') | pct }}
+            {% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if row.block.get('mean_baseline_pct') is not none %}
+              {{ row.block.get('mean_baseline_pct') | pct }}
+            {% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted small">Every arm renders whether or not it has fired — a
+    missing arm reads as one that never fired, and those are opposite facts.
+    <strong>Read <code>n</code> before any mean.</strong>
+    <code>FAILED_AUCTION_RECLAIM</code> read +0.846R on three rows and a promotion
+    was requested within the day. {{ pr.get('no_pooled_figure') }}</p>
+
+    {% for row in paired_arms %}
+      {% if row.block.get('worst_row') %}
+      <p class="muted small">Worst single <code>{{ row.arm }}</code> row:
+      <code>{{ row.block.worst_row.get('signal_id') }}</code>
+      ({{ row.block.worst_row.get('symbol') }}) at
+      {{ row.block.worst_row.get('delta_pct') | pct }} — printed because a mean
+      over a handful of rows is one episode away from meaning something else.</p>
+      {% endif %}
+    {% endfor %}
+
+    {% if (pr.get('touched_by_more_than_one_arm') or 0) > 0 %}
+    <p class="muted small">{{ pr.get('touched_by_more_than_one_arm') }} signal(s)
+    were edited by more than one arm over their life. They are filed under
+    <em>each</em> arm that touched them and the overlap is stated here, rather
+    than assigned to one arm by an ordering nobody chose.</p>
+    {% endif %}
+
+    <h3>Rows that could not be paired</h3>
+    {% if unpairable_rows %}
+    <table>
+      <tr><th>Reason</th><th>n</th><th>What it means</th></tr>
+      {% for row in unpairable_rows %}
+      <tr><td><code>{{ row.name }}</code>{% if row.unclassified %}
+              <span class="warn">unclassified</span>{% endif %}</td>
+          <td>{{ row.count }}</td>
+          <td class="muted small">{{ row.meaning }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">Nothing excluded. On a fresh ledger that is because there is
+    nothing in it yet, not because coverage is perfect.</p>
+    {% endif %}
+    <p class="muted small">Named, never pooled into one "excluded" count: a
+    broken walk and an ordinary still-running trade have different next moves,
+    and a baseline that quietly stops resolving does not empty this page — it
+    shrinks the paired population while every column above still renders.</p>
+
+    <h3>The lane itself</h3>
+    <table>
+      <tr><th>Mechanism</th>
+          <td>{{ (paired.get('mechanism') or {}).get('label') or 'not reported' }}
+          <span class="muted small">— read from the engine's manifest, not from a
+          copy kept here.</span></td></tr>
+      <tr><th>Open arms</th><td>{{ paired.get('open') }}</td></tr>
+      <tr><th>Resolved arms</th><td>{{ paired.get('resolved') }}</td></tr>
+      <tr><th>Rows seen by this reading</th><td>{{ pr.get('rows_seen') }}</td></tr>
+      <tr><th>Dark lane</th>
+          <td><span class="muted">{{ paired.get('dark_lane') }}</span></td></tr>
+    </table>
+
+    <table>
+      <tr><th>What each verdict did to its arm</th><th>n</th></tr>
+      {% for name, n in (paired.get('edits') or {}).items() | sort %}
+      <tr><td><code>{{ name }}</code></td><td>{{ n }}</td></tr>
+      {% else %}
+      <tr><td colspan="2" class="muted">No verdict has reached this lane since
+      the engine last booted. These counters are per-boot, so on a fresh deploy
+      that is the ordinary case — but it is also what a broken hook looks like,
+      and the two are told apart by whether the Counters card above shows
+      verdicts over the same period.</td></tr>
+      {% endfor %}
+    </table>
+    <p class="muted small">A verdict proposing a <em>wider</em> stop reads
+    <code>wrong_way</code> and is counted rather than dropped: the menu is
+    tighter-only and so is the arm engine, so a counterfactual allowed to widen
+    would measure a mechanism the live path would have refused — and "the model
+    proposed a wider stop" is evidence about the model, not a no-op.</p>
+
+    <p class="muted small">No round trip is charged to a delta: both sides are
+    one entry and one exit on the same notional, so an identical fee cancels
+    exactly in the difference. The absolute Governor and Engine columns are
+    gross.</p>
+  {% endif %}
+</div>
+
 {% endif %}
 {% endblock %}
