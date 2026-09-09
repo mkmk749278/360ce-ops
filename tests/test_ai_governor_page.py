@@ -30,7 +30,8 @@ def _login(client: TestClient) -> None:
     client.post("/login", data={"password": "test-token"})
 
 
-def _get(monkeypatch, path="/signals/ai-governor", diag=None, score=None) -> str:
+def _get(monkeypatch, path="/signals/ai-governor", diag=None, score=None,
+         paired=None) -> str:
     """Render the page against the ENGINE'S OWN payload by default.
 
     Not a hand-written dict: `build_diag` is imported from the engine and
@@ -39,13 +40,19 @@ def _get(monkeypatch, path="/signals/ai-governor", diag=None, score=None) -> str
     """
     payload = _engine_diag() if diag is None else diag
     score_payload = STUB_SCORECARD if score is None else score
+    paired_payload = _engine_paired() if paired is None else paired
 
     async def fake_run(self, key, args=None):
-        # Routed BY KEY: the page now makes two calls, and a fake that returns
-        # one payload for both would hand the lane diag to the scorecard
-        # classifier and grade a healthy page NOT REPORTED.
+        # Routed BY KEY: the page makes THREE calls, and a fake that returned
+        # one payload for all of them would hand the lane diag to the other two
+        # classifiers and grade a healthy page NOT REPORTED. That is not
+        # hypothetical — the paired card silently rendered its not-reported
+        # branch under every test on this file until this branch was added,
+        # because the default fell through to the lane payload.
         if key == "read.ai_governor_scorecard":
             return {"ok": True, "key": key, "result": score_payload}
+        if key == "read.ai_governor_paired":
+            return {"ok": True, "key": key, "result": paired_payload}
         return {"ok": True, "key": key, "result": payload}
 
     monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
@@ -151,6 +158,29 @@ def _engine_scorecard():
         from src.execution import ai_governor as gov
 
         return gov.build_scorecard()
+    finally:
+        sys.path.remove(str(engine))
+
+
+def _engine_paired():
+    """The engine's REAL paired assembler, for the same reason as the two above.
+
+    A fixture chooses a location and then agrees with you about it. The
+    price-action lane card rendered NOT REPORTED against production with every
+    ops test green, because the ops fixture put the block at the payload's top
+    level and the engine nests it — the shape right and the PATH wrong.
+    """
+    import sys
+    from pathlib import Path
+
+    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    if not engine.exists():
+        pytest.skip("engine repo not checked out beside ops")
+    sys.path.insert(0, str(engine))
+    try:
+        from src import ai_governor_live as cf  # type: ignore
+
+        return cf.build_diag()
     finally:
         sys.path.remove(str(engine))
 
@@ -598,9 +628,19 @@ def test_rows_predating_the_split_are_shown_as_their_own_count(monkeypatch):
 
 def test_the_scorecard_leads_with_coverage_not_with_a_delta(monkeypatch):
     """A scorecard over the rows that happened to close is not a scorecard over
-    the book, and a reader who sees the delta first will not go looking."""
+    the book, and a reader who sees the delta first will not go looking.
+
+    Anchored on the card's own HEADING, not on the bare word. It split on
+    ``"Scorecard"`` until 2026-09-09, which silently assumed the word appears
+    exactly once on the page and that everything after it belongs to this card
+    — and the paired panel below broke both halves the moment its copy referred
+    to this one by name. It went red rather than green, which is luck: a
+    substring assertion of this shape can just as easily start passing over the
+    wrong region. Narrowed rather than deleted, because the property it pins is
+    real.
+    """
     html = _get(monkeypatch)
-    body = html.split("Scorecard")[-1]
+    body = html.split("<h2>Scorecard")[-1]
     assert body.index("Read coverage first") < body.index("Selection")
 
 
@@ -939,3 +979,220 @@ def test_which_bound_actually_bound_is_on_screen(monkeypatch):
     body = _get(monkeypatch, diag=diag)
     assert "Which one bound" in body
     assert "widened to the slowest recent tick" in body
+
+
+# --------------------------------------------------------------------------- #
+# The paired card — the one comparison the scorecard cannot make
+# --------------------------------------------------------------------------- #
+
+
+def test_the_paired_keys_this_card_reads_are_the_keys_the_engine_writes():
+    """Driven against the engine's real assembler, and asserting the PATH.
+
+    `paired` is nested inside the payload, not at its top level. The
+    price-action lane card put an engine block where the reader assumed it and
+    every ops test agreed, over a card that rendered NOT REPORTED in
+    production — the shape right and the path wrong. So this asserts where the
+    keys actually land, including that they are NOT at the level a first guess
+    would put them.
+    """
+    payload = _engine_paired()
+    for key in ("enabled", "lane", "mechanism", "open", "resolved",
+                "resolution", "edits", "paired", "dark_lane"):
+        assert key in payload, f"engine no longer publishes {key!r}"
+    block = payload["paired"]
+    for key in ("per_arm", "untouched", "agreement_violations",
+                "agreement_violation_rows", "unpairable", "rows_seen",
+                "no_pooled_figure"):
+        assert key in block, f"engine no longer publishes paired.{key!r}"
+    # Nested, not top-level. The guess that would have shipped.
+    assert "per_arm" not in payload
+    assert "agreement_violations" not in payload
+    # The pairable denominator lives on the RESOLUTION block, beside the other
+    # arm-health counts, not inside `paired` — a reader of either has to be
+    # able to find it where the engine actually puts it.
+    assert "pairable" in payload["resolution"]
+
+
+def test_the_paired_card_is_reachable_and_names_its_difference_from_selection(
+    monkeypatch,
+):
+    """The whole point of the card is that it is not the panel above it.
+
+    A reader who pools them gets the sign wrong: the selection split favours
+    the touched population, and the only arm the model chooses can do nothing
+    to a winner but clip it.
+
+    Takes the FIXTURE, not a hand-built `pytest.MonkeyPatch()`. The first cut
+    constructed one and never called `.undo()`, so `EngineApiClient.diag_run`
+    stayed patched to a fake for the rest of the session and
+    `tests/test_diag_run_timeout.py` — which reads that method's SOURCE — went
+    red two files later. Every file passed in isolation; the failure existed
+    only in the ordering the full suite produces, and it landed in somebody
+    else's file, which is precisely the shape that reads as "not mine,
+    pre-existing". Same class as `asyncio.run` in a test, one fixture over.
+    """
+    html = _get(monkeypatch)
+    assert "Against the engine&#39;s own exit" in html or \
+           "Against the engine's own exit" in html
+    assert "paired on one row, not two populations" in html
+    assert "selection" in html.lower()
+    assert "Tightening a stop on a winner can only clip it" in html
+
+
+def test_every_arm_renders_even_with_no_paired_rows(monkeypatch):
+    """A missing arm reads as one that never fired, and those are opposite
+    facts — the same reason `arm_reachability` exists two cards above."""
+    html = _get(monkeypatch)
+    body = html.split("Against the engine")[-1]
+    for arm in ("ADJUST_SL", "ADJUST_TP", "PANIC_CLOSE"):
+        assert arm in body, f"{arm} has no row in the paired card"
+
+
+def test_the_paired_card_publishes_no_pooled_cross_arm_figure(monkeypatch):
+    """One number across three mechanisms would move with whichever fired most
+    rather than with any of them, and two of the three have never fired."""
+    html = _get(monkeypatch)
+    body = html.split("Against the engine")[-1]
+    for banned in ("pooled delta", "combined delta", "overall delta",
+                   "blended delta"):
+        assert banned not in body.lower()
+
+
+def test_an_agreement_violation_is_shouted_not_footnoted(monkeypatch):
+    """A MAINTAIN-only signal edits nothing, so its two walks are required to
+    agree exactly. A violation invalidates every delta on the card, so it has
+    to lead and it has to be inspectable."""
+    payload = _engine_paired()
+    payload["paired"] = dict(payload["paired"])
+    payload["paired"]["agreement_violations"] = 2
+    payload["paired"]["agreement_violation_rows"] = [
+        {"signal_id": "SIG-BAD", "symbol": "TESTUSDT", "delta_pct": 1.25},
+    ]
+    html = _get(monkeypatch, paired=payload)
+    body = html.split("Against the engine")[-1]
+    assert "every\n                delta below is suspect" in body or \
+           "delta below is suspect" in body
+    assert "SIG-BAD" in body
+
+
+def test_a_clean_agreement_check_does_not_shout(monkeypatch):
+    """The check renders whether or not it trips. A check that appears only
+    when it fires teaches the reader that its absence means "fine" when it
+    equally means the check stopped running."""
+    html = _get(monkeypatch)
+    body = html.split("Against the engine")[-1]
+    assert "Walks that disagreed when they must not" in body
+    assert "delta below is suspect" not in body
+
+
+def test_an_unpairable_reason_the_page_has_never_heard_of_is_badged(monkeypatch):
+    """The table iterates the ENGINE's payload and looks the sentence up.
+    Iterating this page's own keys would be silent by construction on the next
+    reason the engine adds — the drifting mirror, wearing yet another hat."""
+    payload = _engine_paired()
+    payload["paired"] = dict(payload["paired"])
+    payload["paired"]["unpairable"] = {"some_future_reason": 3}
+    html = _get(monkeypatch, paired=payload)
+    body = html.split("Against the engine")[-1]
+    assert "some_future_reason" in body
+    assert "unclassified" in body
+
+
+def test_every_unpairable_reason_the_engine_can_emit_has_copy():
+    """A reason with no sentence renders badged rather than dropped, which is
+    correct — but a reason the ENGINE already declares and this page has never
+    been told about is an omission, not a future-proofing case."""
+    import sys
+    from pathlib import Path
+
+    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    if not engine.exists():
+        pytest.skip("engine repo not checked out beside ops")
+    sys.path.insert(0, str(engine))
+    try:
+        from src import ai_governor_live as cf  # type: ignore
+
+        declared = {
+            getattr(cf, name) for name in dir(cf) if name.startswith("UNPAIRED_")
+        }
+    finally:
+        sys.path.remove(str(engine))
+    missing = declared - set(page.UNPAIRABLE_COPY)
+    assert not missing, f"unpairable reasons with no copy on this page: {missing}"
+
+
+def test_a_switched_off_lane_says_so_rather_than_rendering_empty_tables(monkeypatch):
+    """Zero rows because the lane is off, and zero rows because nothing has
+    closed yet, are different facts with different next moves."""
+    payload = _engine_paired()
+    payload["enabled"] = False
+    html = _get(monkeypatch, paired=payload)
+    body = html.split("Against the engine")[-1]
+    assert "The lane is switched off" in body
+    assert "AI_GOV_LIVE_ARMS_ENABLED" in body
+
+
+def test_an_engine_predating_the_paired_entry_renders_a_deploy_question(monkeypatch):
+    """`not_reported` is an engine that has never heard of the key, and only
+    the engine's own marker means that. Every other `ok: false` is the engine
+    failing to answer a key it HAS — a different next move."""
+    # Resolved BEFORE the TestClient context, never inside `fake_run`.
+    # `_engine_diag` calls `pytest.skip()` when the engine repo is not checked
+    # out beside ops — which is the case on CI — and raising that from inside
+    # the coroutine means raising it on the TestClient's anyio portal, where it
+    # surfaces as `RuntimeError: This portal is not running` instead of a skip.
+    # `_get` already resolves the payload up front for exactly this reason;
+    # these two tests build their own fake and did not.
+    lane = _engine_diag()
+
+    async def fake_run(self, key, args=None):
+        if key == "read.ai_governor_paired":
+            return {"ok": False, "key": key, "error": "unknown catalog entry"}
+        return {"ok": True, "key": key, "result": lane}
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/signals/ai-governor").text
+    body = html.split("Against the engine")[-1]
+    assert "read.ai_governor_paired" in body
+    assert "deploy question" in body
+
+
+def test_a_paired_read_that_times_out_is_not_read_as_a_missing_entry(monkeypatch):
+    """The 2026-09-03 defect, at the third entry. `str(ReadTimeout())` is `""`,
+    so a transport failure carries a falsy `error` and no `ok` — and grading it
+    on shape would tell the owner to check a deploy that is fine."""
+    lane = _engine_diag()  # before the portal — see the test above
+
+    async def fake_run(self, key, args=None):
+        if key == "read.ai_governor_paired":
+            return {"endpoint": "/internal/diag/catalog/run", "error": ""}
+        return {"ok": True, "key": key, "result": lane}
+
+    monkeypatch.setattr(EngineApiClient, "diag_run", fake_run)
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/signals/ai-governor").text
+    body = html.split("Against the engine")[-1]
+    assert "Could not reach the engine" in body
+    assert "deploy question" not in body
+
+
+def test_the_three_classifiers_key_on_three_different_shapes():
+    """`classify` keys on `measure_enabled`, `classify_scorecard` on
+    `coverage`, `classify_paired` on `paired`. Running one payload through
+    another's classifier grades a healthy lane as an engine predating the page
+    — the shape-vs-path defect, and it was one line away twice."""
+    lane = {"ok": True, "result": {"measure_enabled": True}}
+    score = {"ok": True, "result": {"coverage": {}}}
+    pair = {"ok": True, "result": {"paired": {}}}
+
+    assert page.classify(lane) == page.STATE_OK
+    assert page.classify_scorecard(score) == page.STATE_OK
+    assert page.classify_paired(pair) == page.STATE_OK
+
+    assert page.classify_paired(lane) == page.STATE_NOT_REPORTED
+    assert page.classify_paired(score) == page.STATE_NOT_REPORTED
+    assert page.classify(pair) == page.STATE_NOT_REPORTED

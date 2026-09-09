@@ -967,6 +967,84 @@ every render, and **every existing page test fails identically** — which reads
 exactly like "I broke the app". Check a page you did not touch before believing
 that.
 
+## `/signals/ai-governor` — the paired card, and the panel above it that points the other way (2026-09-09)
+
+Owner, from a guest session: *"how can we edge AI governor vs engine now
+exits"*. The page could not answer it, and the reason is structural rather than
+a missing panel: while `AI_GOV_APPLY_ENABLED` is off, **every recorded outcome
+IS the MAINTAIN counterfactual**, so for the SL and panic arms the
+closed-signal record says what happened *without* the intervention and is
+silent on what acting would have produced. `read.ai_governor_scorecard` says
+exactly that (`arm_undecidable_while_dark`) and refuses to guess.
+
+**The panel it DID have points the wrong way if read as an endorsement, and
+that is the lesson worth keeping.** Selection reads **+2.499%** net over the 47
+theses the governor wanted to touch against **−0.521%** over the 219 it left
+alone — correctly labelled *not an effect estimate*. But the only arm the model
+ever chooses is `ADJUST_SL`, the menu is tighter-only, and **37 of those 47
+were winners**: applying the arm could only clip them. **A label is not a
+defence.** When a page publishes a comparison it says is not causal, work out
+which way the causal version would point and say so — the reader who skips the
+caption gets the sign wrong, and the caption is the only thing stopping them.
+
+`read.ai_governor_paired` is the answer, and it is a **third** diag call on this
+page. Each arm walks two exits over one set of bars: the geometry a verdict
+edited, and the geometry the evaluator shipped, frozen at open. Paired per row,
+so there is no population to select.
+
+Rules the card carries:
+
+- **Three classifiers, three shape keys, and that is not duplication.**
+  `classify` keys on `measure_enabled`, `classify_scorecard` on `coverage`,
+  `classify_paired` on `paired`. Running one payload through another's
+  classifier grades a healthy lane as an engine predating the page — the
+  shape-vs-path defect this file already records twice, and it was one line away
+  a third time. The transport rules (`ok` present ⇒ the engine answered; `error`
+  present with no `ok` ⇒ ops' own client failed, **by key presence, never
+  truthiness**) are shared, because `str(httpx.ReadTimeout())` is `""`.
+- **Read `agreement_violations` before any mean, and it renders whether or not
+  it trips.** A `MAINTAIN`-only signal edits nothing, so its two walks are
+  *required* to agree exactly; anything above zero means the control is not
+  independent of the treatment and every delta above it is suspect. Violations
+  render as rows, not as a count — a check that appears only when it fires
+  teaches the reader that its absence means "fine" when it equally means the
+  check stopped running.
+- **`unpairable` is named, never pooled into one "excluded" count.** A broken
+  walk and an ordinary still-running trade have different next moves, and a
+  baseline that quietly stops resolving does not empty the page — it shrinks the
+  paired population while every column above still renders. The table iterates
+  **the engine's payload** and looks the sentence up; a reason ops has never
+  heard of renders badged `unclassified`.
+- **Per arm, never pooled**, and every arm renders whether or not it has fired.
+  One number across three mechanisms would move with whichever fired most, and
+  two of the three have never fired. A missing arm reads as one that never
+  fired, and those are opposite facts.
+- **No round trip is charged to a delta** — both sides are one entry and one
+  exit on the same notional, so an identical fee cancels exactly in the
+  difference. The absolute columns are gross and say so.
+- **A switched-off lane says so**, and an empty edits table renders its cause
+  rather than vanishing: the counters are per-boot, so "no verdict since boot"
+  is the ordinary case on a fresh deploy *and* what a broken hook looks like,
+  and the page names how to tell them apart.
+- **The contract test drives the real engine assembler** (`_engine_paired()`
+  imports `ai_governor_live.build_diag`) and asserts `paired` is **nested**,
+  including that its keys are *not* at the top level. A fixture chooses a
+  location and then agrees with you about it — the price-action lane card
+  rendered `NOT REPORTED` against production with every ops test green.
+
+**The fixture had to learn the third key, and until it did the card silently
+rendered its not-reported branch under every test on the file** — the default
+fell through to the lane payload. A fake that returns one payload for several
+keys is the same defect as a fixture that chooses a location.
+
+**One assertion rotted while I was writing this, and it went red rather than
+green — which was luck.** `test_the_scorecard_leads_with_coverage_not_with_a_delta`
+split on the bare word `"Scorecard"` and took the last occurrence, silently
+assuming the word appears once. The new card's copy refers to the old one by
+name. Narrowed to the card's own `<h2>` heading rather than deleted, and the
+general rule stands: **a substring assertion of that shape can just as easily
+start passing over the wrong region.**
+
 ## The read-only door (`/guest`) — a second tier that can never write
 
 Added 2026-08-06 (`docs/READ_ONLY_ACCESS.md`) for the owner's question: *"give
