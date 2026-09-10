@@ -139,6 +139,21 @@ UNDECIDABLE_COPY: Dict[str, str] = {
                                   "happened WITHOUT this arm. Deciding it needs a "
                                   "live window; for the SL arm two of its cases "
                                   "are not in the record at all.",
+    # The OPPOSITE reason, and it needs its own sentence rather than sharing
+    # one: the arm was armed, so the recorded outcome already contains its
+    # effect and the record cannot difference out something that is inside it.
+    # One waits for a live window; the other already has one and needs the
+    # paired walk to read it.
+    "arm_undecidable_while_armed": "This arm was ARMED for every row here, so "
+                                   "the recorded outcome already contains what "
+                                   "it did. The record cannot difference out an "
+                                   "effect that is inside it — the paired card "
+                                   "is the effect estimate.",
+    "arm_undecidable_mixed_window": "Armed part-way through the window, so this "
+                                    "population holds rows taken WITHOUT the arm "
+                                    "and rows taken WITH it under one name. "
+                                    "Pooling them would move the number with the "
+                                    "arming date rather than with the mechanism.",
 }
 
 
@@ -328,6 +343,126 @@ UNPAIRABLE_COPY: Dict[str, str] = {
 }
 
 
+#: Why the ENTRY side of a premise condition was blank. Looked up FROM the
+#: engine's payload, never iterated.
+PREMISE_ENTRY_COPY: Dict[str, str] = {
+    "no_entry_stamp": "The entry-feature lane never stamped this signal — it "
+                      "was born before that lane, or its stamp was refused. "
+                      "The lane never saw the signal at all.",
+    "feature_not_stamped": "The stamp exists and this one column is not in it: "
+                           "the lane saw the signal and could not read that "
+                           "reading. A different fault from the row above, and "
+                           "a different fix.",
+}
+
+#: Why a premise block was refused outright.
+PREMISE_REFUSAL_COPY: Dict[str, str] = {
+    "no_thesis": "A live path with no thesis in THESIS_BY_SETUP. Refused rather "
+                 "than handed a generic sentence, because a default makes the "
+                 "miss invisible — a hand-maintained per-setup map is a floor. "
+                 "Ours to fix, in the engine.",
+    "error": "The premise builder raised and failed open. Ours to fix.",
+}
+
+#: Why the bar block could not be read.
+BARS_COPY: Dict[str, str] = {
+    "stale": "The trigger series was not there when the snapshot was built — a "
+             "rotated-out mover, or a symbol whose candles stopped.",
+    "error": "The bar builder raised. Ours to fix.",
+}
+
+
+def classify_census(payload: Any) -> str:
+    """Three states for the payload census, and it needs its OWN classifier.
+
+    `classify` keys on `measure_enabled`, `classify_scorecard` on `coverage`,
+    `classify_paired` on `paired`. Running one payload through another's
+    classifier grades a healthy lane as an engine predating the page — the
+    shape-vs-path defect this file already records, and it would be one line
+    away a fourth time.
+
+    * `unreachable`  — ops' own client failed (`error` present, no `ok`).
+    * `not_reported` — the engine answered and carries no census: an engine
+      predating this panel, which is a deploy question.
+    * `unmeasured`   — reporting, nothing asked yet. The QUIET case, and not a
+      fault: a panel rendering 0% here would report a healthy lane on an
+      empty one.
+    * `ok`           — measured.
+    """
+    if not isinstance(payload, dict):
+        return "unreachable"
+    # By key PRESENCE, never truthiness: `str(httpx.ReadTimeout())` is "", so a
+    # timed-out call fails an `if payload.get("error")` exactly as a healthy
+    # one does. The engine's envelope always carries `error`, empty on success.
+    if "ok" not in payload and "error" in payload:
+        return "unreachable"
+    census = _unwrap(payload).get("payload_census")
+    if not isinstance(census, dict):
+        return "not_reported"
+    if not census.get("measured"):
+        return "unmeasured"
+    return "ok"
+
+
+def census_blocks(census: Any) -> List[Dict[str, Any]]:
+    """One row per payload block, with coverage read the same way every time.
+
+    `rows_without_block` is an OLD ROW; a block present but unreadable is a
+    feed that was not there. They are separate columns rather than one
+    "missing" count, because pooling them reports a pre-schema-3 ledger as a
+    broken feed — a caption naming a cause the page cannot observe, which
+    these two repos have paid for under several names.
+    """
+    if not isinstance(census, dict):
+        return []
+    out: List[Dict[str, Any]] = []
+    for key, label in (("premise", "Premise"), ("bars", "Bars"), ("macro", "Macro")):
+        block = census.get(key)
+        if not isinstance(block, dict):
+            continue
+        with_block = int(block.get("rows_with_block") or 0)
+        out.append({
+            "key": key,
+            "label": label,
+            "with_block": with_block,
+            "without_block": int(block.get("rows_without_block") or 0),
+            "share": (
+                round(100.0 * with_block / max(1, with_block + int(block.get("rows_without_block") or 0)), 1)
+            ),
+        })
+    return out
+
+
+def menu_size_rows(census: Any) -> List[Dict[str, Any]]:
+    """The distribution that makes an all-zero ADJUST_TP column readable.
+
+    A size of 1 means the menu offered only `tp_0` — there is no nearer key to
+    return, so the action is structurally impossible on that review. Until this
+    shipped, `ADJUST_TP 0` could not be attributed to the model declining or to
+    the menu never offering, and an all-zero column is a claim about the
+    instrument before it is a claim about the world.
+    """
+    menu = (census or {}).get("menu") if isinstance(census, dict) else None
+    if not isinstance(menu, dict):
+        return []
+    rows: List[Dict[str, Any]] = []
+    for side, key in (("TP", "tp_sizes"), ("SL", "sl_sizes")):
+        sizes = menu.get(key)
+        if not isinstance(sizes, dict):
+            continue
+        total = sum(int(v or 0) for v in sizes.values())
+        for size, n in sorted(sizes.items(), key=lambda kv: int(kv[0])):
+            rows.append({
+                "side": side,
+                "size": int(size),
+                "count": int(n or 0),
+                "pct": round(100.0 * int(n or 0) / total, 1) if total else None,
+                # The one that matters: no alternative to the current level.
+                "inert": int(size) <= 1,
+            })
+    return rows
+
+
 def paired_arms(payload: dict) -> List[Dict[str, Any]]:
     """One row per arm, rendered whether or not it has ever fired.
 
@@ -438,6 +573,9 @@ async def ai_governor(request: Request):
     _age = health.get("verdict_age") or {}
     _age_samples = list(reversed(_age.get("samples") or []))
 
+    _census = diag.get("payload_census")
+    _census = _census if isinstance(_census, dict) else {}
+
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "ai_governor.html",
@@ -525,6 +663,29 @@ async def ai_governor(request: Request):
             # the sign wrong — the selection split reads +2.5% against −0.5%
             # over a touched population that is 37/47 winners, and the only arm
             # the model chooses can do nothing to a winner but clip it.
+            # What the model was SHOWN. Every figure here is the ENGINE's:
+            # ops reduces no ledger row, because the api container has never
+            # evaluated a candidate and a locally-assembled version would
+            # report a healthy zero.
+            "census": _census,
+            "census_state": classify_census(raw),
+            "census_blocks": census_blocks(_census),
+            "census_premise_entry": annotate(
+                ((_census.get("premise") or {}).get("at_entry_reasons")
+                 if isinstance(_census.get("premise"), dict) else {}),
+                PREMISE_ENTRY_COPY,
+            ),
+            "census_premise_refusals": annotate(
+                ((_census.get("premise") or {}).get("refusals")
+                 if isinstance(_census.get("premise"), dict) else {}),
+                PREMISE_REFUSAL_COPY,
+            ),
+            "census_bars_reasons": annotate(
+                ((_census.get("bars") or {}).get("reasons")
+                 if isinstance(_census.get("bars"), dict) else {}),
+                BARS_COPY,
+            ),
+            "menu_sizes": menu_size_rows(_census),
             "paired": _unwrap(raw_paired),
             "paired_state": classify_paired(raw_paired),
             "paired_error": engine_error(raw_paired),
