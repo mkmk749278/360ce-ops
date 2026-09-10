@@ -467,6 +467,174 @@
 {% endif %}
 
 <div class="card">
+  <h2>What the model was SHOWN
+    <span class="muted small">— the payload census, per block</span></h2>
+
+  {% if census_state == 'unreachable' %}
+    <p><strong>READ FAILED.</strong> The engine has the entry and this read did
+    not come back. Intermittent — a reload showing data does not mean nothing
+    was wrong.</p>
+  {% elif census_state == 'not_reported' %}
+    <p class="muted"><strong>NOT REPORTED.</strong> The engine answered and
+    carries no payload census, so it predates this panel. A deploy question,
+    not a quiet lane.</p>
+  {% elif census_state == 'unmeasured' %}
+    <p class="muted"><strong>Not measured.</strong> No verdict has been issued
+    yet, so there is nothing to census. Deliberately not rendered as 0%: a
+    panel showing zero coverage here would report a healthy lane on an empty
+    one.</p>
+  {% else %}
+    <p class="muted">Every figure here is the <strong>engine's</strong>. Ops
+    reduces no ledger row — the api container has never evaluated a candidate,
+    so a locally-assembled version would report a healthy zero. Measured over
+    the last {{ census.get('rows') }} verdict row(s).</p>
+
+    <table>
+      <tr>
+        <th>Block</th><th>Rows carrying it</th>
+        <th>Rows without it</th><th>Share</th>
+      </tr>
+      {% for row in census_blocks %}
+      <tr>
+        <td>{{ row.label }}</td>
+        <td>{{ row.with_block }}</td>
+        <td>{{ row.without_block }}</td>
+        <td>{{ row.share }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted small"><strong>“Rows without it” is an OLD ROW, never a
+    broken feed.</strong> A row written before PROMPT_SCHEMA 3 carries no such
+    block at all; a block that is present and unreadable is counted below under
+    its own reason. Pooling the two would report a pre-schema-3 ledger as a
+    dead feed — a caption naming a cause this page cannot observe.</p>
+
+    {% set prem = census.get('premise') or {} %}
+    <h3>Premise — the question the prompt asks</h3>
+    <table>
+      <tr><th>Rows with a thesis</th><td>{{ prem.get('rows_with_thesis') }}</td></tr>
+      <tr><th>Conditions declared</th><td>{{ prem.get('conditions_declared') }}</td></tr>
+      <tr>
+        <th>…re-read live</th>
+        <td>{{ prem.get('conditions_recomputed_now') }}
+          <span class="muted small">— the rest could not be recomputed from the
+          trigger series, which is the monitor's whole budget. A fact about that
+          budget, not a fault.</span></td>
+      </tr>
+    </table>
+
+    {% if census_premise_refusals %}
+    <h4>Premise refused</h4>
+    <table>
+      <tr><th>Reason</th><th>n</th><th>What it means</th></tr>
+      {% for row in census_premise_refusals %}
+      <tr>
+        <td>{{ row.name }}{% if row.unclassified %}
+          <span class="badge">unclassified</span>{% endif %}</td>
+        <td>{{ row.count }}</td><td>{{ row.meaning }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+
+    {% if census_premise_entry %}
+    <h4>Why the entry side was blank</h4>
+    <table>
+      <tr><th>Reason</th><th>n</th><th>What it means</th></tr>
+      {% for row in census_premise_entry %}
+      <tr>
+        <td>{{ row.name }}{% if row.unclassified %}
+          <span class="badge">unclassified</span>{% endif %}</td>
+        <td>{{ row.count }}</td><td>{{ row.meaning }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted small">Expect this to be almost entirely
+    <code>no_entry_stamp</code> at first, and that is correct rather than
+    broken: every arm open when schema 3 deployed was stamped before it, so it
+    has no entry-feature row to join. A real premise block needs signals born
+    after that deploy.</p>
+    {% endif %}
+
+    {% if census_bars_reasons %}
+    <h4>Bars unreadable</h4>
+    <table>
+      <tr><th>Reason</th><th>n</th><th>What it means</th></tr>
+      {% for row in census_bars_reasons %}
+      <tr>
+        <td>{{ row.name }}{% if row.unclassified %}
+          <span class="badge">unclassified</span>{% endif %}</td>
+        <td>{{ row.count }}</td><td>{{ row.meaning }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+
+    {% if menu_sizes %}
+    <h3>Menu sizes — why an arm may never have been choosable</h3>
+    <table>
+      <tr><th>Side</th><th>Candidates offered</th><th>n</th><th>Share</th></tr>
+      {% for row in menu_sizes %}
+      <tr>
+        <td>{{ row.side }}</td>
+        <td>{{ row.size }}{% if row.inert %}
+          <span class="badge">current level only</span>{% endif %}</td>
+        <td>{{ row.count }}</td>
+        <td>{% if row.pct is not none %}{{ row.pct }}%{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    <p class="muted small"><strong>Read this before reading the verdict mix.</strong>
+    A menu offering only the current level has no nearer key to return, so that
+    action is <em>structurally impossible</em> on that review.
+    <code>ADJUST_TP</code> has been chosen zero times in every window this lane
+    has run, and until this table existed nothing could say whether that was the
+    model declining or the menu never offering. An all-zero column is a claim
+    about the instrument before it is a claim about the world.</p>
+    {% endif %}
+
+    {% set tok = census.get('tokens') or {} %}
+    <h3>Token headroom — the instrument for the budget claim</h3>
+    <table>
+      <tr>
+        <th>Calls</th>
+        <td>{{ tok.get('calls') }}
+          <span class="muted small">— deduplicated to CALLS, never rows: one
+          request answers a whole batch and every verdict it produced carries
+          the same usage, so a rows-weighted mean counts a batch of six six
+          times.</span></td>
+      </tr>
+      <tr>
+        <th>Thinking, mean</th>
+        <td>{% if tok.get('thinking_mean') is not none %}{{ tok.get('thinking_mean') }}
+          {% else %}<span class="muted">— not stamped</span>{% endif %}</td>
+      </tr>
+      <tr>
+        <th>Thinking, max</th>
+        <td>{% if tok.get('thinking_max') is not none %}{{ tok.get('thinking_max') }}
+          {% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+      <tr>
+        <th>Output, mean / max</th>
+        <td>{{ tok.get('output_mean') if tok.get('output_mean') is not none else '—' }}
+          / {{ tok.get('output_max') if tok.get('output_max') is not none else '—' }}</td>
+      </tr>
+    </table>
+    <p class="muted small"><strong>This is a falsification test, not a
+    reading.</strong> The output budget was raised on 2026-09-10 after
+    PROMPT_SCHEMA 3's richer payload truncated the model mid-JSON
+    (<code>MAX_TOKENS</code>, thinking 1570 against a ceiling of 1924). The
+    reasoning was that a ceiling is not a reservation and reasoning length is
+    driven by the task rather than by the room available. <strong>If mean
+    thinking climbs toward whatever ceiling is set, that reasoning is wrong and
+    the fix is the payload rather than the number.</strong> The stamp exists on
+    every call, success or failure — it was rendered only on the failure ring
+    until this panel, so the condition could previously be checked on exactly
+    the population that does not matter.</p>
+  {% endif %}
+</div>
+
+<div class="card">
   <h2>Blindness <span class="muted small">— how much context these verdicts had</span></h2>
   {% if blindness_state == 'not_reported' %}
     <p class="muted">Not reported. The engine predates this block — a deploy
