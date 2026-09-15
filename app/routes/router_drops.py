@@ -249,16 +249,43 @@ def reduce_telegram(payload: dict) -> dict:
     delivered = _i(payload.get("delivered"))
     bypassed = _i(payload.get("telegram_bypassed"))
     state = "on" if flag else "off"
-    # Only meaningful while channels are off: with them on the branch is
-    # never taken and a zero is correct rather than suspicious.
-    tracks = None if state == "on" else (bypassed == delivered)
+
+    # THREE states for the check, not two — caught by reading this card on
+    # production ten minutes after it shipped (2026-09-15).
+    #
+    # `bypassed == delivered` is trivially true at 0 == 0, so the first cut
+    # rendered a green "tracks delivered" over a freshly restarted engine
+    # that had routed nothing. That is a confirmation drawn from an empty
+    # population: the badge a reader takes as "the branch is verified",
+    # printed in exactly the window where nothing is verified. The counters
+    # reset on every deploy, so it is also the state this card is in every
+    # time somebody opens it right after a merge — which is when it is read.
+    #
+    # `None` is therefore "no traffic yet", kept apart from True ("they
+    # track") and False ("they diverge"), the same way an absent flag is
+    # kept apart from a False one above.
+    if state == "on":
+        # The branch is never taken with channels on, so a zero is correct
+        # rather than suspicious and grading it would print a fault over a
+        # healthy engine.
+        tracks = None
+        gap = None
+    elif delivered == 0:
+        tracks = None
+        gap = 0
+    else:
+        tracks = bypassed == delivered
+        gap = delivered - bypassed
     return {
         "available": True,
         "state": state,
         "delivered": delivered,
         "bypassed": bypassed,
         "tracks_delivered": tracks,
-        "gap": None if state == "on" else delivered - bypassed,
+        # True only while channels are off AND nothing has been routed since
+        # this engine started. The page says so instead of claiming a match.
+        "no_traffic_yet": state == "off" and delivered == 0,
+        "gap": gap,
     }
 
 

@@ -103,7 +103,9 @@
       <tr><th>Delivered</th><td>{{ telegram.delivered }}</td></tr>
       <tr><th>Bypassed Telegram</th><td>
         <strong>{{ telegram.bypassed }}</strong>
-        {% if telegram.tracks_delivered %}
+        {% if telegram.no_traffic_yet %}
+          <span class="badge badge-warn">nothing routed yet</span>
+        {% elif telegram.tracks_delivered %}
           <span class="badge badge-ok">tracks delivered</span>
         {% else %}
           <span class="badge badge-bad">does not track delivered</span>
@@ -111,7 +113,16 @@
         {% endif %}
       </td></tr>
     </table>
-    {% if not telegram.tracks_delivered %}
+    {% if telegram.no_traffic_yet %}
+      <p class="small">
+        <strong>Nothing is confirmed yet.</strong> These two are equal because
+        both are zero, which is what a freshly restarted engine looks like —
+        not evidence that the bypass branch is being taken. The counters reset
+        on every deploy, so this is the state right after a merge. Come back
+        once <em>Delivered</em> has moved; this feed runs roughly 16–37 signals
+        a day, so that is usually under two hours.
+      </p>
+    {% elif not telegram.tracks_delivered %}
       <p class="small">
         With channels off <em>every</em> delivered signal takes the bypass
         branch, so these two are expected to move one for one. They do not —
