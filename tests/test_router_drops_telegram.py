@@ -96,6 +96,34 @@ class TestTheCounterIsGradedNotPrinted:
         ))
         assert ok["tracks_delivered"] is True
         assert ok["gap"] == 0
+        assert ok["no_traffic_yet"] is False
+
+    def test_an_empty_population_is_not_a_match(self):
+        """Found by reading this card on production, ten minutes after it
+        shipped (2026-09-15).
+
+        `bypassed == delivered` is trivially true at 0 == 0, so the first
+        cut badged a freshly restarted engine "tracks delivered" — a
+        confirmation drawn from a population that cannot support one, in
+        exactly the window where the page is most likely to be read (the
+        counters reset on every deploy). Three states, never two.
+        """
+        fresh = reduce_telegram(_payload(
+            delivered=0, telegram_channels_enabled=False, telegram_bypassed=0
+        ))
+        assert fresh["no_traffic_yet"] is True
+        assert fresh["tracks_delivered"] is not True, (
+            "0 == 0 must not read as a verified branch"
+        )
+
+    def test_no_traffic_is_only_a_channels_off_state(self):
+        """With channels ON the branch is never taken, so a zero there is
+        not 'waiting for evidence' — it is the correct final answer."""
+        on = reduce_telegram(_payload(
+            delivered=0, telegram_channels_enabled=True, telegram_bypassed=0
+        ))
+        assert on["no_traffic_yet"] is False
+        assert on["tracks_delivered"] is None
 
     def test_a_branch_that_is_not_being_taken_is_the_thing_this_can_see(self):
         """The refutation condition stated in #1034's own body: if
@@ -139,6 +167,18 @@ class TestThePageSaysWhichWorldItIsIn:
         # gate table below cannot say so on its own.
         assert "delivery_failed" in body
         assert "no_channel_configured" in body
+
+    def test_a_fresh_engine_says_nothing_is_confirmed_yet(self, monkeypatch):
+        """The badge a reader takes as 'verified' must not appear over zero."""
+        with _client(_payload(
+            delivered=0, telegram_channels_enabled=False, telegram_bypassed=0
+        ), monkeypatch) as c:
+            body = c.get("/signals/router-drops").text
+        assert "CHANNELS OFF" in body
+        assert "nothing routed yet" in body
+        assert "Nothing is confirmed yet" in body
+        assert "tracks delivered" not in body
+        assert "does not track delivered" not in body
 
     def test_a_divergence_is_badged_not_printed_as_one_more_number(
         self, monkeypatch
