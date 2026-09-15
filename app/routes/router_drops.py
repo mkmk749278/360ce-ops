@@ -208,6 +208,60 @@ def reduce_drops(payload: dict) -> dict:
     }
 
 
+def reduce_telegram(payload: dict) -> dict:
+    """Are Telegram broadcast channels in front of the money path?
+
+    Until 2026-09-15 (engine #1034) they were. `SignalRouter._process`
+    resolved a channel id and sent the message BEFORE `_write_dispatch_log`,
+    before `dispatch_signal_to_active_users` — which places the orders —
+    before the `_active_signals` book and before the app's own push. Both
+    failure modes returned: no `CHANNEL_TELEGRAM_MAP` entry dropped the
+    candidate as `no_channel_configured`, three failed sends dropped it as
+    `delivery_failed`. A third-party chat service was a single point of
+    failure in front of paying users' orders, while every document in these
+    repos called it a "mirror".
+
+    **Three states, never two**, and the third is the point:
+
+    * ``not_reported`` — an engine predating the keys. NOT "off": defaulting
+      an absent flag to off would render every older build as bypassing
+      Telegram, which is the opposite claim and the flattering direction.
+    * ``on`` — channels live, and the old ordering is live with them.
+    * ``off`` — the signal goes straight to the dispatch log, the orders and
+      the app feed.
+
+    The counter is graded against ``delivered`` rather than printed alone:
+    with channels off every delivered signal takes the bypass branch, so the
+    two must track one for one. A divergence is the only thing on this page
+    that can say the branch is not being taken.
+    """
+    if not isinstance(payload, dict) or payload.get("error"):
+        return {"available": False}
+    if _i(payload.get("schema")) < 1:
+        return {"available": False}
+
+    flag = payload.get("telegram_channels_enabled")
+    if flag is None:
+        # By key presence, never by truthiness — `False` is a reading and
+        # absent is not, and `if not flag` cannot tell them apart.
+        return {"available": True, "state": "not_reported"}
+
+    delivered = _i(payload.get("delivered"))
+    bypassed = _i(payload.get("telegram_bypassed"))
+    state = "on" if flag else "off"
+    # Only meaningful while channels are off: with them on the branch is
+    # never taken and a zero is correct rather than suspicious.
+    tracks = None if state == "on" else (bypassed == delivered)
+    return {
+        "available": True,
+        "state": state,
+        "delivered": delivered,
+        "bypassed": bypassed,
+        "tracks_delivered": tracks,
+        "gap": None if state == "on" else delivered - bypassed,
+    }
+
+
 def reduce_position_lock(payload: dict) -> dict:
     """Is `correlation_lock` **tight** or **stale**? — the same counter, two
     opposite findings, and until 2026-08-20 nothing on this page could say.
@@ -482,6 +536,7 @@ async def router_drops(request: Request):
             "by_setup": concentration(reduced),
             "dircap": reduce_direction_cap(payload),
             "chancap": reduce_channel_cap(payload),
+            "telegram": reduce_telegram(payload),
             "error": error,
             "raw": payload,
         },
