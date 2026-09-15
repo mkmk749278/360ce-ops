@@ -1598,6 +1598,53 @@ support it. The engine reads the same flag with its own client and may be
 trading perfectly — which is the `INDEX COLD` shape once more, this time
 telling the owner his book is halted when it is not.
 
+## A grade that is an equality between two counters is satisfied by nothing (2026-09-15)
+
+`/signals/router-drops` gained a card for engine #1034, which took Telegram out
+of the money path and switched the broadcast channels off. With channels off
+every delivered signal takes the bypass branch, so `telegram_bypassed` must
+track `delivered` one for one — and the card **grades** that rather than
+printing it, which is the whole point of the panel.
+
+The grade was `bypassed == delivered`. That is **trivially true at 0 == 0**, so
+a freshly restarted engine rendered
+
+> **Delivered** 0 · **Bypassed Telegram** 0 &nbsp;`tracks delivered`
+
+in green: a confirmation drawn from a population that cannot support one. The
+counters are per-boot and reset on every deploy, so it is the state the page is
+in **precisely when it is most likely to be read** — right after the merge that
+put it there.
+
+Two things make this worth writing down rather than filing as a typo.
+
+- **It contradicted its own change's reasoning.** The engine PR body said
+  zero-vs-zero proves nothing, and the session report to the owner said it
+  again, in the same hour, while the page said the opposite in the typeface it
+  uses for good news. A caption can disagree with the argument that produced
+  it, and nobody re-reads the argument.
+- **No test could have found it.** The reducer did exactly what it was written
+  to do and the arithmetic is correct; the defect is that it is the wrong
+  question over an empty set. It took loading the page. That is the 2026-08-06
+  panel surf's lesson arriving *ten minutes* after a ship instead of a week.
+
+The fix is this file's own rule, which the card had applied to the flag
+(`not_reported` / `on` / `off`) and not to its own check: **three states, never
+two.** `no_traffic_yet` is its own amber badge with copy saying nothing is
+confirmed and when to come back; `tracks_delivered` is `None` there rather than
+`True`, exactly as an absent flag is kept apart from a `False` one.
+
+And the channels-**ON** case is deliberately NOT given the same treatment: there
+the branch is never taken, so a zero is the correct *final* answer rather than
+"waiting for evidence", and grading it would print a fault over a healthy
+engine. A test pins that the new state is channels-off only — otherwise the two
+zeroes read alike again from the other direction.
+
+**The general form, for the next panel: ask what a grade renders BEFORE any
+data arrives, and whether that reads as a verdict.** An equality, a ratio with
+a zero denominator guarded to 0, a "no failures seen" — each is satisfied by an
+empty population, and each fails in the flattering direction.
+
 ## A blank error is still an error (2026-09-03)
 
 `/signals/ai-governor` rendered, on its first real load:
