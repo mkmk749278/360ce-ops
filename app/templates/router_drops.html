@@ -72,6 +72,68 @@
   </p>
 </div>
 
+{% if telegram.available %}
+<div class="card">
+  <h2>Is Telegram in front of the money path?</h2>
+
+  {% if telegram.state == 'not_reported' %}
+    <span class="badge badge-warn">NOT REPORTED</span>
+    <p class="small">
+      This engine does not publish <code>telegram_channels_enabled</code>. That
+      is an engine older than #1034 — a <strong>deploy</strong> question, and
+      <em>not</em> a report that the channels are off. Those are opposite
+      claims, and reading an absent flag as "off" is the flattering one.
+    </p>
+  {% elif telegram.state == 'on' %}
+    <span class="badge badge-warn">CHANNELS ON</span>
+    <p class="small">
+      Broadcast channels are live, which means the <strong>old ordering</strong>
+      is live with them: a signal reaches the dispatch log, the order fan-out,
+      the active book and the app's push only <em>after</em> a Telegram send
+      succeeds. Three failed sends and the candidate is gone from all four.
+    </p>
+    <p class="muted small">
+      Read <code>delivery_failed</code> and <code>no_channel_configured</code>
+      in the gate table below as <em>money-path</em> drops while this badge is
+      showing — not as chat-delivery misses.
+    </p>
+  {% else %}
+    <span class="badge badge-ok">CHANNELS OFF — money path independent</span>
+    <table class="kv">
+      <tr><th>Delivered</th><td>{{ telegram.delivered }}</td></tr>
+      <tr><th>Bypassed Telegram</th><td>
+        <strong>{{ telegram.bypassed }}</strong>
+        {% if telegram.tracks_delivered %}
+          <span class="badge badge-ok">tracks delivered</span>
+        {% else %}
+          <span class="badge badge-bad">does not track delivered</span>
+          <span class="muted small">gap {{ telegram.gap }}</span>
+        {% endif %}
+      </td></tr>
+    </table>
+    {% if not telegram.tracks_delivered %}
+      <p class="small">
+        With channels off <em>every</em> delivered signal takes the bypass
+        branch, so these two are expected to move one for one. They do not —
+        check <code>telegram_channels_enabled</code> in the raw payload before
+        forming any other theory, because a stale counter and a branch that is
+        not being taken look identical in every other number on this page.
+      </p>
+    {% else %}
+      <p class="muted small">
+        Both are cumulative since engine start, so they are equal only within
+        one process. A deploy resets both together.
+      </p>
+    {% endif %}
+  {% endif %}
+
+  <p class="muted small">
+    The bot is unaffected either way — admin alerts, the liveness pager and
+    every command address a chat, not a channel.
+  </p>
+</div>
+{% endif %}
+
 <div class="card">
   <h2>Is <code>correlation_lock</code> tight, or stale?</h2>
   <p class="muted small">
