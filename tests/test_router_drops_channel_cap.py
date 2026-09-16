@@ -178,6 +178,39 @@ class TestThePanelRenders:
         assert "channel_cap" in body  # names the absent block, not a blank
 
 
+def _construct_router(SignalRouter, queue):
+    """Build a router from whatever constructor the checked-out engine has.
+
+    This is not a compatibility shim for its own sake — it is the only way this
+    contract test can be honest about WHAT it asserts. It exists to check the
+    payload's keys and their nesting, and the constructor is incidental to that.
+
+    Engine #1037 deleted the `send_telegram` and `format_signal` parameters with
+    the Telegram broadcast channels. Before it they are REQUIRED (no default);
+    after it they do not exist. So a hardcoded call is wrong against one of the
+    two engines, and ops CI checks the engine out at its own ref — which is how
+    this file went green against an engine that still had them while the engine
+    PR that removed them also went green. Hardcoding either shape makes the
+    merge order load-bearing in a way neither repo's CI can see.
+
+    Reading the real signature is the opposite of a drifting mirror: the
+    producer is asked what it takes, rather than this repo remembering.
+    """
+    import inspect
+
+    params = inspect.signature(SignalRouter.__init__).parameters
+    kwargs = {"queue": queue}
+
+    async def _send(*_a, **_k):
+        return True
+
+    if "send_telegram" in params:
+        kwargs["send_telegram"] = _send
+    if "format_signal" in params:
+        kwargs["format_signal"] = lambda _sig: ""
+    return SignalRouter(**kwargs)
+
+
 def _engine_channel_cap_report() -> dict:
     """Drive the engine's REAL report, not a shape this repo invented.
 
@@ -194,17 +227,7 @@ def _engine_channel_cap_report() -> dict:
     try:
         from src.signal_router import SignalRouter  # type: ignore
 
-        # No `send_telegram` / `format_signal`: engine #1037 deleted both
-        # constructor parameters with the Telegram broadcast channels, so the
-        # router no longer sends to a chat or formats one. Passing them now
-        # raises TypeError.
-        #
-        # Worth knowing WHY this was nearly missed. Ops CI checks the engine
-        # out at its own ref, so this file kept passing against an engine that
-        # still had the kwargs — it would have gone red on `main` the moment
-        # #1037 merged, not on the PR that broke it. A cross-repo contract
-        # test is only as timely as the ref it drives.
-        router = SignalRouter(queue=asyncio.Queue())
+        router = _construct_router(SignalRouter, asyncio.Queue())
         return router.delivery_stats()
     finally:
         sys.path.remove(str(engine))
