@@ -145,14 +145,9 @@ def test_the_reducer_reads_what_the_real_engine_router_publishes():
         from src.signal_router import SignalRouter
         from src.smc import Direction
 
-        async def _send(chat_id: str, text: str) -> bool:
-            return True
-
-        router = SignalRouter(
-            queue=asyncio.Queue(),
-            send_telegram=_send,
-            format_signal=lambda sig: "x",
-        )
+        # Engine #1037 deleted the `send_telegram` / `format_signal`
+        # constructor parameters with the Telegram broadcast channels.
+        router = SignalRouter(queue=asyncio.Queue())
 
         def _sig(sym: str, origin: str) -> Signal:
             return Signal(

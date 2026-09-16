@@ -194,12 +194,17 @@ def _engine_channel_cap_report() -> dict:
     try:
         from src.signal_router import SignalRouter  # type: ignore
 
-        async def _send(_a, _b):
-            return True
-
-        router = SignalRouter(
-            queue=asyncio.Queue(), send_telegram=_send, format_signal=lambda s: ""
-        )
+        # No `send_telegram` / `format_signal`: engine #1037 deleted both
+        # constructor parameters with the Telegram broadcast channels, so the
+        # router no longer sends to a chat or formats one. Passing them now
+        # raises TypeError.
+        #
+        # Worth knowing WHY this was nearly missed. Ops CI checks the engine
+        # out at its own ref, so this file kept passing against an engine that
+        # still had the kwargs — it would have gone red on `main` the moment
+        # #1037 merged, not on the PR that broke it. A cross-repo contract
+        # test is only as timely as the ref it drives.
+        router = SignalRouter(queue=asyncio.Queue())
         return router.delivery_stats()
     finally:
         sys.path.remove(str(engine))
