@@ -120,14 +120,12 @@ PER_CANDIDATE = {
         "the engine's log carries its own words"
     ),
     "risk_manager_unspecified": "the risk manager refused and named no reason",
-    "no_channel_configured": (
-        "no Telegram channel id for this channel — configuration, not a market "
-        "condition, and silent for EVERY candidate on that channel until fixed"
-    ),
-    "delivery_failed": (
-        "three failed sends: the candidate never reached a channel, the app "
-        "feed, or the auto-trade fan-out"
-    ),
+    # `no_channel_configured` and `delivery_failed` are deliberately ABSENT.
+    # Both were raised only inside the Telegram send block, which engine #1037
+    # deleted with the broadcast channels — so the engine cannot emit either
+    # any more. Keeping the copy would give a resurrected channel drop a
+    # friendly, expected-looking sentence; without it the reason renders under
+    # its raw name badged `unclassified`, which is what it would be.
 }
 
 
@@ -205,87 +203,6 @@ def reduce_drops(payload: dict) -> dict:
             sum(r["n"] for r in shared) / processed if processed else None
         ),
         "unclassified": [r["reason"] for r in rows if r["kind"] == "unclassified"],
-    }
-
-
-def reduce_telegram(payload: dict) -> dict:
-    """Are Telegram broadcast channels in front of the money path?
-
-    Until 2026-09-15 (engine #1034) they were. `SignalRouter._process`
-    resolved a channel id and sent the message BEFORE `_write_dispatch_log`,
-    before `dispatch_signal_to_active_users` — which places the orders —
-    before the `_active_signals` book and before the app's own push. Both
-    failure modes returned: no `CHANNEL_TELEGRAM_MAP` entry dropped the
-    candidate as `no_channel_configured`, three failed sends dropped it as
-    `delivery_failed`. A third-party chat service was a single point of
-    failure in front of paying users' orders, while every document in these
-    repos called it a "mirror".
-
-    **Three states, never two**, and the third is the point:
-
-    * ``not_reported`` — an engine predating the keys. NOT "off": defaulting
-      an absent flag to off would render every older build as bypassing
-      Telegram, which is the opposite claim and the flattering direction.
-    * ``on`` — channels live, and the old ordering is live with them.
-    * ``off`` — the signal goes straight to the dispatch log, the orders and
-      the app feed.
-
-    The counter is graded against ``delivered`` rather than printed alone:
-    with channels off every delivered signal takes the bypass branch, so the
-    two must track one for one. A divergence is the only thing on this page
-    that can say the branch is not being taken.
-    """
-    if not isinstance(payload, dict) or payload.get("error"):
-        return {"available": False}
-    if _i(payload.get("schema")) < 1:
-        return {"available": False}
-
-    flag = payload.get("telegram_channels_enabled")
-    if flag is None:
-        # By key presence, never by truthiness — `False` is a reading and
-        # absent is not, and `if not flag` cannot tell them apart.
-        return {"available": True, "state": "not_reported"}
-
-    delivered = _i(payload.get("delivered"))
-    bypassed = _i(payload.get("telegram_bypassed"))
-    state = "on" if flag else "off"
-
-    # THREE states for the check, not two — caught by reading this card on
-    # production ten minutes after it shipped (2026-09-15).
-    #
-    # `bypassed == delivered` is trivially true at 0 == 0, so the first cut
-    # rendered a green "tracks delivered" over a freshly restarted engine
-    # that had routed nothing. That is a confirmation drawn from an empty
-    # population: the badge a reader takes as "the branch is verified",
-    # printed in exactly the window where nothing is verified. The counters
-    # reset on every deploy, so it is also the state this card is in every
-    # time somebody opens it right after a merge — which is when it is read.
-    #
-    # `None` is therefore "no traffic yet", kept apart from True ("they
-    # track") and False ("they diverge"), the same way an absent flag is
-    # kept apart from a False one above.
-    if state == "on":
-        # The branch is never taken with channels on, so a zero is correct
-        # rather than suspicious and grading it would print a fault over a
-        # healthy engine.
-        tracks = None
-        gap = None
-    elif delivered == 0:
-        tracks = None
-        gap = 0
-    else:
-        tracks = bypassed == delivered
-        gap = delivered - bypassed
-    return {
-        "available": True,
-        "state": state,
-        "delivered": delivered,
-        "bypassed": bypassed,
-        "tracks_delivered": tracks,
-        # True only while channels are off AND nothing has been routed since
-        # this engine started. The page says so instead of claiming a match.
-        "no_traffic_yet": state == "off" and delivered == 0,
-        "gap": gap,
     }
 
 
@@ -563,7 +480,6 @@ async def router_drops(request: Request):
             "by_setup": concentration(reduced),
             "dircap": reduce_direction_cap(payload),
             "chancap": reduce_channel_cap(payload),
-            "telegram": reduce_telegram(payload),
             "error": error,
             "raw": payload,
         },
