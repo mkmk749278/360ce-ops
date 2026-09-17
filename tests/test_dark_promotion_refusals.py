@@ -30,6 +30,13 @@ os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
 
 from app.data_sources import dark_promotion as dp  # noqa: E402
 
+#: Where the engine repo is. `$ENGINE_REPO` first, else the sibling checkout.
+#: The old form hardcoded one machine's absolute layout, so every contract
+#: below skipped silently on any other checkout — and on every CI run.
+_ENGINE_REPO = pathlib.Path(
+    os.getenv("ENGINE_REPO") or pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+)
+
 
 def _row(
     *,
@@ -231,9 +238,9 @@ def test_every_dimension_the_engine_can_report_has_ops_copy():
     an unknown one renders badged rather than dropped. This asserts we are not
     *starting* with a gap — and it derives the list from the engine when the
     repo is present rather than from a copy kept here."""
-    engine = pathlib.Path("/home/user/360-v2/src/dark_promotion.py")
+    engine = _ENGINE_REPO / "src" / "dark_promotion.py"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     import re
     src = engine.read_text(encoding="utf-8")
     block = re.search(
@@ -258,9 +265,9 @@ def test_every_dimension_the_engine_can_report_has_ops_copy():
 
 
 def _engine_module():
-    repo = pathlib.Path("/home/user/360-v2")
+    repo = _ENGINE_REPO
     if not (repo / "src" / "dark_promotion.py").exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     if str(repo) not in sys.path:
         sys.path.insert(0, str(repo))
     try:

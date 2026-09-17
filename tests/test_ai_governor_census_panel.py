@@ -26,7 +26,7 @@ def _engine_diag() -> dict:
     """The engine's own assembler, never a shape this repo invented."""
     engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src.execution import ai_governor as gov  # type: ignore
@@ -72,7 +72,7 @@ def test_every_block_this_page_renders_is_one_the_engine_emits():
     """
     engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import ai_governor_ledger as led  # type: ignore

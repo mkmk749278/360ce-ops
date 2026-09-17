@@ -69,7 +69,7 @@ def _engine_module():
     """Import the ENGINE's entry_fidelity, not a shape this repo invented."""
     engine = Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import entry_fidelity as engine_ef  # type: ignore
@@ -124,7 +124,7 @@ def test_every_field_this_page_reads_is_one_the_ENGINE_actually_writes():
     full-looking table describing nothing. Checked against the real record."""
     engine = Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src.performance_tracker import SignalRecord  # type: ignore

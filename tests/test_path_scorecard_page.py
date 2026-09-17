@@ -35,7 +35,7 @@ def _engine_summarise():
     """The engine's real reducer, never a shape this repo invented."""
     engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import path_scorecard as eng  # type: ignore
@@ -82,7 +82,7 @@ def test_every_verdict_the_engine_can_emit_has_copy_on_this_page():
     pins that the four the engine defines today are all described."""
     engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import path_scorecard as eng  # type: ignore

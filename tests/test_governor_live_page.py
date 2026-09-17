@@ -61,7 +61,7 @@ def _engine_manifest(key: str) -> dict:
 
     engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import trail_mechanisms  # type: ignore
@@ -336,7 +336,7 @@ def test_the_engine_keeps_the_governor_out_of_the_permission_list():
 
     engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import trail_mechanisms  # type: ignore

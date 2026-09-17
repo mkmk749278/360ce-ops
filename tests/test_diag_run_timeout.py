@@ -35,7 +35,7 @@ def test_the_diag_timeout_exceeds_the_engines_own_poll_deadline():
     if not ENGINE_CONFIG.exists():
         import pytest
 
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
 
     text = ENGINE_CONFIG.read_text()
     marker = 'DIAG_POLL_TIMEOUT_SEC: float = _safe_float("DIAG_POLL_TIMEOUT_SEC", '
