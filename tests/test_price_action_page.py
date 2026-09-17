@@ -51,12 +51,19 @@ def test_the_split_constant_matches_the_engine():
     """An unpinned mirror is what drifted MEASUREMENT_SUFFIXES for a week. This
     reads the engine's own constant rather than restating it."""
     import importlib.util
+    import os
     import pathlib
 
-    engine = pathlib.Path("/home/user/360-v2/src/price_action_lane.py")
+    # `$ENGINE_REPO` first, else the sibling checkout. The old form
+    # hardcoded one machine's absolute layout, so this contract skipped
+    # silently on every other checkout and on every CI run.
+    engine = pathlib.Path(
+        os.getenv("ENGINE_REPO")
+        or pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+    ) / "src" / "price_action_lane.py"
     if not engine.exists():
         import pytest
-        pytest.skip("engine repo not present in this checkout")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     spec = importlib.util.spec_from_file_location("_pal", engine)
     src = engine.read_text()
     # Read the literal without importing the engine's dependency tree.

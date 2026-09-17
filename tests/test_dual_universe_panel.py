@@ -225,7 +225,7 @@ def test_no_overlap_badge_when_nothing_is_dual(monkeypatch):
 
 def _engine_reachable() -> str:
     if not _ENGINE.is_dir():
-        return "engine repo not checked out beside ops"
+        return "no engine repo beside ops — and CI never checks it out either"
     sys.path.insert(0, str(_ENGINE))
     try:
         import src.api.snapshot  # noqa: F401

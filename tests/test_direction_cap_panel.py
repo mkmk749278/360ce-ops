@@ -35,10 +35,19 @@ def _construct_router(SignalRouter, queue):
     Engine #1037 deleted the `send_telegram` and `format_signal` parameters with
     the Telegram broadcast channels. Before it they are REQUIRED (no default);
     after it they do not exist. So a hardcoded call is wrong against one of the
-    two engines, and ops CI checks the engine out at its own ref — which is how
-    this file went green against an engine that still had them while the engine
-    PR that removed them also went green. Hardcoding either shape makes the
-    merge order load-bearing in a way neither repo's CI can see.
+    two engines, and which one sits beside this checkout is not something this
+    file controls.
+
+    CORRECTION (2026-09-17) to what this docstring said when it shipped: it
+    claimed "ops CI checks the engine out at its own ref". It does not check
+    the engine out AT ALL — neither `ci.yml` nor `deploy.yml` has a second
+    checkout — so every `_engine_*` helper here SKIPS in CI, and a local
+    side-by-side checkout is its only runtime. That is a sharper limitation
+    than the one first written down, and it cuts both ways: no CI in either
+    repo guards this contract, so nothing would have caught the break and
+    nothing will catch the next one either. The claim came from reading the
+    workflow's purpose rather than its steps, and `grep -c actions/checkout
+    .github/workflows/ci.yml` settles it in one command.
 
     Reading the real signature is the opposite of a drifting mirror: the
     producer is asked what it takes, rather than this repo remembering.
@@ -69,7 +78,7 @@ _ENGINE = Path(__file__).resolve().parents[2] / "360-v2"
 def _engine_reachable() -> str:
     """Empty string when the engine's router can be imported; else the reason."""
     if not _ENGINE.is_dir():
-        return "engine repo not checked out beside ops"
+        return "no engine repo beside ops — and CI never checks it out either"
     sys.path.insert(0, str(_ENGINE))
     try:
         import src.signal_router  # noqa: F401

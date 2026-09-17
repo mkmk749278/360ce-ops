@@ -137,7 +137,7 @@ def _engine_diag() -> dict:
 
     engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src.execution import ai_governor as gov  # type: ignore
@@ -153,7 +153,7 @@ def _engine_scorecard():
 
     engine = Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src.execution import ai_governor as gov
@@ -176,7 +176,7 @@ def _engine_paired():
 
     engine = Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import ai_governor_live as cf  # type: ignore
@@ -699,7 +699,7 @@ def test_every_undecidable_reason_the_engine_can_emit_has_copy():
     engine = Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
         import pytest as _pytest
-        _pytest.skip("engine repo not checked out beside ops")
+        _pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import ai_governor_score as sc
@@ -1109,7 +1109,7 @@ def test_every_unpairable_reason_the_engine_can_emit_has_copy():
 
     engine = Path(__file__).resolve().parents[2] / "360-v2"
     if not engine.exists():
-        pytest.skip("engine repo not checked out beside ops")
+        pytest.skip("no engine repo beside ops — and CI never checks it out either")
     sys.path.insert(0, str(engine))
     try:
         from src import ai_governor_live as cf  # type: ignore

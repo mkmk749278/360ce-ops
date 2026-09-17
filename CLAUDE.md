@@ -145,6 +145,72 @@ so it grows with the surface rather than with the number of tests. Expect this
 to drift upward, and raise `timeout-minutes` in `ci.yml` before it starts
 cancelling runs rather than after.
 
+## The cross-repo contract tests do NOT run in CI (2026-09-17)
+
+Many tests here drive the **engine's real** assembler rather than a fixture,
+because "a fixture chooses a location and then agrees with you about it" cost
+this repo a session twice (`zone_distance_atr`, the price-action lane card).
+Measured, not counted from memory — **20 skip sites across 11 files**
+(`grep -rc "no engine repo beside ops" tests/*.py`), plus `test_sar_hold.py`
+via a module-level `skipif` and `test_system_health.py`, which degrades rather
+than skipping: it derives the container roster from both compose files and
+`continue`s past the engine's, so in CI it silently checks half of what it
+reads as checking.
+
+Each locates the engine as a sibling of the ops checkout and **skips when it is
+absent**. Neither `ci.yml` nor `deploy.yml` checks that repo out — one
+`actions/checkout@v4` each, no `repository:` anywhere — so **every one of them
+skips on every CI run, and always has.** Their only runtime is a local
+side-by-side checkout of both repos.
+
+So when engine #1037 deleted `SignalRouter`'s `send_telegram` / `format_signal`
+parameters, ops #222 and engine #1037 were both green over a contract that was
+about to break, and the break surfaced on a developer's machine rather than in
+either repo's CI. The docstrings written that day asserted the opposite — *"ops
+CI checks the engine out at its own ref"* — which is this file's own recurring
+defect: **a claim about a moving system, checkable in one command**
+(`grep -c actions/checkout .github/workflows/ci.yml`), that nobody ran. It
+matters which way round it is, because the true version is the sharper one:
+nothing guards this contract in either direction, so the local run is the whole
+guard and a green CI says nothing about it.
+
+**Three of those sites were worse than skipping in CI — they could never run
+anywhere.** `test_dark_promotion_refusals.py` (x2) and
+`test_price_action_page.py` hardcoded `pathlib.Path("/home/user/360-v2")`, and
+`test_sar_hold.py` used it as the `$ENGINE_REPO` default: one container's
+absolute layout, so those contracts skipped silently on every other machine as
+well — including the engine's own `decide` conjunction, which is the mirror
+`rule_unmet` exists to be pinned against. All four now read `$ENGINE_REPO`
+first and fall back to the resolved sibling, so the pointer is a fact about the
+checkout rather than about one box.
+
+**The skip reason now names the CI fact** (*"no engine repo beside ops — and CI
+never checks it out either"*), because the previous wording — *"engine repo not
+checked out beside ops"* — reads as a local convenience and is precisely what
+let a reader believe CI covered it. A skip line is the instrument here; make it
+say what it means.
+
+**The pattern that does survive CI is beside them.**
+`test_atr_trail_contract.py`, `test_track_record_contract.py`,
+`test_sar_engine_contract.py` and `test_router_drops_position_lock.py` assert
+the same kind of cross-repo agreement and never import the engine — they pin a
+**byte-identical shared vector** and drive ops' own reducer against it, with
+the engine-side test pinning the same vector. Where a contract can be expressed
+as data rather than as an import, that is the version CI can actually run, and
+it is the first thing to reach for on a new one.
+
+**Closing the rest of the gap is not free and is an owner call**, which is why
+it is recorded here rather than shipped: the engine is private, so a clone needs
+the `GH_PAT` secret; `actions/checkout` refuses a `path:` outside the workspace,
+so it has to be a `git clone` step; the engine's own deps (numpy, aiohttp) must
+be installed or the import **errors** instead of skipping — which is exactly the
+`ModuleNotFoundError` that masked the real `TypeError` on 2026-09-16; and ops CI
+would then go red for engine-main changes on an unrelated ops PR. If it is ever
+wired, **a failed clone must fail the job**, because the skip is silent by
+construction and a green tick over a skipped contract is the state we are
+already in. The smaller companion is a shared `tests/engine_repo.py` helper so
+there is one writer of that path and one skip reason instead of three idioms.
+
 ## What the Strategy Lab is (and what it must not do)
 
 `/strategy-lab` is the owner-facing surface of the engine's **Autonomous Portfolio**
