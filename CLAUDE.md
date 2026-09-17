@@ -1598,6 +1598,44 @@ support it. The engine reads the same flag with its own client and may be
 trading perfectly — which is the `INDEX COLD` shape once more, this time
 telling the owner his book is halted when it is not.
 
+## …and one day later the card it graded was deleted with its subsystem (2026-09-16)
+
+Engine #1037 deleted the Telegram broadcast channels outright (owner: *"no
+subscribers in telegram channels"*), so the engine no longer publishes
+`telegram_channels_enabled` or `telegram_bypassed`. The card above therefore
+degraded to its own `not_reported` branch — which reads *"This engine does not
+publish `telegram_channels_enabled`. That is an engine predating this page, so
+it is a deploy question."*
+
+**That sentence would have been false and would have sent the owner to check a
+deploy that was fine.** It is the `/invalidations` WRITER STALE defect and the
+`/dark-signals` hardcoded ban cause a fourth time: **a caption naming a cause
+the page cannot observe.** The engine does not predate the keys; the keys are
+gone. A tri-state that correctly distinguishes *absent* from *False* still
+cannot distinguish *absent because old* from *absent because deleted*, and only
+one of those has a next move.
+
+So the card, its reducer and its 270-line test file are removed rather than
+re-captioned. A panel whose entire content is "this subsystem no longer exists"
+is clutter that misleads the next reader more than its absence does.
+
+**The two drop-reason sentences went with it, deliberately.**
+`no_channel_configured` and `delivery_failed` were raised only inside the
+deleted send block, so the engine cannot emit either. Keeping their copy would
+hand a *resurrected* channel drop a friendly, expected-looking sentence;
+without it the reason renders under its raw name badged `unclassified`, which
+is exactly what it would be. That is the `MEASUREMENT_SUFFIXES` rule read in
+the other direction — the table iterates the engine's payload, so removing copy
+for a reason the engine cannot send makes its return visible instead of normal.
+
+**What did NOT change: `app/agent/notifier.py`.** The monitoring agent's
+Telegram pager is one of the two bots the owner kept, and it addresses a chat
+rather than a channel. A cleanup that took the pager with it would be worse
+than the clutter it removed, because a dead pager sends no message — and
+`/alerts` has already paid for asserting a delivery path it did not have.
+
+---
+
 ## A grade that is an equality between two counters is satisfied by nothing (2026-09-15)
 
 `/signals/router-drops` gained a card for engine #1034, which took Telegram out
