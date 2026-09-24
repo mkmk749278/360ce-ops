@@ -154,8 +154,55 @@ def share_of(value: Any, total: Any) -> str:
     return f"{num / den * 100:.1f}%"
 
 
+def when(value: Any) -> str:
+    """A timestamp as ``2026-09-24 11:50 UTC``.
+
+    The control pages printed timestamps however their producer wrote them:
+    ``2026-07-21T05:00:00+00:00`` on Referrals, ``2026-09-24T11:50:31.482913``
+    with microseconds on Trials, the first 19 characters of an ISO string on
+    Access. Three shapes for one kind of fact, none of them naming a zone.
+
+    Accepts an ISO-8601 string (``Z``, an offset, or naive) or epoch seconds /
+    milliseconds. A naive value is read as UTC because every producer here
+    writes UTC (the engine is UTC end to end, and ``audit.record`` stamps
+    ``datetime.now(timezone.utc)``); a value with an offset is converted, so the
+    label is always true of the number beside it.
+
+    ``None`` / empty renders the em-dash. A value that will not parse is
+    returned **as it came** — never blanked — because a malformed timestamp is
+    still evidence, and an em-dash would say there was none.
+    """
+    from datetime import datetime, timezone
+
+    if value is None or value == "":
+        return EMDASH
+    moment: datetime | None = None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = float(value) / 1000.0 if abs(float(value)) > 1e12 else float(value)
+        try:
+            moment = datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            moment = None
+    elif isinstance(value, datetime):
+        moment = value
+    else:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            moment = datetime.fromisoformat(text)
+        except ValueError:
+            moment = None
+    if moment is None:
+        return str(value)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
 def register(env) -> None:
     """Attach the filters to a Jinja environment."""
+    env.filters["when"] = when
     env.filters["price"] = price
     env.filters["pct"] = pct
     env.filters["secs"] = secs

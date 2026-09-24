@@ -1,13 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Referrals · 360 CE Ops{% endblock %}
 {% block content %}
-<h1>Referral commissions</h1>
-<p class="muted">
-  50% of each verified paid billing period of a referred user (first 3
-  periods) accrues to the referrer. Payouts are manual: pay the referrer
-  directly (their phone is the payout identity), tick the settled rows,
-  and mark them paid — audited, engine is the ledger of record.
-</p>
+<div class="page-head">
+  <h1>Referral commissions</h1>
+  <p class="lede">
+    50% of each verified paid billing period of a referred user (first 3
+    periods) accrues to the referrer. Payouts are manual: pay the referrer
+    directly (their phone is the payout identity), tick the settled rows,
+    and mark them paid — audited, engine is the ledger of record.
+  </p>
+</div>
 
 {% if flash %}
 <div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
@@ -17,44 +19,44 @@
 
 {% if error %}
 <section class="card">
-  <p class="muted">Engine read failed: {{ error }}</p>
+  <p class="sw-state tone-bad"><span class="dot"></span>Engine read failed: {{ error }}</p>
 </section>
 {% else %}
 
 <section class="card">
   <h2>Totals</h2>
   {% if totals %}
-  <table>
-    <thead>
-      <tr><th>Currency</th><th>Awaiting payout</th><th>Paid out</th></tr>
-    </thead>
-    <tbody>
-      {% for t in totals %}
-      <tr>
-        <td>{{ t.currency }}</td>
-        <td><strong>{{ '%.2f'|format(t.accrued) }}</strong></td>
-        <td>{{ '%.2f'|format(t.paid) }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  {# One row per currency and never a sum across them: an INR and a USD
+     commission added together is a number nobody can pay. #}
+  <div class="kpis">
+    {% for t in totals %}
+    <div class="kpi">
+      <div class="kpi-label">{{ t.currency }} · awaiting payout</div>
+      <div class="kpi-value {% if t.accrued %}warn-text{% endif %}">{{ '%.2f'|format(t.accrued) }}</div>
+      <div class="note">Paid out {{ '%.2f'|format(t.paid) }}</div>
+    </div>
+    {% endfor %}
+  </div>
   {% else %}
   <p class="muted">No commissions yet.</p>
   {% endif %}
 </section>
 
 <section class="card">
-  <h2>Ledger</h2>
-  <p>
-    {% for tok, label in [('', 'All'), ('accrued', 'Awaiting payout'), ('paid', 'Paid')] %}
-    <a href="/control/referrals{% if tok %}?status={{ tok }}{% endif %}"
-       class="btn btn-plain {% if status == tok %}on{% endif %}">{{ label }}</a>
-    {% endfor %}
-  </p>
+  <div class="card-head">
+    <h2>Ledger</h2>
+    <div class="window-picker" style="margin:0">
+      {% for tok, label in [('', 'All'), ('accrued', 'Awaiting payout'), ('paid', 'Paid')] %}
+      <a href="/control/referrals{% if tok %}?status={{ tok }}{% endif %}"
+         class="{% if status == tok %}on{% endif %}">{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
   {% if items %}
   <form method="post" action="/control/referrals/mark-paid"
         onsubmit="return confirm('Mark the selected commission rows as PAID? Only do this after the payout has actually been sent.');">
-    <table>
+    <div class="table-scroll">
+    <table class="data-table">
       <thead>
         <tr>
           <th></th>
@@ -62,10 +64,10 @@
           <th>Referrer</th>
           <th>Referee</th>
           <th>Product</th>
-          <th>Amount</th>
+          <th class="num">Amount</th>
           <th>Status</th>
-          <th>Accrued at</th>
-          <th>Paid at</th>
+          <th>Accrued (UTC)</th>
+          <th>Paid (UTC)</th>
         </tr>
       </thead>
       <tbody>
@@ -73,25 +75,34 @@
         <tr>
           <td>
             {% if row.status == 'accrued' %}
-            <input type="checkbox" name="commission_ids" value="{{ row.commission_id }}">
+            <input type="checkbox" name="commission_ids" value="{{ row.commission_id }}"
+                   aria-label="Select commission {{ row.commission_id }}">
             {% endif %}
           </td>
-          <td>{{ row.commission_id }}</td>
-          <td>
+          <td class="muted">{{ row.commission_id }}</td>
+          <td class="nowrap">
             {{ row.referrer_phone or ('user ' ~ row.referrer_id) }}
             <span class="muted">(#{{ row.referrer_id }})</span>
           </td>
-          <td>user {{ row.referee_id }}</td>
-          <td>{{ row.product_id }}</td>
-          <td><strong>{{ '%.2f'|format(row.amount) }} {{ row.currency }}</strong></td>
-          <td>{{ row.status|upper }}</td>
-          <td class="muted">{{ row.created_at }}</td>
-          <td class="muted">{{ row.paid_at or '—' }}</td>
+          <td class="nowrap">user {{ row.referee_id }}</td>
+          <td><code>{{ row.product_id }}</code></td>
+          <td class="num nowrap"><strong>{{ '%.2f'|format(row.amount) }}</strong> <span class="muted">{{ row.currency }}</span></td>
+          <td>
+            {% if row.status == 'paid' %}<span class="badge badge-ok">PAID</span>
+            {% elif row.status == 'accrued' %}<span class="badge badge-warn">ACCRUED</span>
+            {% else %}<span class="badge badge-muted">{{ row.status|upper }}</span>{% endif %}
+          </td>
+          <td class="muted nowrap">{{ row.created_at|when }}</td>
+          <td class="muted nowrap">{{ row.paid_at|when }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-    <p><button type="submit" class="btn">Mark selected as paid</button></p>
+    </div>
+    <div class="btn-row">
+      <button type="submit" class="btn btn-go">Mark selected as paid</button>
+      <span class="note" style="margin:0">Only after the payout has actually been sent.</span>
+    </div>
   </form>
   {% else %}
   <p class="muted">No rows{% if status %} with status {{ status }}{% endif %}.</p>

@@ -1,27 +1,34 @@
-{# Live open-positions table — polled by the control panel every 5s. #}
+{# Live open-positions table — polled by the control panel every 5s.
+   Prices go through `price` (the instrument's own precision) rather than the
+   raw float repr, and a missing stop is a red badge rather than a glyph: it is
+   the one cell on this table that is a live invariant breach. #}
 {% if error %}
-  <p class="muted">Could not read positions: {{ error }}</p>
+  <p class="sw-state ks-state ks-warn"><span class="dot warn"></span>Could not read positions: {{ error }}</p>
 {% elif not rows %}
-  <p class="ks-state ks-off">✓ No open positions.</p>
+  <p class="sw-state"><span class="dot ok"></span>No open positions.
+    {%- if not monitor_running %} <span class="badge badge-warn">monitor not running</span>{% endif %}</p>
 {% else %}
-  <table class="audit positions-live">
+  <div class="table-scroll">
+  <table class="data-table audit positions-live">
     <thead>
-      <tr><th>Symbol</th><th>Dir</th><th>Entry</th><th>Mark</th><th>SL</th><th>PnL%</th><th>Open</th></tr>
+      <tr><th>Symbol</th><th>Dir</th><th class="num">Entry</th><th class="num">Mark</th><th class="num">SL</th><th class="num">PnL %</th><th class="num">Open</th></tr>
     </thead>
     <tbody>
       {% for r in rows %}
+      {% set dir = (r.get('direction') or '')|upper %}
       <tr class="{% if r.get('row_class') == 'sl_breached' %}row-err{% elif r.get('row_class') == 'feed_stale' %}row-warn{% endif %}">
         <td><strong>{{ r.get('symbol') }}</strong></td>
-        <td>{{ (r.get('direction') or '')|upper }}</td>
-        <td>{{ r.get('entry') }}</td>
-        <td>{{ r.get('current_price') if r.get('current_price') is not none else '—' }}</td>
-        <td>{{ r.get('stop_loss') if r.get('stop_loss') else '⚠ none' }}</td>
-        <td>{% if r.get('pnl_pct') is not none %}{{ '%.2f'|format(r.get('pnl_pct')) }}{% else %}—{% endif %}</td>
-        <td>{{ r.get('minutes_open') or 0 }}m</td>
+        <td class="{% if dir == 'LONG' %}side-long{% elif dir == 'SHORT' %}side-short{% endif %}">{{ dir }}</td>
+        <td class="num">{{ r.get('entry')|price }}</td>
+        <td class="num">{{ r.get('current_price')|price }}</td>
+        <td class="num">{% if r.get('stop_loss') %}{{ r.get('stop_loss')|price }}{% else %}<span class="badge badge-bad">⚠ none</span>{% endif %}</td>
+        <td class="num {% set pv = r.get('pnl_pct')|float(0) %}{% if pv > 0 %}pos{% elif pv < 0 %}neg{% endif %}">{{ r.get('pnl_pct')|pct }}</td>
+        <td class="num">{{ r.get('minutes_open') or 0 }}m</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  <p class="muted">{{ rows|length }} open · auto-refreshes every 5s
-    {%- if not monitor_running %} · ⚠ monitor not running{% endif %}</p>
+  </div>
+  <p class="note">{{ rows|length }} open · auto-refreshes every 5s
+    {%- if not monitor_running %} · <span class="warn-text">⚠ monitor not running</span>{% endif %}</p>
 {% endif %}

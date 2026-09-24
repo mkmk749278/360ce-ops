@@ -31,7 +31,7 @@ at the moment of the write, never against the page the operator loaded.
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 from collections.abc import Iterable
 
 from app.data_sources import dark_promotion as dp

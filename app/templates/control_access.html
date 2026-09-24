@@ -1,32 +1,43 @@
 {% extends "base.html" %}
 {% block title %}Access · 360 CE Ops{% endblock %}
 {% block content %}
-<h1>Read-only access</h1>
-<p class="muted">
-  Codes that open the <strong>measurement and diagnostic pages</strong> —
-  the feed, every lane, every export, the truth report. A code cannot reach this
-  control panel, the diag runner, the subscriber tables, the raw data volume or
-  the <code>/api/v1</code> token surface. A read-only session is refused on every
-  method except GET, and on every route not explicitly classified as readable
-  (<code>app/guest_scope.py</code>).
-</p>
-<p class="muted small">
-  <strong>One deliberate exception, added 2026-08-19:</strong> a holder can run
-  named entries from the engine's <a href="/diagnostics/console">diagnostic
-  console</a>. Those are a fixed catalog, not commands &mdash; reads that only
-  observe, plus a few reversible actions (flush a ledger, drop a rebuildable
-  cache, re-seed one symbol). <strong>Nothing in that catalog can reach an
-  order, a key, the kill switch, auto-execution mode or per-user settings</strong>,
-  which is asserted in the engine per entry rather than promised. You can close
-  the action half at any time by setting <code>DIAG_ACTIONS_ENABLED=false</code>
-  engine-side, without revoking the code; every run is recorded in the audit log
-  with the tier that ran it.
-</p>
-<p class="muted small">
-  A read-only holder still sees real trading data — every signal, position and
-  PnL figure on the pages above. This tier withholds the control plane and
-  subscriber data, not the book.
-</p>
+<div class="page-head">
+  <h1>Read-only access</h1>
+  <p class="lede">
+    Short-lived codes that open the <strong>measurement and diagnostic
+    pages</strong> — the feed, every lane, every export, the truth report — and
+    never this control panel. Mint one here, hand it over, revoke it here.
+  </p>
+  <details class="explain">
+    <summary>Exactly what a code can and cannot reach</summary>
+    <div class="explain-body">
+      <p>
+        A code cannot reach this control panel, the diag runner, the subscriber
+        tables, the raw data volume or the <code>/api/v1</code> token surface. A
+        read-only session is refused on every method except GET, and on every
+        route not explicitly classified as readable
+        (<code>app/guest_scope.py</code>).
+      </p>
+      <p>
+        <strong>One deliberate exception, added 2026-08-19:</strong> a holder can run
+        named entries from the engine's <a href="/diagnostics/console">diagnostic
+        console</a>. Those are a fixed catalog, not commands &mdash; reads that only
+        observe, plus a few reversible actions (flush a ledger, drop a rebuildable
+        cache, re-seed one symbol). <strong>Nothing in that catalog can reach an
+        order, a key, the kill switch, auto-execution mode or per-user settings</strong>,
+        which is asserted in the engine per entry rather than promised. You can close
+        the action half at any time by setting <code>DIAG_ACTIONS_ENABLED=false</code>
+        engine-side, without revoking the code; every run is recorded in the audit log
+        with the tier that ran it.
+      </p>
+      <p>
+        A read-only holder still sees real trading data — every signal, position and
+        PnL figure on the pages above. This tier withholds the control plane and
+        subscriber data, not the book.
+      </p>
+    </div>
+  </details>
+</div>
 
 {% if flash %}
 <div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
@@ -35,7 +46,7 @@
 {% endif %}
 
 {% if new_code %}
-<div class="flash flash-ok">
+<div class="flash flash-ok new-code">
   <strong>New code — copy it now, it is not shown again:</strong>
   {# The code is displayed exactly once and is never recoverable — only its
      SHA-256 hash is stored.  So "select it by hand and hope" is not an
@@ -43,21 +54,17 @@
      The button copies the value the server rendered, not a re-typed copy of
      it, and the code stays visible beside it so the button is a convenience
      rather than the only way out if the clipboard API is unavailable. #}
-  <div style="font-size:1.6em;letter-spacing:.08em;margin:.4em 0">
+  <div class="new-code-value">
     <code id="new-code">{{ new_code }}</code>
-    <button type="button" class="btn" id="copy-code"
-            data-code="{{ new_code }}"
-            style="font-size:.55em;vertical-align:middle;margin-left:.6em">Copy</button>
+    <button type="button" class="btn btn-plain" id="copy-code"
+            data-code="{{ new_code }}">Copy</button>
     <span id="copy-code-said" class="small muted" role="status" aria-live="polite"></span>
   </div>
-  <div class="small">Hand it over with the login URL:
+  <div class="new-code-url">Hand it over with the login URL:
     <code id="guest-url">{{ guest_url }}</code>
-    <button type="button" class="btn" id="copy-url"
-            data-code="{{ guest_url }}"
-            style="font-size:.85em;margin-left:.4em">Copy link</button>
-  </div>
-  <div class="small">
-    <button type="button" class="btn" id="copy-both"
+    <button type="button" class="btn btn-plain btn-sm" id="copy-url"
+            data-code="{{ guest_url }}">Copy link</button>
+    <button type="button" class="btn btn-primary btn-sm" id="copy-both"
             data-code="{{ guest_url }} — code {{ new_code }}">Copy link + code</button>
   </div>
 </div>
@@ -115,11 +122,10 @@
 </script>
 {% endif %}
 
-<div class="ctl-grid">
 <section class="card">
   <h2>Generate a code</h2>
   <form method="post" action="/control/access/issue" class="inline-form">
-    <label>Label
+    <label class="grow">Label
       <input type="text" name="label" placeholder="claude-agent" maxlength="64">
     </label>
     <label>Valid for
@@ -129,9 +135,9 @@
         {% endfor %}
       </select>
     </label>
-    <button type="submit" class="btn">Generate read-only code</button>
+    <button type="submit" class="btn btn-primary">Generate read-only code</button>
   </form>
-  <p class="muted small">
+  <p class="note">
     The code is shown once, on the next screen. Only its SHA-256 hash is stored,
     so it cannot be recovered — if it scrolls past, revoke it and mint another.
     A grant also dies on its own at its expiry.
@@ -142,34 +148,39 @@
   <h2>Issued codes</h2>
   {% set live_grants = grants | selectattr('state', 'equalto', 'live') | list %}
   {% if grants %}
-  <table class="audit">
+  <div class="table-scroll">
+  <table class="data-table">
     <thead><tr>
-      <th>Label</th><th>State</th><th>Expires (UTC)</th><th>Requests</th>
-      <th>Refused</th><th>Last used (UTC)</th><th></th>
+      <th>Label</th><th>State</th><th>Expires</th><th class="num">Requests</th>
+      <th class="num">Refused</th><th>Last used</th><th></th>
     </tr></thead>
     <tbody>
       {% for g in grants %}
-      <tr class="{% if g.state == 'live' %}row-ok{% else %}row-err{% endif %}">
-        <td>{{ g.label }}</td>
+      <tr class="{% if g.state == 'live' %}row-ok{% else %}row-dead{% endif %}">
+        <td class="nowrap"><strong>{{ g.label }}</strong></td>
         <td>
           {% if g.state == 'live' %}<span class="badge badge-ok">live</span>
           {% elif g.state == 'revoked' %}<span class="badge badge-muted">revoked</span>
           {% else %}<span class="badge badge-muted">expired</span>{% endif %}
         </td>
-        <td>{{ (g.expires_at or '')[:19] }}</td>
-        <td>{{ g.uses }}</td>
+        <td class="nowrap">
+          {% if g.state == 'live' %}in {{ g.seconds_remaining|duration }}
+            <div class="note" style="margin:0">{{ g.expires_at|when }}</div>
+          {% else %}<span class="muted">{{ g.expires_at|when }}</span>{% endif %}
+        </td>
+        <td class="num">{{ g.uses }}</td>
         {# A non-zero refusal count is a holder that tried a surface it does not
            have. It is not necessarily an attack — a stale bookmark or a link in
            a page body does it — but it is the one number here worth reading, and
            every refusal is named in the log below. #}
-        <td>{% if g.denials %}<span class="badge badge-warn">{{ g.denials }}</span>{% else %}0{% endif %}</td>
-        <td>{{ (g.last_used or '—')[:19] }}</td>
+        <td class="num">{% if g.denials %}<span class="badge badge-warn">{{ g.denials }}</span>{% else %}0{% endif %}</td>
+        <td class="nowrap muted">{{ g.last_used|when }}</td>
         <td>
           {% if g.state == 'live' %}
           <form method="post" action="/control/access/revoke" style="display:inline"
                 onsubmit="return confirm('Revoke read-only access for {{ g.label }}?');">
             <input type="hidden" name="grant_id" value="{{ g.id }}">
-            <button type="submit" class="btn btn-danger btn-sm">Revoke</button>
+            <button type="submit" class="btn btn-soft-danger btn-sm">Revoke</button>
           </form>
           {% endif %}
         </td>
@@ -177,7 +188,8 @@
       {% endfor %}
     </tbody>
   </table>
-  <p class="muted small">
+  </div>
+  <p class="note">
     Revoking takes effect on the holder's <strong>next request</strong> — the
     session carries only the grant id and the grant is re-read every time, so
     there is no window in which a revoked code keeps working.
@@ -187,35 +199,36 @@
   {% endif %}
 
   {% if live_grants %}
-  <form method="post" action="/control/access/revoke"
+  <form method="post" action="/control/access/revoke" class="btn-row"
         onsubmit="return confirm('Revoke ALL {{ live_grants|length }} live read-only code(s)?');">
     <input type="hidden" name="scope" value="all">
     <button type="submit" class="btn btn-danger">Revoke all read-only access ({{ live_grants|length }} live)</button>
   </form>
   {% endif %}
 </section>
-</div>
 
 <section class="card">
   <h2>Access log</h2>
-  <p class="muted small">
+  <p class="note">
     Mints, logins, revocations and every refused request. A refusal names the
     path and the reason it was withheld.
   </p>
   {% if audit %}
-  <table class="audit">
+  <div class="table-scroll">
+  <table class="data-table audit">
     <thead><tr><th>When (UTC)</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
     <tbody>
       {% for e in audit %}
       <tr class="{% if e.get('ok') %}row-ok{% else %}row-err{% endif %}">
-        <td>{{ e.get('ts', '')[:19] }}</td>
-        <td>{{ e.get('actor', '') }}</td>
-        <td>{{ e.get('action', '') }}</td>
-        <td>{{ e.get('params', {})|tojson }}</td>
+        <td class="nowrap">{{ e.get('ts')|when }}</td>
+        <td class="nowrap">{{ e.get('actor', '') }}</td>
+        <td><code>{{ e.get('action', '') }}</code></td>
+        <td class="params">{{ e.get('params', {})|tojson }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="muted">Nothing recorded yet.</p>
   {% endif %}

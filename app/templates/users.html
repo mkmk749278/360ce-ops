@@ -1,13 +1,15 @@
 {% extends "base.html" %}
 {% block title %}Users · 360 CE Ops{% endblock %}
 {% block content %}
-<h1>User tier grant</h1>
-<p class="muted">
-  Owner-only comp for testers/influencers — manually set a subscription tier
-  without a Play Billing purchase. Every grant carries an expiry (default 30
-  days); <code>free</code> revokes immediately. Owner-gated end to end and
-  written to the audit log on the Control page.
-</p>
+<div class="page-head">
+  <h1>User tier grant</h1>
+  <p class="lede">
+    Owner-only comp for testers/influencers — manually set a subscription tier
+    without a Play Billing purchase. Every grant carries an expiry (default 30
+    days); <code>free</code> revokes immediately. Owner-gated end to end and
+    written to the audit log on the Control page.
+  </p>
+</div>
 
 {% if flash %}
 <div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
@@ -17,7 +19,7 @@
 
 <section class="card">
   <h2>Look up user</h2>
-  <form method="post" action="/control/users/lookup">
+  <form method="post" action="/control/users/lookup" class="form-row">
     <label>Country
       <select name="country_code">
         {% for dial, name in country_codes %}
@@ -27,12 +29,14 @@
         {% endfor %}
       </select>
     </label>
-    <input type="text" name="phone" placeholder="9618579123"
-           minlength="6" maxlength="15" required
-           pattern="[0-9+ ()-]*">
-    <button type="submit" class="btn btn-plain">Look up</button>
+    <label class="grow">Phone
+      <input type="text" name="phone" placeholder="9618579123"
+             minlength="6" maxlength="15" required inputmode="tel"
+             pattern="[0-9+ ()-]*" value="{{ phone or '' }}">
+    </label>
+    <button type="submit" class="btn btn-primary">Look up</button>
   </form>
-  <p class="muted">
+  <p class="note">
     Paste a full <code>+</code>-prefixed number to override the country select.
   </p>
 </section>
@@ -40,19 +44,24 @@
 {% if phone %}
   {% if not_found %}
   <section class="card">
-    <p class="muted">No user found with phone <strong>{{ phone }}</strong>.</p>
+    <p class="sw-state tone-warn"><span class="dot"></span>No user found with phone <strong>{{ phone }}</strong>.</p>
   </section>
   {% elif lookup %}
+  {% set tier = (lookup.tier or 'free')|lower %}
   <section class="card">
-    <h2>{{ lookup.display_name or lookup.phone }}</h2>
-    <p>
-      user_id <strong>{{ lookup.user_id }}</strong> ·
-      tier <strong>{{ lookup.tier|upper }}</strong>
-      {% if lookup.paid_until %}(until {{ lookup.paid_until }}){% endif %} ·
-      {{ 'onboarded' if lookup.onboarded else 'not onboarded' }}
-    </p>
+    <div class="card-head">
+      <h2>{{ lookup.display_name or lookup.phone }}</h2>
+      <span class="badge {% if tier == 'auto' %}badge-ok{% elif tier == 'assist' %}badge-accent{% else %}badge-muted{% endif %}">{{ lookup.tier|upper }}</span>
+    </div>
+    <div class="kv-grid">
+      <div class="kv"><span class="k">Phone</span><span class="v">{{ lookup.phone }}</span></div>
+      <div class="kv"><span class="k">user_id</span><span class="v">{{ lookup.user_id }}</span></div>
+      <div class="kv"><span class="k">Paid until</span><span class="v">{{ lookup.paid_until|when if lookup.paid_until else '—' }}</span></div>
+      <div class="kv"><span class="k">Onboarding</span><span class="v">{{ 'onboarded' if lookup.onboarded else 'not onboarded' }}</span></div>
+    </div>
 
-    <form method="post" action="/control/users/grant"
+    <h3>Grant a tier</h3>
+    <form method="post" action="/control/users/grant" class="form-row"
           onsubmit="return confirm('Grant ' + this.tier.value.toUpperCase() + ' to {{ lookup.phone }} for ' + this.duration_days.value + ' days?');">
       <input type="hidden" name="phone" value="{{ lookup.phone }}">
       <label>Tier
@@ -63,36 +72,21 @@
         </select>
       </label>
       <label>Duration (days)
-        <input type="number" name="duration_days" value="30" min="1" max="365">
+        <input type="number" name="duration_days" value="30" min="1" max="365" style="width:7em">
       </label>
-      <input type="text" name="reason" maxlength="200" placeholder="Reason (optional, recorded)">
+      <label class="grow">Reason
+        <input type="text" name="reason" maxlength="200" placeholder="optional, recorded">
+      </label>
       <button type="submit" class="btn btn-go">Grant</button>
     </form>
-    <p class="muted">Duration is ignored when tier is <code>free</code>.</p>
+    <p class="note">Duration is ignored when tier is <code>free</code>.</p>
   </section>
 
   <section class="card">
-    <h2 class="small">Exit mechanism <span class="muted">— money path</span></h2>
-    <p class="muted small">
-      Every other control on this page changes what this account is
-      <em>entitled</em> to. This one changes how its live positions
-      <strong>exit</strong>: on anything but <code>default</code>, once the
-      mechanism comes onside the engine cancels the evaluator's SL and TP
-      ladder and re-parks a stop at the mechanism's level on every closed bar.
-    </p>
-    <p class="muted small">
-      <strong>Two switches are required.</strong> This one, and the engine-wide
-      <em>Live trail governor</em> on <a href="/control">Control → Engine</a>.
-      Set here with the master switch off and nothing happens — the flash will
-      say so rather than reporting a bare success. Watch it run on
-      <a href="/signals/trail-governor">Signals → Trail governor</a>.
-    </p>
-    <p class="muted small">
-      The mechanism's stop is frequently <strong>wider</strong> than the stop
-      the trade was sized for (54% of measured SAR handovers), so a position
-      can carry more risk than its designed SL implies. The measured edge over
-      the current exit did <strong>not</strong> exclude zero.
-    </p>
+    <div class="card-head">
+      <h2>Exit mechanism</h2>
+      <span class="badge badge-warn">money path</span>
+    </div>
     {# The state comes FIRST, and it is read off the engine's lookup payload —
        not assumed from the last write and not mirrored here. Until 2026-08-10
        this card was a write with no read-back: the select below is a static
@@ -107,7 +101,12 @@
        exactly where they must not merge. #}
     {% set stored_mech = lookup.get('exit_mechanism') %}
     {% set governor_on = lookup.get('governor_enabled') %}
-    <p>
+    {% if stored_mech is none %}{% set x_tone = 'muted' %}
+    {% elif stored_mech == 'default' %}{% set x_tone = 'ok' %}
+    {% elif governor_on %}{% set x_tone = 'warn' %}
+    {% else %}{% set x_tone = 'warn' %}{% endif %}
+    <p class="sw-state tone-{{ x_tone }}">
+      <span class="dot"></span>
       Exit mechanism now:
       {% if stored_mech is none %}
         <strong>not reported</strong>
@@ -120,7 +119,7 @@
         does not touch this account.</span>
       {% elif governor_on %}
         <strong>{{ stored_mech|upper }}</strong>
-        <span class="badge badge-good">LIVE</span>
+        <span class="badge badge-ok">LIVE</span>
         <span class="muted small">— master switch is ON, so the governor takes
         the exit over on the next signal that comes onside. Watch it on
         <a href="/signals/trail-governor">Signals → Trail governor</a>.</span>
@@ -132,8 +131,37 @@
         required.</span>
       {% endif %}
     </p>
+    <p class="note">
+      Every other control on this page changes what this account is
+      <em>entitled</em> to. This one changes how its live positions
+      <strong>exit</strong>. <strong>Two switches are required</strong> — this
+      one, and the engine-wide <em>Live trail governor</em>.
+    </p>
+    <details class="explain">
+      <summary>How this works, and the risk</summary>
+      <div class="explain-body">
+        <p>
+          On anything but <code>default</code>, once the mechanism comes onside
+          the engine cancels the evaluator's SL and TP ladder and re-parks a
+          stop at the mechanism's level on every closed bar.
+        </p>
+        <p>
+          The engine-wide switch is on <a href="/control">Control → Engine</a>.
+          Set here with the master switch off and nothing happens — the flash
+          will say so rather than reporting a bare success. Watch it run on
+          <a href="/signals/trail-governor">Signals → Trail governor</a>.
+        </p>
+        <p>
+          The mechanism's stop is frequently <strong>wider</strong> than the
+          stop the trade was sized for (54% of measured SAR handovers), so a
+          position can carry more risk than its designed SL implies. The
+          measured edge over the current exit did <strong>not</strong> exclude
+          zero.
+        </p>
+      </div>
+    </details>
     {% if may_use(request, '/control/users/exit-mechanism', 'POST') %}
-    <form method="post" action="/control/users/exit-mechanism"
+    <form method="post" action="/control/users/exit-mechanism" class="form-row"
           onsubmit="return confirm('Hand {{ lookup.phone }} exits to ' + this.exit_mechanism.value.toUpperCase() + '? This changes how REAL positions close.');">
       <input type="hidden" name="phone" value="{{ lookup.phone }}">
       <label>Mechanism
@@ -149,8 +177,10 @@
           {% endfor %}
         </select>
       </label>
-      <input type="text" name="reason" maxlength="200" placeholder="Reason (optional, recorded)">
-      <button type="submit" class="btn btn-go">Set exit</button>
+      <label class="grow">Reason
+        <input type="text" name="reason" maxlength="200" placeholder="optional, recorded">
+      </label>
+      <button type="submit" class="btn btn-plain">Set exit</button>
     </form>
     {% endif %}
   </section>

@@ -35,11 +35,16 @@
 
 * { box-sizing: border-box; }
 
-html { -webkit-text-size-adjust: 100%; }
+/* The canvas carries the base colour itself. The glow used to be a `fixed`
+   radial gradient on <body> and nothing else, so anywhere the gradient did not
+   paint — below the first viewport in a full-page render, and on browsers that
+   ignore `background-attachment: fixed` — the page fell through to white. */
+html { -webkit-text-size-adjust: 100%; background: var(--bg); }
 body {
   margin: 0;
+  min-height: 100vh;
   font-family: var(--sans);
-  background: radial-gradient(1200px 600px at 50% -10%, #10151e 0%, var(--bg) 60%) fixed;
+  background: radial-gradient(1200px 600px at 50% -10%, #10151e 0%, var(--bg) 60%) no-repeat var(--bg);
   color: var(--fg);
   font-size: 14px;
   line-height: 1.5;
@@ -295,9 +300,10 @@ code {
   background: var(--bg); color: var(--fg); border: 1px solid var(--border);
   border-radius: var(--r-sm); padding: 0.45rem 0.65rem; margin-right: 0.5rem; min-width: 14rem;
 }
-.mode-live  { color: var(--neg); }
+/* LIVE is the normal production state; OFF halts new entries engine-wide. */
+.mode-live  { color: var(--pos); }
 .mode-paper { color: var(--warn); }
-.mode-off   { color: var(--fg-dim); }
+.mode-off   { color: var(--neg); }
 
 table.audit { width: 100%; border-collapse: collapse; font-size: 0.8rem; font-family: var(--mono); }
 table.audit th, table.audit td { text-align: left; padding: 0.4rem 0.65rem; border-bottom: 1px solid var(--border-soft); }
@@ -422,8 +428,13 @@ details.raw-section pre { margin: 0; border: none; border-radius: 0; background:
 /* ---- Responsive ---- */
 @media (max-width: 720px) {
   header { flex-wrap: wrap; gap: 0.6rem; padding: 0.5rem 0.9rem; }
-  header nav { order: 3; width: 100%; overflow-x: auto; flex-wrap: nowrap; }
+  /* `flex: 1 1 100%`, not `width: 100%`: the base rule's `flex: 1` sets a
+     0% basis, which wins over width for line-breaking, so the nav never
+     wrapped — it was squeezed beside the logo with the active group
+     ("Control") scrolled out of sight. */
+  header nav { order: 3; flex: 1 1 100%; width: 100%; overflow-x: auto; flex-wrap: nowrap; }
   header nav a { white-space: nowrap; }
+  header .user { margin-left: auto; }
   .subnav { top: 0; overflow-x: auto; flex-wrap: nowrap; }
   .subnav a { white-space: nowrap; }
   main { padding: 0.9rem; }
@@ -511,3 +522,371 @@ tr.tun-row-chg .tunable-label { border-left: 2px solid #e4a400; padding-left: 0.
   color: var(--fg); background: var(--bg-elev);
   box-shadow: inset 0 0 0 1px var(--border);
 }
+
+/* ==========================================================================
+   Control overhaul (2026-09-24) — owner: "everything feels messy and unclear
+   like raw … the ops panel should feel top notch".
+
+   Two causes, and the first one was not a design choice at all:
+
+   1. Classes the templates used that this stylesheet never defined. `.panel`,
+      `.tbl`, `badge-live` / `badge-off` / `badge-err` / `badge-good`,
+      `btn-primary`, `btn-active`, `row-sel`, `.kpi*`, `.pager` … each rendered
+      as browser defaults — a white-bordered fieldset, a bare table, a badge
+      with no colour. Nothing failed; the page simply looked unfinished.
+      `tests/test_css_classes.py` now derives the used set from the templates
+      and fails on the next class nobody styled.
+   2. Prose where a control should be. Every sentence is kept — they are the
+      guardrails — but the long ones move into a collapsible "How this works"
+      so the state and the button lead.
+   ========================================================================== */
+
+/* ---- Aliases for classes the templates already use ---------------------- */
+.panel {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 1.1rem 1.3rem; margin-bottom: 1.1rem;
+  box-shadow: var(--shadow-sm); min-width: 0;
+}
+details.panel > summary {
+  cursor: pointer; list-style: none; display: flex; align-items: center;
+  gap: 0.5rem; flex-wrap: wrap; margin: -0.2rem 0;
+}
+details.panel > summary::-webkit-details-marker { display: none; }
+details.panel > summary::before { content: "▸"; color: var(--fg-dim); font-size: 0.8rem; }
+details.panel[open] > summary::before { content: "▾"; }
+details.panel[open] > summary {
+  padding-bottom: 0.8rem; margin-bottom: 0.9rem; border-bottom: 1px solid var(--border-soft);
+}
+table.tbl { width: 100%; border-collapse: collapse; font-size: 0.85rem; margin: 0.4rem 0 0.8rem; }
+table.tbl th, table.tbl td {
+  text-align: left; padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--border-soft);
+  vertical-align: top;
+}
+table.tbl thead th {
+  color: var(--fg-dim); font-weight: 600; background: var(--bg-elev);
+  font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.03em;
+}
+table.tbl tbody th, table.tbl tr > th:first-child:not(:only-child) {
+  color: var(--fg-dim); font-weight: 600; font-size: 0.8rem;
+}
+table.tbl tbody tr:hover { background: var(--bg-hover); }
+table.tbl.small, .small table.tbl { font-size: 0.8rem; }
+tr.row-sel, tr.row-sel:hover { background: var(--accent-soft); }
+
+.badge-live, .badge-good, .badge.ok { color: var(--pos); border-color: rgba(63,185,80,0.4); background: rgba(63,185,80,0.14); }
+.badge-off { color: var(--fg-dim); border-color: var(--border); background: var(--bg-elev); }
+.badge-err, .badge.bad { color: var(--neg); border-color: rgba(255,92,87,0.4); background: rgba(255,92,87,0.14); }
+.badge-accent { color: var(--accent); border-color: rgba(76,154,255,0.4); background: var(--accent-soft); }
+.ok { color: var(--pos); }
+.bad { color: var(--neg); }
+
+.btn-primary { background: var(--accent); color: #08111f; border: 1px solid var(--accent); }
+.btn-primary:hover { background: #6aaeff; color: #08111f; }
+.btn-active, .btn.on { color: var(--fg); background: var(--accent-soft); border-color: var(--accent); }
+/* A cautious action that is not destructive: stopping purchases, pausing new
+   entries. Red text, not a red slab — solid red is reserved for the three
+   actions that halt everything or cannot be undone (kill switch, LIVE mode,
+   full reset), so the colour still means something when it appears. */
+.btn-soft-danger { background: rgba(255,92,87,0.08); color: var(--neg); border: 1px solid rgba(255,92,87,0.45); }
+.btn-soft-danger:hover { background: rgba(255,92,87,0.16); color: #ff7b77; }
+.btn-go:hover { background: #4cc85e; color: #08150b; }
+.btn-danger:hover { background: #ff7470; color: #0b0e14; }
+button:disabled, .btn:disabled { opacity: 0.55; cursor: not-allowed; filter: none; transform: none; }
+
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0.8rem; margin: 0.4rem 0 1rem; }
+.kpi { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-md); padding: 0.75rem 1rem; }
+.kpi-label { color: var(--fg-dim); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.kpi-value { font-size: 1.25rem; font-weight: 700; margin-top: 0.2rem; font-variant-numeric: tabular-nums; }
+.pager { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; margin: 0.8rem 0; }
+.sel { color: var(--fg); font-weight: 600; }
+.tight td, .tight th, table.tight td, table.tight th { padding: 0.25rem 0.45rem; }
+.badge.sev-med, .sev-med { color: var(--warn); border-color: rgba(227,179,65,0.5); background: rgba(227,179,65,0.12); }
+.inline, form.inline { display: inline-flex; gap: 0.4rem; align-items: center; margin: 0; }
+
+/* ---- Forms: labelled fields, fieldsets, inline rows ------------------------ */
+.inline-form, .form-row { display: flex; flex-wrap: wrap; gap: 0.7rem 0.9rem; align-items: flex-end; margin: 0.3rem 0 0.6rem; }
+.inline-form label, .form-row label, label.field {
+  display: flex; flex-direction: column; gap: 0.3rem;
+  font-size: 0.76rem; color: var(--fg-dim); font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
+.inline-form label > input, .inline-form label > select,
+.form-row label > input, .form-row label > select, label.field > input, label.field > select {
+  text-transform: none; letter-spacing: normal; font-weight: 400; font-size: 0.88rem;
+}
+.form-row .grow, .inline-form .grow { flex: 1 1 14rem; }
+.form-row .grow input, .inline-form .grow input { width: 100%; }
+fieldset {
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 0.7rem 0.9rem 0.8rem; margin: 0 0 0.8rem; min-width: 0; background: rgba(255,255,255,0.012);
+}
+legend {
+  padding: 0 0.4rem; color: var(--fg); font-weight: 650; font-size: 0.78rem;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+fieldset label { color: var(--fg); }
+input[type=checkbox], input[type=radio] { min-width: 0; accent-color: var(--accent); }
+input::placeholder { color: var(--fg-faint); }
+textarea {
+  background: var(--bg-elev); border: 1px solid var(--border); color: var(--fg);
+  border-radius: var(--r-sm); padding: 0.45rem 0.6rem; font-family: inherit; font-size: 0.85rem;
+}
+
+/* ---- Page head + collapsible explainer ----------------------------------- */
+.page-head { margin: 0 0 1rem; }
+.page-head h1 { margin-bottom: 0.3rem; }
+.lede { color: var(--fg-dim); font-size: 0.92rem; margin: 0; max-width: 78ch; line-height: 1.55; }
+.lede strong { color: var(--fg); }
+
+details.explain { margin: 0.5rem 0 0.9rem; font-size: 0.85rem; color: var(--fg-dim); }
+details.explain > summary {
+  cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 0.4rem;
+  color: var(--fg-dim); font-size: 0.78rem; font-weight: 600; padding: 0.22rem 0.65rem 0.22rem 0.45rem;
+  border: 1px solid var(--border); border-radius: var(--r-pill); background: var(--bg-elev);
+  user-select: none; transition: color var(--ease), border-color var(--ease);
+}
+details.explain > summary::-webkit-details-marker { display: none; }
+details.explain > summary::before {
+  content: "i"; display: inline-grid; place-items: center; width: 1.05rem; height: 1.05rem;
+  border-radius: 50%; background: var(--accent-soft); color: var(--accent);
+  font: 700 0.68rem/1 var(--sans); font-style: italic;
+}
+details.explain > summary:hover, details.explain[open] > summary { color: var(--fg); border-color: var(--fg-faint); }
+details.explain > .explain-body {
+  margin-top: 0.6rem; padding: 0.75rem 0.95rem; border-left: 2px solid var(--accent-soft);
+  background: rgba(255,255,255,0.018); border-radius: 0 var(--r-sm) var(--r-sm) 0; max-width: 90ch;
+}
+details.explain .explain-body > :first-child { margin-top: 0; }
+details.explain .explain-body > :last-child { margin-bottom: 0; }
+details.explain .explain-body p { margin: 0 0 0.55rem; line-height: 1.55; }
+details.explain .explain-body strong { color: var(--fg); }
+.card > details.explain:last-child, .panel > details.explain:last-child { margin-bottom: 0; }
+
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.6rem 1rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+.card-head h2 { margin: 0; }
+.card-sub { color: var(--fg-dim); font-size: 0.82rem; }
+.eyebrow {
+  color: var(--fg-dim); font-size: 0.72rem; font-weight: 650;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+.note { color: var(--fg-dim); font-size: 0.8rem; margin: 0.35rem 0 0; line-height: 1.5; }
+.warn-text { color: var(--warn); }
+.danger-text { color: var(--neg); }
+.nowrap { white-space: nowrap; }
+
+/* ---- Status dot + tone --------------------------------------------------- */
+.dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--fg-faint); flex: 0 0 auto; }
+.tone-ok .dot, .dot.ok { background: var(--pos); box-shadow: 0 0 0 3px rgba(63,185,80,0.18); }
+.tone-bad .dot, .dot.bad { background: var(--neg); box-shadow: 0 0 0 3px rgba(255,92,87,0.2); }
+.tone-warn .dot, .dot.warn { background: var(--warn); box-shadow: 0 0 0 3px rgba(227,179,65,0.18); }
+.tone-muted .dot { background: var(--fg-faint); }
+
+/* ---- Kill switch hero ------------------------------------------------------ */
+.hero {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 380px);
+  gap: 1rem 1.6rem; align-items: center;
+  border-left: 3px solid var(--border);
+}
+.hero.tone-ok { border-left-color: var(--pos); }
+.hero.tone-bad { border-left-color: var(--neg); background: linear-gradient(90deg, rgba(255,92,87,0.07), var(--bg-card) 55%); }
+.hero.tone-warn { border-left-color: var(--warn); background: linear-gradient(90deg, rgba(227,179,65,0.06), var(--bg-card) 55%); }
+.hero .ks-state { font-size: 1.25rem; margin: 0.25rem 0 0.35rem; line-height: 1.35; }
+.hero-act { display: flex; flex-direction: column; gap: 0.55rem; }
+.hero-act form { display: flex; flex-direction: column; gap: 0.5rem; margin: 0; }
+.hero-act input[type=text] { width: 100%; }
+.hero-act .btn { width: 100%; padding: 0.65rem 1rem; font-size: 0.9rem; }
+
+/* ---- Switchboard: one row per switch ------------------------------------- */
+.sw-list { display: flex; flex-direction: column; }
+.sw {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.6rem 1.4rem;
+  align-items: center; padding: 0.95rem 0; border-top: 1px solid var(--border-soft);
+}
+.sw:first-child { border-top: none; padding-top: 0.15rem; }
+.sw:last-child { padding-bottom: 0.15rem; }
+.sw-name { font-weight: 640; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.sw-name a { color: var(--fg); }
+.sw-name a:hover { color: var(--accent); }
+.sw-state { display: flex; align-items: center; gap: 0.5rem; margin: 0.3rem 0 0; font-size: 0.88rem; font-weight: 600; flex-wrap: wrap; }
+.sw-state .ks-state { font-size: 0.88rem; }
+.sw-act { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+.sw-act form { margin: 0; }
+
+/* The auto-execution mode is a three-way choice, so it is one control. */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-elev); padding: 2px; gap: 2px; }
+.seg form { margin: 0; display: flex; }
+.seg button {
+  background: transparent; color: var(--fg-dim); border: none; border-radius: 4px;
+  padding: 0.38rem 0.95rem; font-weight: 600; font-size: 0.84rem;
+}
+.seg button:hover:not(:disabled) { color: var(--fg); background: var(--bg-hover); filter: none; }
+.seg button.seg-on, .seg button:disabled.seg-on {
+  opacity: 1; cursor: default; color: var(--fg); background: var(--bg-card);
+  box-shadow: 0 0 0 1px var(--border), var(--shadow-sm);
+}
+.seg button.seg-on.mode-live { color: var(--pos); }
+.seg button.seg-on.mode-paper { color: var(--warn); }
+.seg button.seg-on.mode-off { color: var(--neg); }
+
+/* ---- Toggle switch (bool tunables) ---------------------------------------- */
+input[type=checkbox].toggle {
+  appearance: none; -webkit-appearance: none; flex: 0 0 auto;
+  width: 2.3rem; height: 1.3rem; min-width: 0; margin: 0; padding: 0;
+  border-radius: var(--r-pill); background: var(--bg-hover); border: 1px solid var(--border);
+  position: relative; cursor: pointer; vertical-align: middle;
+  transition: background var(--ease), border-color var(--ease); transform: none;
+}
+input[type=checkbox].toggle::after {
+  content: ""; position: absolute; top: 2px; left: 2px;
+  width: calc(1.3rem - 6px); height: calc(1.3rem - 6px); border-radius: 50%;
+  background: var(--fg-dim); transition: transform var(--ease), background var(--ease);
+}
+input[type=checkbox].toggle:checked { background: rgba(63,185,80,0.28); border-color: rgba(63,185,80,0.65); }
+input[type=checkbox].toggle:checked::after { transform: translateX(1rem); background: var(--pos); }
+.tg { display: inline-flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: 0.82rem; color: var(--fg-dim); }
+.tg .tg-on, .tg .tg-off { font-weight: 600; min-width: 1.8em; }
+.tg .tg-on { display: none; color: var(--pos); }
+.tg input:checked ~ .tg-on { display: inline; }
+.tg input:checked ~ .tg-off { display: none; }
+
+/* ---- Tunables: compact rows ------------------------------------------------- */
+.tun-head { display: flex; align-items: baseline; gap: 0.3rem 0.5rem; flex-wrap: wrap; }
+.tun-head label { cursor: pointer; }
+.tun-key { font-size: 0.72rem; color: var(--fg-faint); background: transparent; border: none; padding: 0; }
+.tunable-desc {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  cursor: pointer; max-width: 86ch;
+}
+.tunable-desc:hover { color: var(--fg); }
+.tun-row.expanded .tunable-desc { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.tunable-input { white-space: nowrap; }
+.tunable-input select, .tunable-input input[type=number] { min-width: 8.5rem; }
+.tunable-input input[type=text] { width: min(26rem, 100%); }
+.tun-meta { color: var(--fg-faint); font-size: 0.72rem; margin-top: 0.3rem; white-space: normal; }
+.tun-meta code { font-size: 0.72rem; }
+tr.tun-row-dirty .tunable-label { box-shadow: inset 2px 0 0 var(--accent); padding-left: 0.6rem; }
+tr.tun-row-dirty.tun-row-chg .tunable-label { border-left-color: transparent; }
+.pill-dirty {
+  display: inline-block; background: var(--accent-soft); color: var(--accent);
+  border: 1px solid rgba(76,154,255,0.4); border-radius: 999px;
+  padding: 0 0.45rem; font-size: 0.68rem; font-weight: 700; margin-left: 0.35rem;
+}
+/* The apply button follows you down a long open category: Signal gating is 54
+   knobs, and a save button 5,000px below the knob you just changed is one
+   that does not get pressed. */
+.tun-apply {
+  position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center;
+  justify-content: space-between; gap: 0.8rem; flex-wrap: wrap;
+  margin: 0.6rem -0.8rem -0.8rem; padding: 0.65rem 0.8rem;
+  background: rgba(20,25,34,0.94); backdrop-filter: blur(6px);
+  border-top: 1px solid var(--border); border-radius: 0 0 var(--r-md) var(--r-md);
+}
+.tun-apply .btn { margin: 0; }
+.pill-dirty[hidden] { display: none; }
+.tun-apply .tun-dirty-note { color: var(--fg-dim); font-size: 0.8rem; }
+.tun-apply.is-dirty .tun-dirty-note { color: var(--accent); font-weight: 600; }
+.tun-apply.is-dirty .btn { background: var(--accent); color: #08111f; border-color: var(--accent); }
+
+/* ---- Audit / log tables ------------------------------------------------------ */
+table.audit td.params, .params { font-family: var(--mono); font-size: 0.75rem; color: var(--fg-dim); max-width: 46ch; overflow-wrap: anywhere; }
+table.data-table.audit { font-family: var(--sans); }
+.row-err .params { color: var(--neg); }
+
+/* ---- Phone: nothing may widen the page ----------------------------------- */
+code { overflow-wrap: anywhere; }
+.card, .panel { min-width: 0; }
+.card p, .panel p, .card li, .panel li { overflow-wrap: break-word; }
+@media (max-width: 720px) {
+  .hero { grid-template-columns: 1fr; }
+  .sw { grid-template-columns: 1fr; }
+  .sw-act { justify-content: flex-start; }
+  .seg { width: 100%; }
+  .seg form { flex: 1; }
+  .seg button { flex: 1; }
+  .card, .panel { padding: 0.95rem 1rem; }
+  /* Primary and secondary nav scroll sideways on a phone. The fade says there
+     is more; without it "Perform…" reads as the end of the list. */
+  header nav, .subnav {
+    -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
+            mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 28px), transparent);
+    scrollbar-width: none;
+  }
+  header nav::-webkit-scrollbar, .subnav::-webkit-scrollbar { display: none; }
+  table.tbl th, table.tbl td { padding: 0.4rem 0.5rem; }
+  .tunable-input { white-space: normal; }
+  .tun-apply { margin: 0.6rem -0.6rem -0.8rem; }
+}
+
+/* ---- Promotions: chips, arm row, action row ------------------------------ */
+.chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.45rem 0 0.2rem; }
+.chip {
+  display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-pill);
+  padding: 0.18rem 0.65rem; font-size: 0.78rem; color: var(--fg-dim);
+}
+.chip strong { color: var(--fg); font-weight: 620; }
+.arm-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1.4rem;
+  padding: 0.75rem 0.9rem; margin: 0.2rem 0 0.8rem;
+  background: rgba(227,179,65,0.05); border: 1px solid rgba(227,179,65,0.28); border-radius: var(--r-md);
+}
+.arm-row .tg { color: var(--fg); font-size: 0.9rem; }
+.arm-confirm { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.84rem; color: var(--fg-dim); cursor: pointer; }
+.promo-actions { margin-top: 0.2rem; }
+details > summary { cursor: pointer; }
+/* Only a <details> with no class of its own: `raw-section`, `tun-cat`,
+   `explain` and `panel` each style their summary, and a broad rule here would
+   out-specify them on every page that nests one in a card. */
+.panel details:not([class]) > summary, .card details:not([class]) > summary {
+  color: var(--fg-dim); font-weight: 600; font-size: 0.82rem; padding: 0.3rem 0; list-style-position: inside;
+}
+.panel details[open]:not([class]) > summary, .card details[open]:not([class]) > summary { color: var(--fg); }
+
+/* ---- Access: the one-shot code, and dead grants ---------------------------- */
+.new-code { font-weight: 500; }
+.new-code-value { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; margin: 0.5rem 0 0.7rem; }
+.new-code-value code {
+  font-size: 1.5rem; letter-spacing: 0.08em; padding: 0.35rem 0.7rem;
+  background: var(--bg); border: 1px solid rgba(63,185,80,0.45); color: var(--fg);
+}
+.new-code-url { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.85rem; color: var(--fg); }
+tr.row-dead td { color: var(--fg-faint); }
+tr.row-dead td strong { color: var(--fg-dim); }
+/* In an audit table a failed row is marked, not painted: a whole row of red
+   text reads as an alarm, and most of these rows are a refusal working. */
+table.data-table.audit tr.row-err td { color: var(--fg); }
+table.data-table.audit tr.row-err td:first-child { box-shadow: inset 2px 0 0 var(--neg); }
+table.data-table.audit tr.row-warn td:first-child { box-shadow: inset 2px 0 0 var(--warn); }
+/* `overflow-wrap: anywhere` on code is right in prose and wrong in a table:
+   it lowers the cell's min-content width, so the table squeezes a product id
+   into "lumin_au / to_monthl / y" instead of scrolling. */
+table code { overflow-wrap: normal; word-break: normal; }
+
+/* /control/routing on a phone, second pass: one full-width line per cell was
+   ~8,500px of page for 21 rows. Two columns, a small label over each value,
+   the side folded into the path line — four short rows per (path, side). */
+.side-inline { display: none; font-weight: 600; }
+@media (max-width: 720px) {
+  table.routing-table tbody tr {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    column-gap: 0.9rem; row-gap: 0.35rem; padding: 0.75rem 0.1rem;
+  }
+  table.routing-table td {
+    display: block; text-align: left; padding: 0; min-width: 0; line-height: 1.35;
+  }
+  table.routing-table td::before { display: block; font-size: 0.66rem; line-height: 1.3; margin-bottom: 0.1rem; }
+  table.routing-table td.cell-wide { grid-column: 1 / -1; }
+  table.routing-table td.cell-path { font-size: 0.95rem; }
+  table.routing-table td.cell-path::before, table.routing-table td.cell-side { display: none; }
+  table.routing-table .side-inline { display: inline; }
+  table.routing-table td form { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 0.35rem 0.5rem; }
+  table.routing-table td br { display: none; }
+  table.routing-table td br + .muted, table.routing-table td br + a { display: block; }
+}
+
+/* Grid children must be allowed to shrink below their content, or one long
+   token in a note widens the whole switchboard past the phone's edge. */
+.sw-main, .hero-main { min-width: 0; }
+.cell-action form { margin: 0; }
+.promo-form { margin-top: 0.4rem; }
+.positions-live td, .pulse-card .v { font-variant-numeric: tabular-nums; }

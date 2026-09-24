@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.template_filters import EMDASH, pct, price, secs
+from app.template_filters import EMDASH, pct, price, secs, when
 
 
 class TestPrice:
@@ -72,13 +72,40 @@ class TestSecs:
         assert secs(None) == EMDASH
 
 
+class TestWhen:
+    """Timestamps on the control pages arrived in three shapes for one kind of
+    fact: an offset ISO string on Referrals, a naive one with microseconds on
+    Trials, and the first 19 characters of an ISO string on Access. None named
+    a zone (2026-09-24)."""
+
+    @pytest.mark.parametrize("raw", [
+        "2026-07-21T05:00:00+00:00",   # Referrals — engine, offset
+        "2026-07-21T05:00:00Z",        # Z suffix
+        "2026-07-21T05:00:00.482913",  # Trials — naive, microseconds
+        "2026-07-21T10:30:00+05:30",   # an offset is CONVERTED, not dropped
+        1784610000,                    # epoch seconds
+        1784610000000,                 # epoch milliseconds
+    ])
+    def test_every_shape_renders_one_way_in_utc(self, raw):
+        assert when(raw) == "2026-07-21 05:00 UTC"
+
+    @pytest.mark.parametrize("raw", [None, ""])
+    def test_missing_renders_an_em_dash(self, raw):
+        assert when(raw) == EMDASH
+
+    def test_an_unparseable_value_is_shown_as_it_came_never_blanked(self):
+        """A malformed timestamp is still evidence; an em-dash would say there
+        was none."""
+        assert when("yesterday-ish") == "yesterday-ish"
+
+
 class TestRegisteredOnTheRealEnvironment:
     def test_the_app_actually_has_them(self):
         """A filter defined and not registered is the seam this repo keeps
         paying for — pin the wiring, not just the function."""
         from app.main import templates
 
-        for name in ("price", "pct", "secs"):
+        for name in ("price", "pct", "secs", "when"):
             assert name in templates.env.filters
 
     def test_pages_render_no_raw_float_repr(self):

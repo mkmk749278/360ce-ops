@@ -1850,7 +1850,11 @@ refusal.**
   instrument's own precision because this book spans `64328.80` and `0.02062` in one
   table; `pct` is fixed-place because a percentage has no tick size. Both render `—`
   for missing — an em-dash is "the engine did not report this", and `0.00` there is
-  how a blank becomes a finding.
+  how a blank becomes a finding. Timestamps go through `when`
+  (`2026-09-24 11:50 UTC`), never a slice of an ISO string.
+- Every class a template uses must be defined in `app/static/style.css`
+  (`tests/test_css_classes.py` derives the set). An undefined class renders as a
+  browser default and fails nothing else — that is how Promotions looked "raw".
 - In-page controls are filtered for a read-only guest with `may_use(request, path,
   method)`, off the same `guest_scope` table the gate enforces — never a second list.
   `tests/test_guest_access.py` derives the requirement by rendering every
@@ -2293,6 +2297,73 @@ where the delay costs money.
 - Every tile links to the control that sets it, and the danger zone is framed
   apart from the five reversible toggles — because "reversible" and "not" should
   not be one visual class.
+
+## The Control overhaul — "messy and unclear like raw" (2026-09-24)
+
+Owner: *"Properly investigate everything in ops control, mostly everything feels
+messy and unclear like raw, fix everything, over ops panel should feel top
+notch."* Every Control page was rendered at 1400px and 393px and read before a
+line changed. The largest cause was not a design choice at all.
+
+**Classes the templates used and the stylesheet never defined.** `.panel`,
+`.tbl`, `badge-live` / `badge-off` / `badge-err` / `badge-good`, `btn-primary`,
+`btn-active`, `row-sel`, `.kpi*`, `.pager` and more — so Promotions rendered
+white-bordered browser fieldsets and bare tables, and the Users page's `LIVE`
+exit-mechanism badge had no colour at all (`badge-good` did not exist). Nothing
+failed: a missing class does not raise, and a page that *looks* unfinished passes
+every assertion about its copy. The seam shape again — template written, rule
+never written, both halves "fine". `tests/test_css_classes.py` now **derives**
+the used set from every template and fails on a class nobody styled; it fails
+against the pre-overhaul stylesheet and names every one.
+
+The rest, and the rule each one follows:
+
+- **One fact, one place.** The status strip repeated every switch below it as a
+  tile, so `/control` stated each fact twice in two shapes. The kill switch is now
+  its own card at the top, and every other switch is one row of a switchboard —
+  state first, the control beside it. The governor row still reads the
+  governor's own diag (`governor_summary`), never `trail_governor_enabled`, and
+  sits last so no neighbour's reading can be mistaken for it.
+- **Colour means one thing on every row**: green is the normal operating state,
+  amber is off-default or needs a look, red is halted or broken. The old cards
+  painted *"billing ENABLED"* in the red of an outage and *"expiry DISABLED"* —
+  its intended default — in the green of a switch that had been thrown. Solid red
+  buttons are reserved for the three actions that halt everything or cannot be
+  undone (kill switch, LIVE mode, full reset); a cautious-but-reversible action is
+  `btn-soft-danger`, so the solid red still means something when it appears.
+- **Prose is kept, not cut** — it is the guardrail — but the long paragraphs move
+  into a collapsible `details.explain` ("How this works") so the state and the
+  button lead. Every sentence a test pins is still in the HTML.
+- **Tunables**: bool knobs are toggles; the key is shown; a description clamps to
+  two lines and expands on click; an edit you have not applied is marked blue and
+  counted on an Apply bar that is sticky within an open category (Signal gating is
+  54 knobs; its save button used to sit ~5,000px below the knob you changed); the
+  page asks before navigating away with edits pending. None of it changes what a
+  form posts — the filter rule above still holds.
+- **Timestamps** go through `when` (`2026-09-24 11:50 UTC`): the Control pages
+  printed three shapes for one kind of fact, none naming a zone. An unparseable
+  value is shown as it came, never blanked.
+- **Phone: nothing may widen the page.** Promotions overflowed by 248px, Referrals
+  by 428px, Access by 252px, Trials by 162px; all are 0 now, measured. Wide tables
+  scroll inside their card, grid children get `min-width: 0`, and
+  `overflow-wrap: anywhere` applies to code in prose and **not** in a table — there
+  it lowers min-content and splits `lumin_auto_monthly` into three lines instead
+  of scrolling.
+
+**One claim in the section above was false the whole time.** It says
+`--sticky-h` is measured *"because `header nav` wraps on a phone"*. It did not:
+the mobile rule set `width: 100%` while the base rule's `flex: 1` sets a 0%
+basis, which wins for line-breaking — so the nav was squeezed beside the logo,
+scrolling sideways, with the active group (*Control*) off-screen and no hint that
+more existed. `flex: 1 1 100%`, a fade on the scroll edge, and the active tab
+scrolled into view fix it. **A sentence describing what CSS does is a claim
+about a render**, checkable in one screenshot — the same shape as a constant
+asserting a property it does not have.
+
+And the background: `body` carried a `fixed` radial gradient and nothing else,
+so below the first viewport of a long page (a full-page render, and any browser
+that ignores `background-attachment: fixed`) it fell through to **white**. The
+canvas now carries `--bg` itself.
 
 ## The mover lifecycle panels (2026-08-13, #173–#175)
 
