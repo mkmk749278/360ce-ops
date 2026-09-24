@@ -123,5 +123,19 @@
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+  /* On a phone both nav rows scroll sideways, and the group or tab you are on
+     could sit off-screen — so the page did not say where you were. Bring the
+     active item into view; nothing else moves. */
+  (function () {
+    ['header nav', '.subnav'].forEach(function (sel) {
+      var bar = document.querySelector(sel);
+      var on = bar && bar.querySelector('a.on');
+      if (!on || bar.scrollWidth <= bar.clientWidth) return;
+      var dx = on.getBoundingClientRect().left - bar.getBoundingClientRect().left;
+      bar.scrollLeft = Math.max(0, bar.scrollLeft + dx - (bar.clientWidth - on.offsetWidth) / 2);
+    });
+  })();
+  </script>
 </body>
 </html>

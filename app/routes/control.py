@@ -106,8 +106,10 @@ def group_tunables(tunables: object) -> tuple[dict[str, list], bool]:
 
 
 def governor_summary(payload: object) -> dict:
-    """The trail governor, reduced for the at-a-glance strip.
+    """The trail governor, reduced for its row on the switchboard.
 
+    (Written for the at-a-glance strip that preceded the switchboard; the strip
+    was folded into it on 2026-09-24 and the reasoning below carries over.)
     The strip named five switches and omitted the only one that moves a real
     stop order on a live account — the governor cancels the evaluator's SL and
     parks its own, and its state was readable nowhere on this page. A reader

@@ -1,19 +1,28 @@
 {% extends "base.html" %}
 {% block title %}Trials · 360 CE Ops{% endblock %}
 {% block content %}
-<h1>Signup free trial</h1>
-<p class="muted">
-  7 days of <strong>{{ funnel.tier or 'auto' }}</strong> for a new customer — no payment
-  method, activated only when the user taps the welcome offer. Signals and levels are
-  already free, so what a trial actually gives away is <em>automation</em>: the engine
-  dispatching orders server-side on that user's own keys. Blast-radius caps, the
-  naked-position invariant and the kill switch apply to a trialist exactly as they do to
-  a paying subscriber.
-</p>
+<div class="page-head">
+  <h1>Signup free trial</h1>
+  <p class="lede">
+    7 days of <strong>{{ funnel.tier or 'auto' }}</strong> for a new customer — no payment
+    method, activated only when the user taps the welcome offer.
+  </p>
+  <details class="explain">
+    <summary>What a trial gives away</summary>
+    <div class="explain-body">
+      <p>
+        Signals and levels are already free, so what a trial actually gives away is
+        <em>automation</em>: the engine dispatching orders server-side on that user's own
+        keys. Blast-radius caps, the naked-position invariant and the kill switch apply to
+        a trialist exactly as they do to a paying subscriber.
+      </p>
+    </div>
+  </details>
+</div>
 
 {% if error %}
 <section class="card">
-  <p class="muted">Engine read failed: {{ error }}</p>
+  <p class="sw-state tone-bad"><span class="dot"></span>Engine read failed: {{ error }}</p>
 </section>
 {% else %}
 
@@ -73,7 +82,7 @@
     <span class="stat"><span class="n">{{ summary.lapsed or 0 }}</span> lapsed</span>
     <span class="stat stat-done"><span class="n">{{ summary.converted or 0 }}</span> converted</span>
   </div>
-  <table>
+  <table class="tbl">
     <tbody>
       <tr>
         <td>Claim rate <span class="muted">claimed / offered</span></td>
@@ -118,13 +127,14 @@
 <section class="card">
   <h2>Trials</h2>
   {% if rows %}
-  <table>
+  <div class="table-scroll">
+  <table class="data-table">
     <thead>
       <tr>
         <th>User</th>
         <th>Status</th>
         <th>Tier</th>
-        <th>Eligible</th>
+        <th>Eligible (UTC)</th>
         <th>Offered</th>
         <th>Claimed</th>
         <th>Ends</th>
@@ -134,7 +144,7 @@
     <tbody>
       {% for row in rows %}
       <tr>
-        <td>user {{ row.user_id }}</td>
+        <td class="nowrap">user {{ row.user_id }}</td>
         <td>
           {% if row.status == 'converted' %}<span class="badge badge-ok">CONVERTED</span>
           {% elif row.status == 'active' %}<span class="badge badge-warn">RUNNING</span>
@@ -144,21 +154,22 @@
           {% else %}<span class="badge badge-muted">ELIGIBLE</span>{% endif %}
         </td>
         <td>{{ row.tier }} · {{ row.days }}d</td>
-        <td class="muted">{{ row.eligible_at }}</td>
-        <td class="muted">{{ row.offered_at or '—' }}</td>
-        <td class="muted">{{ row.claimed_at or '—' }}</td>
+        <td class="muted nowrap">{{ row.eligible_at|when }}</td>
+        <td class="muted nowrap">{{ row.offered_at|when }}</td>
+        <td class="muted nowrap">{{ row.claimed_at|when }}</td>
         <td>
           {% if row.days_left is not none %}
           <strong>{{ row.days_left }}d left</strong>
           {% else %}
-          <span class="muted">{{ row.expires_at or '—' }}</span>
+          <span class="muted">{{ row.expires_at|when }}</span>
           {% endif %}
         </td>
-        <td class="muted">{{ row.converted_at or '—' }}</td>
+        <td class="muted nowrap">{{ row.converted_at|when }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
   {% else %}
   <p class="muted">
     No eligible users recorded yet. Rows appear as users open the app — the cohort is

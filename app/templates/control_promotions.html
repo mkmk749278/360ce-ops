@@ -1,87 +1,16 @@
 {% extends "base.html" %}
 {% block title %}Promotions · 360 CE Ops{% endblock %}
 {% block content %}
-<h1>Dark → live promotion</h1>
-
-<p class="muted">
-  Each path below emits into the <a href="/signals/dark-live">dark feed</a> —
-  real signals the scanner was willing to send, diverted before the queue. A
-  rule here is what stops a named slice of that population being diverted.
-</p>
-
-{# ---- Path retirement: the same decision pointing the other way ---------- #}
-{% if retirement is none %}
-<section class="card">
-  <h2>Path retirement <span class="muted">NOT REPORTED</span></h2>
-  <p class="muted">
-    This engine build predates the retirement mechanism, so every path delivers
-    on its own merits and nothing is being held back. That is not the same as
-    "nothing is retired" — there is no gate to report.
+<div class="page-head">
+  <h1>Dark → live promotion</h1>
+  <p class="lede">
+    Each path below emits into the <a href="/signals/dark-live">dark feed</a> —
+    real signals the scanner was willing to send, diverted before the queue. A
+    rule here is what stops a named slice of that population being diverted.
+    The opposite direction, taking a path off the live feed, is on
+    <a href="/control/routing">Control → Routing</a>.
   </p>
-</section>
-{% elif retirement.get('error') %}
-<section class="card">
-  <h2>Path retirement <span class="muted">UNREADABLE</span></h2>
-  <div class="error">{{ retirement.get('error') }}</div>
-  <p class="muted">
-    A fault, not a quiet state: the engine could not report which paths are
-    retired, so nothing below can say whether one is.
-  </p>
-</section>
-{% else %}
-<section class="card">
-  <h2>Path retirement
-    <span class="muted">live → dark: a (path, side) that stops reaching subscribers</span>
-  </h2>
-  <div class="flash">
-    <strong>{% if retirement.get('enabled') %}ACTIVE{% else %}OFF{% endif %}</strong>
-    — {{ retirement.get('count', 0) }} retirement(s) configured.
-    {% if retirement.get('enabled') %}
-      Rows matching them are diverted to the dark feed instead of the queue:
-      subscribers do not receive them, and they keep being measured.
-    {% else %}
-      The switch is off, so every configured retirement is inert and these
-      paths deliver exactly as before.
-    {% endif %}
-  </div>
-  {% if retirement.get('retired') %}
-  <table class="data-table">
-    <thead><tr><th>Path</th><th>Side</th><th>Effect</th></tr></thead>
-    <tbody>
-      {% for r in retirement.get('retired') %}
-      <tr>
-        <td><strong>{{ r.setup_class }}</strong></td>
-        <td>{% if r.side == '*' %}<span class="muted">both</span>{% else %}{{ r.side }}{% endif %}</td>
-        <td>
-          {% if retirement.get('enabled') %}
-            <span style="color:#f85149">diverted to dark</span>
-          {% else %}
-            <span class="muted">inert — switch is off</span>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="muted">Nothing is retired — every path delivers on its own merits.</p>
-  {% endif %}
-  <p class="muted">
-    <strong>Why divert rather than disable.</strong> A retired path keeps
-    stamping into the dark feed, so the decision can be re-read on fresh
-    evidence instead of frozen at the moment it was taken. A path that never
-    emits can never earn its way back — that is the absorbing state that cost
-    this engine 23 days of a starved feed, and it is why retirement is a
-    routing decision and not a verdict.
-    {% if not retirement.get('is_default') %}
-      <br>This list has been changed from the signed-off default.
-    {% endif %}
-    Change it on <a href="/control/routing">Control → Routing</a>, one path
-    and side at a time (the master switch <code>path_retirement_enabled</code>
-    is on <a href="/control#sec-tunables">Control → Engine → Tunables</a>).
-  </p>
-</section>
-{% endif %}
+</div>
 
 {% if flash %}
 <div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
@@ -96,40 +25,126 @@
 </div>
 {% endif %}
 
-{# ── The two switches above every rule ─────────────────────────────────────
-   Both, always, because a rule is inert if either is off for entirely
-   different reasons and a page showing one cannot say which half is missing. #}
-<div class="panel">
-  <h2 class="small">Master switches</h2>
-  <table class="tbl small">
-    <tr>
-      <th style="width:14em">Promotion <code>dark_promotion_enabled</code></th>
-      <td>
-        {% if snapshot.master_enabled %}
-          <span class="badge badge-live">ARMED</span>
-          Matching candidates are enqueued for real.
-        {% else %}
-          <span class="badge badge-off">OFF</span>
-          Every dark row is diverted as before, <em>whatever any rule says</em> —
-          <a href="/control#tun-signal-gating">arm it on Control → Engine → Signal gating</a>.
-        {% endif %}
-      </td>
-    </tr>
-    <tr>
-      <th>Dark lane <code>dark_emission_enabled</code></th>
-      <td>
-        {% if snapshot.dark_lane_enabled %}
-          <span class="badge badge-live">ON</span>
-          Candidates are being carried past their gate, so rules have rows to act on.
-        {% else %}
-          <span class="badge badge-off">OFF</span>
+{# ── The switches every rule sits under ─────────────────────────────────────
+   Both promotion switches, always, because a rule is inert if either is off
+   for entirely different reasons and a page showing one cannot say which half
+   is missing. Path retirement sits beside them because it is the same decision
+   pointing the other way — and it is edited on Routing, so this row says where. #}
+<section class="card">
+  <div class="sw-list">
+  <div class="sw tone-{{ 'ok' if snapshot.master_enabled else 'muted' }}">
+    <div class="sw-main">
+      <div class="sw-name">Promotion <code>dark_promotion_enabled</code></div>
+      {% if snapshot.master_enabled %}
+        <p class="sw-state"><span class="dot"></span><span class="badge badge-live">ARMED</span>
+          Matching candidates are enqueued for real.</p>
+      {% else %}
+        <p class="sw-state"><span class="dot"></span><span class="badge badge-off">OFF</span>
+          Every dark row is diverted as before, <em>whatever any rule says</em>.</p>
+      {% endif %}
+    </div>
+    <div class="sw-act">
+      <a class="btn btn-plain" href="/control#tun-signal-gating">{% if snapshot.master_enabled %}Change{% else %}Arm it{% endif %} on Control → Engine → Signal gating</a>
+    </div>
+  </div>
+
+  <div class="sw tone-{{ 'ok' if snapshot.dark_lane_enabled else 'warn' }}">
+    <div class="sw-main">
+      <div class="sw-name">Dark lane <code>dark_emission_enabled</code></div>
+      {% if snapshot.dark_lane_enabled %}
+        <p class="sw-state"><span class="dot"></span><span class="badge badge-live">ON</span>
+          Candidates are being carried past their gate, so rules have rows to act on.</p>
+      {% else %}
+        <p class="sw-state"><span class="dot"></span><span class="badge badge-off">OFF</span>
           Nothing is carried past its gate, so no candidate reaches a promotion
-          decision. A rule armed now is not idle — its input is missing.
+          decision. A rule armed now is not idle — its input is missing.</p>
+      {% endif %}
+    </div>
+    <div class="sw-act">
+      <a class="btn btn-plain" href="/control#sec-tunables">Tunables</a>
+    </div>
+  </div>
+
+  {# ── Path retirement: the same decision pointing the other way ────────── #}
+  {% if retirement is none %}
+  <div class="sw tone-muted">
+    <div class="sw-main">
+      <div class="sw-name">Path retirement <span class="muted">live → dark</span></div>
+      <p class="sw-state"><span class="dot"></span><span class="badge badge-off">NOT REPORTED</span></p>
+      <p class="note">
+        This engine build predates the retirement mechanism, so every path delivers
+        on its own merits and nothing is being held back. That is not the same as
+        "nothing is retired" — there is no gate to report.
+      </p>
+    </div>
+  </div>
+  {% elif retirement.get('error') %}
+  <div class="sw tone-bad">
+    <div class="sw-main">
+      <div class="sw-name">Path retirement <span class="muted">live → dark</span></div>
+      <p class="sw-state"><span class="dot"></span><span class="badge badge-err">UNREADABLE</span>
+        <span class="danger-text">{{ retirement.get('error') }}</span></p>
+      <p class="note">
+        A fault, not a quiet state: the engine could not report which paths are
+        retired, so nothing below can say whether one is.
+      </p>
+    </div>
+    <div class="sw-act"><a class="btn btn-plain" href="/control/routing">Open Routing</a></div>
+  </div>
+  {% else %}
+  <div class="sw tone-{{ 'ok' if retirement.get('enabled') else 'warn' }}">
+    <div class="sw-main">
+      <div class="sw-name">Path retirement <span class="muted">live → dark</span></div>
+      <p class="sw-state"><span class="dot"></span>
+        {% if retirement.get('enabled') %}<span class="badge badge-live">ACTIVE</span>{% else %}<span class="badge badge-off">OFF</span>{% endif %}
+        {{ retirement.get('count', 0) }} retirement(s) configured.
+      </p>
+      {% if retirement.get('retired') %}
+      <p class="chips">
+        {% for r in retirement.get('retired') %}
+          <span class="chip"><strong>{{ r.setup_class }}</strong>
+            · {% if r.side == '*' %}both{% else %}{{ r.side }}{% endif %}
+            · {% if retirement.get('enabled') %}<span class="danger-text">diverted to dark</span>{% else %}<span class="muted">inert — switch is off</span>{% endif %}</span>
+        {% endfor %}
+      </p>
+      {% else %}
+      <p class="note">Nothing is retired — every path delivers on its own merits.</p>
+      {% endif %}
+      <p class="note">
+        {% if retirement.get('enabled') %}
+          Rows matching them are sent to the dark feed instead of the queue:
+          subscribers do not receive them, and they keep being measured.
+        {% else %}
+          The switch is off, so every configured retirement is inert and these
+          paths deliver exactly as before.
         {% endif %}
-      </td>
-    </tr>
-  </table>
-</div>
+        {% if not retirement.get('is_default') %}
+          <span class="warn-text">This list has been changed from the signed-off default.</span>
+        {% endif %}
+      </p>
+      <details class="explain">
+        <summary>Why divert rather than disable</summary>
+        <div class="explain-body">
+          <p>
+            A retired path keeps stamping into the dark feed, so the decision can
+            be re-read on fresh evidence instead of frozen at the moment it was
+            taken. A path that never emits can never earn its way back — that is
+            the absorbing state that cost this engine 23 days of a starved feed,
+            and it is why retirement is a routing decision and not a verdict.
+          </p>
+          <p>
+            Change it on <a href="/control/routing">Control → Routing</a>, one path
+            and side at a time (the master switch <code>path_retirement_enabled</code>
+            is on <a href="/control#sec-tunables">Control → Engine → Tunables</a>).
+          </p>
+        </div>
+      </details>
+    </div>
+    <div class="sw-act"><a class="btn btn-plain" href="/control/routing">Edit on Routing</a></div>
+  </div>
+  {% endif %}
+  </div>
+</section>
 
 {# ── The index. The whole point of this block: find your path in one screen
    rather than scrolling past twelve you do not want. Sorted by evidence, not
@@ -137,33 +152,35 @@
    the top line and invites exactly the promotion this repo has paid for. #}
 {% if index %}
 <div class="panel">
-  <h2 class="small">Paths <span class="muted">— most evidence first</span></h2>
-  {# One selector, and the counts beside every option are measured on the WHOLE
-     ledger — a selector applied to its own counts makes each option read
-     "n = whatever I picked" (#90/#91). #}
-  <form method="get" class="filters">
-    <label class="small">Show
-      <select name="setup" onchange="this.form.submit()">
-        <option value="">All paths ({{ index | length }})</option>
-        {% for c in index %}
-        <option value="{{ c.setup_class }}"
-          {% if filter_setup == c.setup_class %}selected{% endif %}>
-          {{ c.setup_class }} (n={{ c.summary.n_scored }})
-        </option>
-        {% endfor %}
-      </select>
-    </label>
-    {% if filter_setup %}<a class="btn small" href="/control/promotions">Clear</a>{% endif %}
-    <noscript><button class="btn small" type="submit">Apply</button></noscript>
-  </form>
-  <div style="overflow-x:auto">
+  <div class="card-head">
+    <h2>Paths <span class="muted">— most evidence first</span></h2>
+    {# One selector, and the counts beside every option are measured on the WHOLE
+       ledger — a selector applied to its own counts makes each option read
+       "n = whatever I picked" (#90/#91). #}
+    <form method="get" class="form-row" style="margin:0">
+      <label>Show
+        <select name="setup" onchange="this.form.submit()">
+          <option value="">All paths ({{ index | length }})</option>
+          {% for c in index %}
+          <option value="{{ c.setup_class }}"
+            {% if filter_setup == c.setup_class %}selected{% endif %}>
+            {{ c.setup_class }} (n={{ c.summary.n_scored }})
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if filter_setup %}<a class="btn btn-plain" href="/control/promotions">Clear</a>{% endif %}
+      <noscript><button class="btn btn-plain" type="submit">Apply</button></noscript>
+    </form>
+  </div>
+  <div class="table-scroll">
   <table class="tbl small">
     <thead>
       <tr>
         <th>Path</th><th>Rule</th>
-        <th title="rows with a usable PnL">n</th>
-        <th title="distinct symbol·side — read this before the average">Campaigns</th>
-        <th>W/L/flat</th><th>Avg PnL %</th><th>95% CI</th><th>Promoted</th>
+        <th class="num" title="rows with a usable PnL">n</th>
+        <th class="num" title="distinct symbol·side — read this before the average">Campaigns</th>
+        <th class="num">W/L/flat</th><th class="num">Avg PnL %</th><th class="num">95% CI</th><th class="num">Promoted</th>
       </tr>
     </thead>
     <tbody>
@@ -178,22 +195,22 @@
           {% elif card.state == 'off' %}<span class="badge badge-off">OFF</span>
           {% else %}<span class="muted">—</span>{% endif %}
         </td>
-        <td>{{ card.summary.n_scored }}</td>
-        <td>{{ card.summary.campaigns }}</td>
-        <td>{{ card.summary.wins }}/{{ card.summary.losses }}/{{ card.summary.flats }}</td>
-        <td>{{ card.summary.avg_pct | pct }}%</td>
-        <td class="muted">
+        <td class="num">{{ card.summary.n_scored }}</td>
+        <td class="num">{{ card.summary.campaigns }}</td>
+        <td class="num nowrap">{{ card.summary.wins }}/{{ card.summary.losses }}/{{ card.summary.flats }}</td>
+        <td class="num {% if (card.summary.avg_pct|float(0)) > 0 %}pos{% elif (card.summary.avg_pct|float(0)) < 0 %}neg{% endif %}">{{ card.summary.avg_pct | pct }}%</td>
+        <td class="num muted nowrap">
           {% if card.summary.ci_low is not none %}
             [{{ card.summary.ci_low | pct }}, {{ card.summary.ci_high | pct }}]
           {% else %}—{% endif %}
         </td>
-        <td class="muted">{{ card.lanes.split.n_promoted or '—' }}</td>
+        <td class="num muted">{{ card.lanes.split.n_promoted or '—' }}</td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
   </div>
-  <p class="small muted">
+  <p class="note">
     A dash under <strong>Rule</strong> means no rule exists and every dark row
     for that path is diverted. Open a path below to see its evidence and set one.
   </p>
@@ -424,7 +441,7 @@
       <details>
         <summary class="small">Recent refused candidates ({{ ref.near_misses | length }}
           of {{ ref.seen }} seen)</summary>
-        <div style="overflow-x:auto">
+        <div class="table-scroll">
         <table class="tbl small">
           <thead><tr>
             <th>Symbol</th><th>Side</th><th>Gate</th><th>Regime</th>
@@ -494,7 +511,7 @@
   </fieldset>
   {% endif %}
 
-  <form method="post" action="/control/promotions/save" class="promo-form">
+  <form method="post" action="/control/promotions/save" class="promo-form" id="promo-save-{{ card.setup_class }}">
     <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
 
     {% for dim in dimensions %}
@@ -502,7 +519,7 @@
       {% set selected = (card.rule[dim ~ 's'] if card.rule else []) or [] %}
       <fieldset>
         <legend>{{ dim | capitalize }}</legend>
-        <div style="overflow-x:auto">
+        <div class="table-scroll">
         <table class="tbl small">
           <thead>
             <tr>
@@ -552,59 +569,67 @@
 
     <fieldset>
       <legend>Direction, bounds and note</legend>
-      <label>Direction
-        <select name="direction">
-          {% for d in directions %}
-            <option value="{{ d }}"
-              {% if card.rule and card.rule.direction == d %}selected{% endif %}>{{ d }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label style="margin-left:1em">Max promotions / UTC day
-        <input type="number" name="max_per_day" min="0" step="1" style="width:6em"
-               value="{{ card.rule.max_per_day if card.rule else 25 }}">
-      </label>
-      <label style="margin-left:1em">Min confidence
-        <input type="number" name="min_confidence" step="0.1" style="width:6em"
-               value="{{ card.rule.min_confidence if card.rule and card.rule.min_confidence is not none else '' }}">
-      </label>
-      {% if card.rule and card.rule.promoted_today is defined %}
-        <span class="small muted">· {{ card.rule.promoted_today }} promoted today</span>
-      {% endif %}
-      <br>
-      <label>Note
-        <input type="text" name="note" style="width:60%"
-               placeholder="why this rule, and on what window"
-               value="{{ card.rule.note if card.rule else '' }}">
-      </label>
+      <div class="form-row">
+        <label>Direction
+          <select name="direction">
+            {% for d in directions %}
+              <option value="{{ d }}"
+                {% if card.rule and card.rule.direction == d %}selected{% endif %}>{{ d }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Max promotions / UTC day
+          <input type="number" name="max_per_day" min="0" step="1" style="width:8em"
+                 value="{{ card.rule.max_per_day if card.rule else 25 }}">
+        </label>
+        <label>Min confidence
+          <input type="number" name="min_confidence" step="0.1" style="width:8em"
+                 value="{{ card.rule.min_confidence if card.rule and card.rule.min_confidence is not none else '' }}">
+        </label>
+        {% if card.rule and card.rule.promoted_today is defined %}
+          <span class="note" style="align-self:center">{{ card.rule.promoted_today }} promoted today</span>
+        {% endif %}
+      </div>
+      <div class="form-row">
+        <label class="grow">Note
+          <input type="text" name="note"
+                 placeholder="why this rule, and on what window"
+                 value="{{ card.rule.note if card.rule else '' }}">
+        </label>
+      </div>
     </fieldset>
 
-    <p>
-      <label>
-        <input type="checkbox" name="enabled" value="1"
+    <div class="arm-row">
+      <label class="tg">
+        <input type="checkbox" class="toggle" name="enabled" value="1"
                {% if card.rule and card.rule.enabled %}checked{% endif %}>
         <strong>Arm this rule</strong>
       </label>
-      <label style="margin-left:1.5em">
+      <label class="arm-confirm">
         <input type="checkbox" name="confirm" value="1">
         I understand this changes what paid subscribers receive
       </label>
-    </p>
+    </div>
     {# Arming needs the confirm; switching off does not. A confirm on the safe
        direction only teaches the operator to click through both. #}
-    <button type="submit" class="btn btn-primary">Save rule</button>
   </form>
 
-  {% if card.rule %}
-  <form method="post" action="/control/promotions/delete" class="inline"
-        onsubmit="return confirm('Remove the {{ card.setup_class }} rule and its conditions?')">
-    <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
-    <button type="submit" class="btn btn-danger small">Remove rule</button>
-    <span class="muted small">
-      Distinct from switching it off — off keeps the conditions.
+  {# Both buttons on one row. Save sits outside its form (the `form=`
+     attribute binds it) because a form cannot nest inside another, and the
+     two actions used to render a paragraph apart, misaligned. #}
+  <div class="btn-row promo-actions">
+    <button type="submit" form="promo-save-{{ card.setup_class }}" class="btn btn-primary">Save rule</button>
+    {% if card.rule %}
+    <form method="post" action="/control/promotions/delete" class="inline"
+          onsubmit="return confirm('Remove the {{ card.setup_class }} rule and its conditions?')">
+      <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
+      <button type="submit" class="btn btn-soft-danger">Remove rule</button>
+    </form>
+    <span class="note" style="margin:0">
+      Remove is distinct from switching it off — off keeps the conditions.
     </span>
-  </form>
-  {% endif %}
+    {% endif %}
+  </div>
 </details>
 {% endfor %}
 {% endblock %}

@@ -1,17 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Routing · 360 CE Ops{% endblock %}
 {% block content %}
-<h1>Path routing — live ⇄ dark</h1>
-
-<p class="muted">
-  One row per path and side, and both directions in one place.
-  <strong>Live → dark</strong> diverts a (path, side) to the
-  <a href="/signals/dark-live">dark feed</a>: subscribers stop receiving it and
-  it keeps being measured. <strong>Dark → live</strong> is a per-path promotion
-  rule that lets a slice of the dark feed through; rules are edited on
-  <a href="/control/promotions">Promotions</a>. A diverted path is never deleted —
-  it keeps producing evidence, so the decision can be re-read on fresh data.
-</p>
+<div class="page-head">
+  <h1>Path routing — live ⇄ dark</h1>
+  <p class="lede">
+    One row per path and side, and both directions in one place.
+    <strong>Live → dark</strong> diverts a (path, side) to the
+    <a href="/signals/dark-live">dark feed</a>: subscribers stop receiving it and
+    it keeps being measured. <strong>Dark → live</strong> is a per-path promotion
+    rule that lets a slice of the dark feed through; rules are edited on
+    <a href="/control/promotions">Promotions</a>. A diverted path is never deleted —
+    it keeps producing evidence, so the decision can be re-read on fresh data.
+  </p>
+</div>
 
 {% if flash %}
 <div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
@@ -158,8 +159,8 @@
     <tbody>
       {% for r in rows %}
       <tr id="path-{{ r.setup_class }}">
-        <td data-label="Path"><strong>{{ r.setup_class }}</strong></td>
-        <td data-label="Side">{{ r.side }}</td>
+        <td data-label="Path" class="cell-wide cell-path"><strong>{{ r.setup_class }}</strong><span class="side-inline {% if r.side == 'LONG' %}side-long{% else %}side-short{% endif %}"> · {{ r.side }}</span></td>
+        <td data-label="Side" class="cell-side">{{ r.side }}</td>
         <td data-label="Live feed">
           {% if r.live == 'live' %}<span class="badge badge-ok">LIVE</span>
           {% elif r.live == 'diverted' %}<span class="badge badge-warn">DIVERTED TO DARK</span>
@@ -175,7 +176,7 @@
             <span class="muted">{{ r.conflict }}</span>
           {% endif %}
         </td>
-        <td data-label="Action">
+        <td data-label="Action" class="cell-action">
           {% if r.can_divert %}
           <form method="post" action="/control/routing/divert">
             <input type="hidden" name="setup_class" value="{{ r.setup_class }}">
@@ -196,14 +197,14 @@
         </td>
         {% set d = r.delivered %}
         <td data-label="Delivered n">{% if d %}{{ d.get('n') }}{% else %}—{% endif %}</td>
-        <td data-label="Delivered avg %">{% if d %}{{ d.get('net_avg_pct')|pct(3) }}{% else %}—{% endif %}</td>
+        <td data-label="Delivered avg %" class="{% if d and (d.get('net_avg_pct')|float(0)) > 0 %}pos{% elif d and (d.get('net_avg_pct')|float(0)) < 0 %}neg{% endif %}">{% if d %}{{ d.get('net_avg_pct')|pct(3) }}{% else %}—{% endif %}</td>
         <td data-label="Verdict">
-          {% if d %}<span class="badge badge-muted" title="{{ d.get('verdict_why') or '' }}">{{ d.get('verdict') or '—' }}</span>
+          {% if d %}{% set v = (d.get('verdict') or '')|upper %}<span class="badge {% if v == 'EARNS' %}badge-ok{% elif v == 'LOSES' %}badge-bad{% else %}badge-muted{% endif %}" title="{{ d.get('verdict_why') or '' }}">{{ d.get('verdict') or '—' }}</span>
           {% if d.get('delivered_evidence_frozen') %}<br><span class="muted">frozen</span>{% endif %}
           {% else %}—{% endif %}
         </td>
         <td data-label="Dark n">{{ r.dark.n_scored }}</td>
-        <td data-label="Dark avg %">{{ r.dark.avg_pct|pct(3) }}</td>
+        <td data-label="Dark avg %" class="{% if (r.dark.avg_pct|float(0)) > 0 %}pos{% elif (r.dark.avg_pct|float(0)) < 0 %}neg{% endif %}">{{ r.dark.avg_pct|pct(3) }}</td>
         <td data-label="Dark → live rule">
           {% set p = r.promotion %}
           {% if p.state == 'none' %}<span class="badge badge-muted">NO RULE</span>
