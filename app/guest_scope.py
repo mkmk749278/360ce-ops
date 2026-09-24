@@ -225,6 +225,13 @@ OWNER_ONLY: dict[str, str] = {
     ),
     "/control/promotions/save": "write — money path: arms a promotion rule",
     "/control/promotions/delete": "write — removes a promotion rule",
+    "/control/routing": (
+        "the live ⇄ dark routing panel — a guest must not see or change which "
+        "paths reach paid subscribers"
+    ),
+    "/control/routing/divert": "write — money path: diverts a path off the live feed",
+    "/control/routing/restore": "write — money path: puts a path back on the live feed",
+    "/control/routing/adopt-default": "write — money path: replaces the retired-path list",
     "/control/access": "the read-only access panel — a guest must not see or mint grants",
     "/control/access/issue": "write — mints access",
     "/control/access/revoke": "write — revokes access",

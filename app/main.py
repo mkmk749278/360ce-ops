@@ -37,6 +37,7 @@ from app.data_sources.monitor_logs import MonitorLogsReader
 from app.routes import (
     access,
     promotions,
+    routing,
     alerts,
     api_v1,
     audit_status,
@@ -195,6 +196,7 @@ app.include_router(exit_backtest.router)
 app.include_router(control.router)
 app.include_router(access.router)
 app.include_router(promotions.router)
+app.include_router(routing.router)
 app.include_router(users.router)
 app.include_router(referrals.router)
 app.include_router(trials.router)

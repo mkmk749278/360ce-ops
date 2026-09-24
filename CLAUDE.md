@@ -2212,6 +2212,59 @@ what a correctly armed rule reads before it fires, so the wrong number was
 indistinguishable from the right one until the rule started working. The engine
 publishes the runtime half to Redis and the handler prefers it.
 
+## `/control/routing` — live ⇄ dark on one table (2026-09-24)
+
+Owner: *"there is no clear diversion screen, Dark to live and live to dark,
+make it clear and I do it later."* Two mechanisms move a path across the
+dark/live line and they lived in two shapes on two pages:
+
+- **Live → dark** (path retirement, engine `src/path_retirement.py`) was a
+  read-only list on the Promotions page. Its only edit route was a free-text
+  runtime tunable, and **the link to it was `href="/control/tunables"`, a
+  POST-only route** — it 405'd. So the owner could see the list and could not
+  reach the control. That is also why MVAVW SHORT stayed live after engine
+  #1054 changed the default: a stored `retired_paths` value wins, and the page
+  that said *"this list has been changed from the signed-off default"* offered
+  no way to act on it.
+- **Dark → live** (promotion rules, engine `src/dark_promotion.py`) is per path.
+
+`/control/routing` is one row per (path, side), in this order: live-feed state,
+the action, delivered evidence (the engine's path scorecard), dark evidence,
+and the dark → live rule. Rules it carries:
+
+- **The two directions interact, and the table says so.** A retired row is
+  diverted by being marked dark with gate `retired:<PATH>:<SIDE>`, then passes
+  the same promotion `decide` as every dark row. A rule whose gates are *Any*
+  matches that gate and puts the row back on the live feed, undoing the
+  retirement from another page. Such a row is badged **CONFLICT**.
+- **Read-modify-write against the engine at write time.** Each divert or
+  restore re-reads the engine's retirement snapshot, edits that list, writes the
+  whole `retired_paths` string, then reads it back and reports what the engine
+  says. It never uses the page the operator loaded, which may be minutes old,
+  and never echoes the click.
+- **An unreadable list is never overwritten.** If the engine did not report
+  the list, the write is refused. "I could not see it" is not "it is empty".
+- **Restoring `PATH:*` one side at a time splits the entry.** One click must
+  not quietly restore two things.
+- **The confirm sits on the direction that reaches subscribers** (restore,
+  and an adopt-default that restores anything). Diverting places no order.
+  Same asymmetry as the Promotions page.
+- **Four live-feed states, never two:** `live`, `diverted`,
+  `diverted_inert` (listed, but the master switch is off, so still live) and
+  `unknown`.
+
+**Two defects found by rendering it, not by testing it:**
+
+- **`.table-scroll` was used by `/track-record` and `/signals/entry-features`
+  and defined nowhere**, so both overflowed a phone. It is defined now.
+- **A wide table with the action in the last column is unusable on the
+  owner's phone** even when it scrolls. The routing table stacks into one card
+  per row below 720px, with the action as the fourth line.
+
+**A link is a claim about a route.** Before linking to a control, check that
+the target serves GET. A control reached only by a 405 does not exist for the
+person the page was written for.
+
 ## Arranging `/control` — and the tile that must not read the switch (2026-08-10, #161–#163)
 
 77 tunables sat between the safety switches and the mode toggle, so on a phone the
