@@ -325,6 +325,26 @@ table.tunables td { padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--bord
 .tunable-input input[type=checkbox] { transform: scale(1.35); margin-right: 0.5rem; accent-color: var(--accent); }
 .tunable-group .btn { margin-top: 0.7rem; }
 
+/* Wide tables scroll inside their card on a phone instead of widening the page.
+   `table-scroll` was referenced by /track-record and /signals/entry-features
+   and never defined, so both overflowed the viewport (found 2026-09-24 while
+   laying out /control/routing, which needs the same thing). */
+.table-scroll { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+
+/* /control/routing on a phone: one card per (path, side), each cell a
+   labelled line, so the action is visible without scrolling sideways. The
+   owner operates from a phone; a control he has to scroll a table to find is
+   a control he will mis-tap. */
+@media (max-width: 720px) {
+  table.routing-table thead { display: none; }
+  table.routing-table tr { display: block; border-bottom: 1px solid var(--border); padding: 0.55rem 0; }
+  table.routing-table td { display: flex; justify-content: space-between; align-items: flex-start;
+                           gap: 0.8rem; padding: 0.2rem 0.3rem; border: none; text-align: right; }
+  table.routing-table td::before { content: attr(data-label); color: var(--fg-dim);
+                                   font-size: 0.72rem; text-align: left; flex: 0 0 auto; }
+  table.routing-table td form { display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
+}
+
 /* ---- One unified badge system ---- */
 .badge {
   display: inline-block;

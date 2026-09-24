@@ -76,9 +76,9 @@
     {% if not retirement.get('is_default') %}
       <br>This list has been changed from the signed-off default.
     {% endif %}
-    Edit it on <a href="/control/tunables">Control → Tunables</a>
-    (<code>retired_paths</code>, and <code>path_retirement_enabled</code> to
-    disarm the whole mechanism).
+    Change it on <a href="/control/routing">Control → Routing</a>, one path
+    and side at a time (the master switch <code>path_retirement_enabled</code>
+    is on <a href="/control#sec-tunables">Control → Engine → Tunables</a>).
   </p>
 </section>
 {% endif %}
