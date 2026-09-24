@@ -1,17 +1,37 @@
 {% extends "base.html" %}
+{% from "_info.html" import info %}
 {% block title %}Routing · 360 CE Ops{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>Path routing — live ⇄ dark</h1>
-  <p class="lede">
-    One row per path and side, and both directions in one place.
-    <strong>Live → dark</strong> diverts a (path, side) to the
-    <a href="/signals/dark-live">dark feed</a>: subscribers stop receiving it and
-    it keeps being measured. <strong>Dark → live</strong> is a per-path promotion
-    rule that lets a slice of the dark feed through; rules are edited on
-    <a href="/control/promotions">Promotions</a>. A diverted path is never deleted —
-    it keeps producing evidence, so the decision can be re-read on fresh data.
-  </p>
+  <div class="title-row">
+    <h1>Path routing — live ⇄ dark</h1>
+    {% call info("About path routing") %}
+      <p>One row per path and side, and both directions in one place.
+        <strong>Live → dark</strong> diverts a (path, side) to the
+        <a href="/signals/dark-live">dark feed</a>: subscribers stop receiving it
+        and it keeps being measured. <strong>Dark → live</strong> is a per-path
+        promotion rule that lets a slice of the dark feed through; rules are
+        edited on <a href="/control/promotions">Promotions</a>.</p>
+      <p>A diverted path is never deleted — it keeps producing evidence, so the
+        decision can be re-read on fresh data.</p>
+      <ul>
+        <li><strong>Divert to dark</strong> takes effect on the next scan and
+          needs no confirm: it stops delivery and places no order. It is written
+          to the engine's <code>retired_paths</code> list — the same value
+          Control → Tunables edits — and this page reads the engine back after
+          every change and reports what the engine says, not what was clicked.</li>
+        <li><strong>Restore to live</strong> needs the confirm: it puts the path
+          back in front of paid subscribers, and auto-trade users take its
+          orders.</li>
+        <li>A diverted row enters the dark feed with the gate
+          <code>retired:&lt;PATH&gt;:&lt;SIDE&gt;</code>. A dark → live rule whose
+          gates are <em>Any</em> matches that gate and puts the row straight back
+          on the live feed — that is what a CONFLICT marks. To send a path live
+          again, restore it here rather than promoting around its own
+          retirement.</li>
+      </ul>
+    {% endcall %}
+  </div>
 </div>
 
 {% if flash %}
@@ -29,7 +49,7 @@
 
 {# ---- The state, before any row ------------------------------------------ #}
 <section class="card">
-  <h2>Right now</h2>
+  <div class="card-title"><h2>Right now</h2></div>
   <div class="summary-row">
     <span class="badge {% if head.diverted %}badge-warn{% else %}badge-muted{% endif %}">
       {{ head.diverted }} diverted to dark</span>
@@ -43,140 +63,157 @@
     <span class="badge badge-bad">{{ head.conflicts }} conflict(s) — see rows marked below</span>
     {% endif %}
   </div>
-  <div class="table-scroll">
-  <table class="data-table">
-    <thead><tr><th>Master switch</th><th>State</th><th>What it means</th></tr></thead>
-    <tbody>
-      <tr>
-        <td><code>path_retirement_enabled</code></td>
-        <td>
-          {% if head.retirement_enabled is none %}<span class="badge badge-bad">NOT REPORTED</span>
-          {% elif head.retirement_enabled %}<span class="badge badge-ok">ON</span>
-          {% else %}<span class="badge badge-bad">OFF</span>{% endif %}
-        </td>
-        <td class="muted">
-          {% if head.retirement_enabled is none %}
-            The engine did not report it, so this page cannot say what is diverted.
-          {% elif head.retirement_enabled %}
-            Live → dark diversions below are acting.
-          {% else %}
-            Every diversion below is inert — those paths still reach subscribers.
-          {% endif %}
-          Set on <a href="/control#sec-tunables">Control → Engine → Tunables</a>.
-        </td>
-      </tr>
-      <tr>
-        <td><code>dark_promotion_enabled</code></td>
-        <td>
-          {% if head.promotion_master is none %}<span class="badge badge-bad">NOT REPORTED</span>
-          {% elif head.promotion_master %}<span class="badge badge-ok">ARMED</span>
-          {% else %}<span class="badge badge-muted">OFF</span>{% endif %}
-        </td>
-        <td class="muted">
-          {% if head.promotion_master %}Armed dark → live rules enqueue matching rows for real.
-          {% else %}No dark → live rule promotes anything, whatever it says.{% endif %}
-        </td>
-      </tr>
-      <tr>
-        <td><code>dark_emission_enabled</code></td>
-        <td>
-          {% if head.dark_lane is none %}<span class="badge badge-bad">NOT REPORTED</span>
-          {% elif head.dark_lane %}<span class="badge badge-ok">ON</span>
-          {% else %}<span class="badge badge-bad">OFF</span>{% endif %}
-        </td>
-        <td class="muted">
-          {% if head.dark_lane is sameas false %}
-            The dark lane is off: diverted paths stop reaching subscribers AND stop
-            being measured, and dark → live rules have nothing to act on.
-          {% else %}
-            The dark lane is measuring — diverted rows keep producing evidence.
-          {% endif %}
-        </td>
-      </tr>
-    </tbody>
-  </table>
+  <div class="chips switch-chips">
+    <span class="chip"><code>path_retirement_enabled</code>
+      {% if head.retirement_enabled is none %}<span class="badge badge-bad">NOT REPORTED</span>
+      {% elif head.retirement_enabled %}<span class="badge badge-ok">ON</span>
+      {% else %}<span class="badge badge-bad">OFF</span>{% endif %}
+      {% call info("path_retirement_enabled") %}
+        <p>{% if head.retirement_enabled is none %}The engine did not report it,
+          so this page cannot say what is diverted.{% elif head.retirement_enabled %}Live
+          → dark diversions below are acting.{% else %}Every diversion below is
+          inert — those paths still reach subscribers.{% endif %}</p>
+        <p>Set on <a href="/control#sec-tunables">Control → Engine → Tunables</a>.</p>
+      {% endcall %}</span>
+    <span class="chip"><code>dark_promotion_enabled</code>
+      {% if head.promotion_master is none %}<span class="badge badge-bad">NOT REPORTED</span>
+      {% elif head.promotion_master %}<span class="badge badge-ok">ARMED</span>
+      {% else %}<span class="badge badge-muted">OFF</span>{% endif %}
+      {% call info("dark_promotion_enabled") %}
+        <p>{% if head.promotion_master %}Armed dark → live rules enqueue matching
+          rows for real.{% else %}No dark → live rule promotes anything, whatever
+          it says.{% endif %}</p>
+      {% endcall %}</span>
+    <span class="chip"><code>dark_emission_enabled</code>
+      {% if head.dark_lane is none %}<span class="badge badge-bad">NOT REPORTED</span>
+      {% elif head.dark_lane %}<span class="badge badge-ok">ON</span>
+      {% else %}<span class="badge badge-bad">OFF</span>{% endif %}
+      {% call info("dark_emission_enabled") %}
+        <p>{% if head.dark_lane is sameas false %}The dark lane is off: diverted
+          paths stop reaching subscribers AND stop being measured, and dark →
+          live rules have nothing to act on.{% else %}The dark lane is measuring —
+          diverted rows keep producing evidence.{% endif %}</p>
+      {% endcall %}</span>
   </div>
 </section>
 
 {# ---- Signed-off default ------------------------------------------------- #}
 {% if readable and not default_diff.same %}
 <section class="card">
-  <h2>The live list differs from the signed-off default</h2>
-  <p>
-    Adopting the default would
-    {% if default_diff.to_divert %}
-      <strong>divert</strong>
-      {% for p, s in default_diff.to_divert %}{{ p }} {{ s }}{% if not loop.last %}, {% endif %}{% endfor %}
-    {% endif %}
-    {% if default_diff.to_divert and default_diff.to_restore %} and {% endif %}
-    {% if default_diff.to_restore %}
-      <strong>restore to live</strong>
-      {% for p, s in default_diff.to_restore %}{{ p }} {{ s }}{% if not loop.last %}, {% endif %}{% endfor %}
-    {% endif %}.
-    <span class="muted">Default: <code>{{ default_diff.default_spec }}</code></span>
-  </p>
-  <form method="post" action="/control/routing/adopt-default" class="btn-row">
-    {% if default_diff.to_restore %}
-    <label><input type="checkbox" name="confirm" value="yes">
-      I understand this puts a path back in front of paid subscribers</label>
-    {% endif %}
-    <button type="submit" class="btn btn-plain btn-sm">Adopt the signed-off default</button>
-  </form>
+  <div class="sw">
+    <div class="sw-main">
+      <div class="sw-name">Differs from the signed-off default
+        {% call info("The signed-off default") %}
+          <p>Default: <code>{{ default_diff.default_spec }}</code></p>
+          <p>A stored <code>retired_paths</code> value wins over the engine's
+            default, which is why the two can differ. Adopting it needs the
+            confirm only when it would put something back on the live feed.</p>
+        {% endcall %}
+      </div>
+      <p class="sw-state">Adopting it would
+        {%- if default_diff.to_divert %} <strong>divert</strong>
+          {% for p, s in default_diff.to_divert %}{{ p }} {{ s }}{% if not loop.last %}, {% endif %}{% endfor %}
+        {%- endif %}
+        {%- if default_diff.to_divert and default_diff.to_restore %} and{% endif %}
+        {%- if default_diff.to_restore %} <strong>restore to live</strong>
+          {% for p, s in default_diff.to_restore %}{{ p }} {{ s }}{% if not loop.last %}, {% endif %}{% endfor %}
+        {%- endif %}.</p>
+    </div>
+    <div class="sw-act">
+      <form method="post" action="/control/routing/adopt-default" class="btn-row" style="margin:0">
+        {% if default_diff.to_restore %}
+        <label class="arm-confirm"><input type="checkbox" name="confirm" value="yes">
+          I understand this puts a path back in front of paid subscribers</label>
+        {% endif %}
+        <button type="submit" class="btn btn-plain">Adopt the signed-off default</button>
+      </form>
+    </div>
+  </div>
 </section>
 {% endif %}
 
 {# ---- The table ---------------------------------------------------------- #}
 <section class="card">
-  <h2>Every path, both directions</h2>
-  <p class="muted">
-    <strong>Delivered</strong> is the engine's path scorecard over the delivered
-    book{% if scorecard_window %} ({{ scorecard_window|round|int }}d{% if floor %},
-    verdicts need {{ floor.get('min_trades') }} trades over {{ floor.get('min_symbols') }}
-    symbols{% endif %}){% endif %} — a diverted side stops adding delivered rows, so
-    its delivered figure is frozen at the moment it was diverted.
-    <strong>Dark</strong> is the same side in the dark feed, all time. PnL is %
-    per trade, gross. Read n before any average.
-    {% if scorecard_state != 'ok' %}
-      <br><span class="badge badge-warn">DELIVERED {{ scorecard_state|upper }}</span>
+  <div class="card-title"><h2>Every path, both directions</h2>
+    {% call info("How to read this table") %}
+      <p><strong>Delivered</strong> is the engine's path scorecard over the
+        delivered book{% if scorecard_window %} ({{ scorecard_window|round|int }}d{% if floor %},
+        verdicts need {{ floor.get('min_trades') }} trades over {{ floor.get('min_symbols') }}
+        symbols{% endif %}){% endif %} — a diverted side stops adding delivered
+        rows, so its delivered figure is frozen at the moment it was diverted.</p>
+      <p><strong>Dark</strong> is the same side in the dark feed, all time. PnL is
+        % per trade, gross. Each cell reads <em>trades · average</em> — read the
+        trade count before the average.</p>
+    {% endcall %}
+  </div>
+  {% if scorecard_state != 'ok' %}
+    <p class="note"><span class="badge badge-warn">DELIVERED {{ scorecard_state|upper }}</span>
       the path scorecard could not be read, so the delivered columns are blank for a
-      reason, not because nothing was delivered.
-    {% endif %}
-  </p>
+      reason, not because nothing was delivered.</p>
+  {% endif %}
   {% if not rows %}
     <p class="muted">No path has evidence or configuration yet.</p>
   {% else %}
+  {# Six columns, not ten: n, average and verdict are one fact about one book,
+     so they share a cell, and the side rides on the path name. A badge marks a
+     state worth looking at (live/diverted, earns/loses, a live rule); the
+     ordinary "not enough data" and "no rule" read as plain text, so a page of
+     22 rows is not 22 rows of grey pills. #}
   <table class="data-table routing-table">
     <thead>
       <tr>
-        <th>Path</th><th>Side</th>
-        <th>Live feed (live → dark)</th>
-        <th>Action</th>
-        <th>Delivered n</th><th>Delivered avg %</th><th>Verdict</th>
-        <th>Dark n</th><th>Dark avg %</th>
+        <th>Path</th>
+        <th>Live feed</th>
+        <th>Delivered <span class="th-unit">trades · avg %</span></th>
+        <th>Dark feed <span class="th-unit">trades · avg %</span></th>
         <th>Dark → live rule</th>
+        <th>Action</th>
       </tr>
     </thead>
     <tbody>
       {% for r in rows %}
+      {% set d = r.delivered %}
+      {% set p = r.promotion %}
       <tr id="path-{{ r.setup_class }}">
-        <td data-label="Path" class="cell-wide cell-path"><strong>{{ r.setup_class }}</strong><span class="side-inline {% if r.side == 'LONG' %}side-long{% else %}side-short{% endif %}"> · {{ r.side }}</span></td>
-        <td data-label="Side" class="cell-side">{{ r.side }}</td>
-        <td data-label="Live feed">
+        <td data-label="Path" class="rt-path"><strong>{{ r.setup_class }}</strong> <span class="{% if r.side == 'LONG' %}side-long{% else %}side-short{% endif %}">{{ r.side }}</span></td>
+        <td data-label="Live feed" class="rt-live">
           {% if r.live == 'live' %}<span class="badge badge-ok">LIVE</span>
           {% elif r.live == 'diverted' %}<span class="badge badge-warn">DIVERTED TO DARK</span>
           {% elif r.live == 'diverted_inert' %}<span class="badge badge-bad">LISTED · STILL LIVE</span>
           {% else %}<span class="badge badge-bad">UNKNOWN</span>{% endif %}
-          {% if r.in_default and r.live == 'live' %}
-            <br><span class="muted">signed-off default diverts this</span>
-          {% elif r.in_default is sameas false and r.live in ('diverted', 'diverted_inert') %}
-            <br><span class="muted">not in the signed-off default</span>
-          {% endif %}
           {% if r.conflict %}
-            <br><span class="badge badge-bad">CONFLICT</span>
-            <span class="muted">{{ r.conflict }}</span>
+            <span class="badge badge-bad">CONFLICT</span>{% call info("Conflict") %}<p>{{ r.conflict }}</p>{% endcall %}
+          {% endif %}
+          {% if r.in_default and r.live == 'live' %}
+            <span class="rt-note">signed-off default diverts this</span>
+          {% elif r.in_default is sameas false and r.live in ('diverted', 'diverted_inert') %}
+            <span class="rt-note">not in the signed-off default</span>
           {% endif %}
         </td>
-        <td data-label="Action" class="cell-action">
+        <td data-label="Delivered · trades · avg %" class="rt-deliv">
+          {% if d %}
+            {% set v = (d.get('verdict') or '')|upper %}
+            <span class="num">{{ d.get('n') }}</span> ·
+            <span class="{% if (d.get('net_avg_pct')|float(0)) > 0 %}pos{% elif (d.get('net_avg_pct')|float(0)) < 0 %}neg{% endif %}">{{ d.get('net_avg_pct')|pct(3) }}</span>
+            {% if v in ('EARNS', 'LOSES') %}<span class="badge {% if v == 'EARNS' %}badge-ok{% else %}badge-bad{% endif %}" title="{{ d.get('verdict_why') or '' }}">{{ v }}</span>
+            {% else %}<span class="rt-note" title="{{ d.get('verdict_why') or '' }}">{{ (d.get('verdict') or '—')|lower }}{% if d.get('delivered_evidence_frozen') %} · frozen{% endif %}</span>{% endif %}
+            {% if v in ('EARNS', 'LOSES') and d.get('delivered_evidence_frozen') %}<span class="rt-note">frozen</span>{% endif %}
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td data-label="Dark feed · trades · avg %" class="rt-dark">
+          <span class="num">{{ r.dark.n_scored }}</span> ·
+          <span class="{% if (r.dark.avg_pct|float(0)) > 0 %}pos{% elif (r.dark.avg_pct|float(0)) < 0 %}neg{% endif %}">{{ r.dark.avg_pct|pct(3) }}</span>
+        </td>
+        <td data-label="Dark → live rule" class="rt-rule">
+          {% if p.state == 'none' %}<span class="muted">none</span>
+          {% elif p.state == 'live' %}
+            {% if p.covers is sameas true %}<span class="badge badge-ok">PROMOTING</span>
+            {% elif p.covers is none %}<span class="badge badge-warn">PROMOTING · BY TREND</span>
+            {% else %}<span class="muted">rule is for the other side</span>{% endif %}
+          {% else %}<span class="muted">{{ p.state|replace('_', ' ') }}</span>{% endif %}
+          · <a href="/control/promotions?setup={{ r.setup_class }}">{% if p.state == 'none' %}set{% else %}edit{% endif %} →</a>
+        </td>
+        <td data-label="Action" class="rt-act cell-action">
           {% if r.can_divert %}
           <form method="post" action="/control/routing/divert">
             <input type="hidden" name="setup_class" value="{{ r.setup_class }}">
@@ -187,34 +224,13 @@
           <form method="post" action="/control/routing/restore">
             <input type="hidden" name="setup_class" value="{{ r.setup_class }}">
             <input type="hidden" name="side" value="{{ r.side }}">
-            <label class="muted"><input type="checkbox" name="confirm" value="yes">
+            <label class="rt-note"><input type="checkbox" name="confirm" value="yes">
               confirm: back to subscribers</label>
             <button type="submit" class="btn btn-sm btn-go">Restore to live</button>
           </form>
           {% else %}
           <span class="muted">—</span>
           {% endif %}
-        </td>
-        {% set d = r.delivered %}
-        <td data-label="Delivered n">{% if d %}{{ d.get('n') }}{% else %}—{% endif %}</td>
-        <td data-label="Delivered avg %" class="{% if d and (d.get('net_avg_pct')|float(0)) > 0 %}pos{% elif d and (d.get('net_avg_pct')|float(0)) < 0 %}neg{% endif %}">{% if d %}{{ d.get('net_avg_pct')|pct(3) }}{% else %}—{% endif %}</td>
-        <td data-label="Verdict">
-          {% if d %}{% set v = (d.get('verdict') or '')|upper %}<span class="badge {% if v == 'EARNS' %}badge-ok{% elif v == 'LOSES' %}badge-bad{% else %}badge-muted{% endif %}" title="{{ d.get('verdict_why') or '' }}">{{ d.get('verdict') or '—' }}</span>
-          {% if d.get('delivered_evidence_frozen') %}<br><span class="muted">frozen</span>{% endif %}
-          {% else %}—{% endif %}
-        </td>
-        <td data-label="Dark n">{{ r.dark.n_scored }}</td>
-        <td data-label="Dark avg %" class="{% if (r.dark.avg_pct|float(0)) > 0 %}pos{% elif (r.dark.avg_pct|float(0)) < 0 %}neg{% endif %}">{{ r.dark.avg_pct|pct(3) }}</td>
-        <td data-label="Dark → live rule">
-          {% set p = r.promotion %}
-          {% if p.state == 'none' %}<span class="badge badge-muted">NO RULE</span>
-          {% elif p.state == 'live' %}
-            {% if p.covers is sameas true %}<span class="badge badge-ok">PROMOTING</span>
-            {% elif p.covers is none %}<span class="badge badge-warn">PROMOTING · BY TREND</span>
-            {% else %}<span class="badge badge-muted">RULE IS OTHER SIDE</span>{% endif %}
-          {% else %}<span class="badge badge-muted">{{ p.state|upper }}</span>{% endif %}
-          <br><a class="muted" href="/control/promotions?setup={{ r.setup_class }}">
-            {% if p.state == 'none' %}set a rule{% else %}edit rule{% endif %} →</a>
         </td>
       </tr>
       {% endfor %}
@@ -223,22 +239,4 @@
   {% endif %}
 </section>
 
-<section class="card">
-  <h2>How the two directions interact</h2>
-  <ul class="muted">
-    <li><strong>Divert to dark</strong> takes effect on the next scan and needs no
-      confirm: it stops delivery and places no order. It is written to the
-      engine's <code>retired_paths</code> list — the same value
-      Control → Tunables edits — and this page reads the engine back after every
-      change and reports what the engine says, not what was clicked.</li>
-    <li><strong>Restore to live</strong> needs the confirm: it puts the path back
-      in front of paid subscribers, and auto-trade users take its orders.</li>
-    <li>A diverted row enters the dark feed with the gate
-      <code>retired:&lt;PATH&gt;:&lt;SIDE&gt;</code>. A dark → live rule whose
-      gates are <em>Any</em> matches that gate and puts the row straight back on
-      the live feed — that is what a <span class="badge badge-bad">CONFLICT</span>
-      marks. To send a path live again, restore it here rather than promoting
-      around its own retirement.</li>
-  </ul>
-</section>
 {% endblock %}

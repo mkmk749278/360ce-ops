@@ -1,16 +1,15 @@
 {% extends "base.html" %}
+{% from "_info.html" import info %}
 {% block title %}Access · 360 CE Ops{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>Read-only access</h1>
-  <p class="lede">
-    Short-lived codes that open the <strong>measurement and diagnostic
-    pages</strong> — the feed, every lane, every export, the truth report — and
-    never this control panel. Mint one here, hand it over, revoke it here.
-  </p>
-  <details class="explain">
-    <summary>Exactly what a code can and cannot reach</summary>
-    <div class="explain-body">
+  <div class="title-row">
+    <h1>Read-only access</h1>
+    {% call info("Exactly what a code can and cannot reach") %}
+      <p>Short-lived codes that open the <strong>measurement and diagnostic
+        pages</strong> — the feed, every lane, every export, the truth report —
+        and never this control panel. Mint one here, hand it over, revoke it
+        here.</p>
       <p>
         A code cannot reach this control panel, the diag runner, the subscriber
         tables, the raw data volume or the <code>/api/v1</code> token surface. A
@@ -35,8 +34,8 @@
         PnL figure on the pages above. This tier withholds the control plane and
         subscriber data, not the book.
       </p>
-    </div>
-  </details>
+        {% endcall %}
+  </div>
 </div>
 
 {% if flash %}
@@ -123,7 +122,13 @@
 {% endif %}
 
 <section class="card">
-  <h2>Generate a code</h2>
+  <div class="card-title"><h2>Generate a code</h2>
+    {% call info("About generating a code") %}
+      <p>The code is shown once, on the next screen. Only its SHA-256 hash is
+        stored, so it cannot be recovered — if it scrolls past, revoke it and
+        mint another. A grant also dies on its own at its expiry.</p>
+    {% endcall %}
+  </div>
   <form method="post" action="/control/access/issue" class="inline-form">
     <label class="grow">Label
       <input type="text" name="label" placeholder="claude-agent" maxlength="64">
@@ -137,15 +142,19 @@
     </label>
     <button type="submit" class="btn btn-primary">Generate read-only code</button>
   </form>
-  <p class="note">
-    The code is shown once, on the next screen. Only its SHA-256 hash is stored,
-    so it cannot be recovered — if it scrolls past, revoke it and mint another.
-    A grant also dies on its own at its expiry.
-  </p>
 </section>
 
 <section class="card">
-  <h2>Issued codes</h2>
+  <div class="card-title"><h2>Issued codes</h2>
+    {% call info("About revoking") %}
+      <p>Revoking takes effect on the holder's <strong>next request</strong> —
+        the session carries only the grant id and the grant is re-read every
+        time, so there is no window in which a revoked code keeps working.</p>
+      <p>A non-zero <strong>Refused</strong> count is a holder that tried a
+        surface it does not have — not necessarily an attack (a stale bookmark
+        does it), and every refusal is named in the access log.</p>
+    {% endcall %}
+  </div>
   {% set live_grants = grants | selectattr('state', 'equalto', 'live') | list %}
   {% if grants %}
   <div class="table-scroll">
@@ -189,11 +198,6 @@
     </tbody>
   </table>
   </div>
-  <p class="note">
-    Revoking takes effect on the holder's <strong>next request</strong> — the
-    session carries only the grant id and the grant is re-read every time, so
-    there is no window in which a revoked code keeps working.
-  </p>
   {% else %}
   <p class="muted">No read-only codes have been minted.</p>
   {% endif %}
@@ -208,11 +212,12 @@
 </section>
 
 <section class="card">
-  <h2>Access log</h2>
-  <p class="note">
-    Mints, logins, revocations and every refused request. A refusal names the
-    path and the reason it was withheld.
-  </p>
+  <div class="card-title"><h2>Access log</h2>
+    {% call info("About the access log") %}
+      <p>Mints, logins, revocations and every refused request. A refusal names
+        the path and the reason it was withheld.</p>
+    {% endcall %}
+  </div>
   {% if audit %}
   <div class="table-scroll">
   <table class="data-table audit">
@@ -223,7 +228,8 @@
         <td class="nowrap">{{ e.get('ts')|when }}</td>
         <td class="nowrap">{{ e.get('actor', '') }}</td>
         <td><code>{{ e.get('action', '') }}</code></td>
-        <td class="params">{{ e.get('params', {})|tojson }}</td>
+        {% set params = e.get('params', {})|tojson %}
+        <td class="params" title="{{ params }}">{{ params }}</td>
       </tr>
       {% endfor %}
     </tbody>

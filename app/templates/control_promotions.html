@@ -1,15 +1,19 @@
 {% extends "base.html" %}
+{% from "_info.html" import info %}
 {% block title %}Promotions · 360 CE Ops{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>Dark → live promotion</h1>
-  <p class="lede">
-    Each path below emits into the <a href="/signals/dark-live">dark feed</a> —
-    real signals the scanner was willing to send, diverted before the queue. A
-    rule here is what stops a named slice of that population being diverted.
-    The opposite direction, taking a path off the live feed, is on
-    <a href="/control/routing">Control → Routing</a>.
-  </p>
+  <div class="title-row">
+    <h1>Dark → live promotion</h1>
+    {% call info("About promotion") %}
+      <p>Each path below emits into the <a href="/signals/dark-live">dark feed</a>
+        — real signals the scanner was willing to send, diverted before the
+        queue. A rule here is what stops a named slice of that population being
+        diverted.</p>
+      <p>The opposite direction, taking a path off the live feed, is on
+        <a href="/control/routing">Control → Routing</a>.</p>
+    {% endcall %}
+  </div>
 </div>
 
 {% if flash %}
@@ -34,31 +38,38 @@
   <div class="sw-list">
   <div class="sw tone-{{ 'ok' if snapshot.master_enabled else 'muted' }}">
     <div class="sw-main">
-      <div class="sw-name">Promotion <code>dark_promotion_enabled</code></div>
-      {% if snapshot.master_enabled %}
-        <p class="sw-state"><span class="dot"></span><span class="badge badge-live">ARMED</span>
-          Matching candidates are enqueued for real.</p>
-      {% else %}
-        <p class="sw-state"><span class="dot"></span><span class="badge badge-off">OFF</span>
-          Every dark row is diverted as before, <em>whatever any rule says</em>.</p>
-      {% endif %}
+      <div class="sw-name">Promotion
+        {% if snapshot.master_enabled %}<span class="badge badge-live">ARMED</span>{% else %}<span class="badge badge-off">OFF</span>{% endif %}
+        {% call info("dark_promotion_enabled") %}
+          {% if snapshot.master_enabled %}
+          <p>Matching candidates are enqueued for real.</p>
+          {% else %}
+          <p>Every dark row is diverted as before, <em>whatever any rule says</em> —
+            arm it on Control → Engine → Signal gating.</p>
+          {% endif %}
+          <p>The engine-wide switch every rule sits under, <code>dark_promotion_enabled</code>.</p>
+        {% endcall %}
+      </div>
     </div>
     <div class="sw-act">
-      <a class="btn btn-plain" href="/control#tun-signal-gating">{% if snapshot.master_enabled %}Change{% else %}Arm it{% endif %} on Control → Engine → Signal gating</a>
+      <a class="btn btn-plain" href="/control#tun-signal-gating">{% if snapshot.master_enabled %}Change{% else %}Arm it{% endif %}</a>
     </div>
   </div>
 
   <div class="sw tone-{{ 'ok' if snapshot.dark_lane_enabled else 'warn' }}">
     <div class="sw-main">
-      <div class="sw-name">Dark lane <code>dark_emission_enabled</code></div>
-      {% if snapshot.dark_lane_enabled %}
-        <p class="sw-state"><span class="dot"></span><span class="badge badge-live">ON</span>
-          Candidates are being carried past their gate, so rules have rows to act on.</p>
-      {% else %}
-        <p class="sw-state"><span class="dot"></span><span class="badge badge-off">OFF</span>
-          Nothing is carried past its gate, so no candidate reaches a promotion
-          decision. A rule armed now is not idle — its input is missing.</p>
-      {% endif %}
+      <div class="sw-name">Dark lane
+        {% if snapshot.dark_lane_enabled %}<span class="badge badge-live">ON</span>{% else %}<span class="badge badge-off">OFF</span>{% endif %}
+        {% call info("dark_emission_enabled") %}
+          {% if snapshot.dark_lane_enabled %}
+          <p>Candidates are being carried past their gate, so rules have rows to act on.</p>
+          {% else %}
+          <p>Nothing is carried past its gate, so no candidate reaches a promotion
+            decision. A rule armed now is not idle — its input is missing.</p>
+          {% endif %}
+          <p>Switch: <code>dark_emission_enabled</code>.</p>
+        {% endcall %}
+      </div>
     </div>
     <div class="sw-act">
       <a class="btn btn-plain" href="/control#sec-tunables">Tunables</a>
@@ -69,76 +80,65 @@
   {% if retirement is none %}
   <div class="sw tone-muted">
     <div class="sw-main">
-      <div class="sw-name">Path retirement <span class="muted">live → dark</span></div>
-      <p class="sw-state"><span class="dot"></span><span class="badge badge-off">NOT REPORTED</span></p>
-      <p class="note">
-        This engine build predates the retirement mechanism, so every path delivers
-        on its own merits and nothing is being held back. That is not the same as
-        "nothing is retired" — there is no gate to report.
-      </p>
+      <div class="sw-name">Path retirement <span class="badge badge-off">NOT REPORTED</span>
+        {% call info("Path retirement — not reported") %}
+          <p>This engine build predates the retirement mechanism, so every path
+            delivers on its own merits and nothing is being held back. That is not
+            the same as "nothing is retired" — there is no gate to report.</p>
+        {% endcall %}
+      </div>
     </div>
   </div>
   {% elif retirement.get('error') %}
   <div class="sw tone-bad">
     <div class="sw-main">
-      <div class="sw-name">Path retirement <span class="muted">live → dark</span></div>
-      <p class="sw-state"><span class="dot"></span><span class="badge badge-err">UNREADABLE</span>
-        <span class="danger-text">{{ retirement.get('error') }}</span></p>
-      <p class="note">
-        A fault, not a quiet state: the engine could not report which paths are
-        retired, so nothing below can say whether one is.
-      </p>
+      <div class="sw-name">Path retirement <span class="badge badge-err">UNREADABLE</span>
+        {% call info("Path retirement — unreadable") %}
+          <p>A fault, not a quiet state: the engine could not report which paths
+            are retired, so nothing below can say whether one is.</p>
+        {% endcall %}
+      </div>
+      <p class="sw-state danger-text">{{ retirement.get('error') }}</p>
     </div>
     <div class="sw-act"><a class="btn btn-plain" href="/control/routing">Open Routing</a></div>
   </div>
   {% else %}
   <div class="sw tone-{{ 'ok' if retirement.get('enabled') else 'warn' }}">
     <div class="sw-main">
-      <div class="sw-name">Path retirement <span class="muted">live → dark</span></div>
-      <p class="sw-state"><span class="dot"></span>
+      <div class="sw-name">Path retirement
         {% if retirement.get('enabled') %}<span class="badge badge-live">ACTIVE</span>{% else %}<span class="badge badge-off">OFF</span>{% endif %}
-        {{ retirement.get('count', 0) }} retirement(s) configured.
-      </p>
-      {% if retirement.get('retired') %}
-      <p class="chips">
-        {% for r in retirement.get('retired') %}
-          <span class="chip"><strong>{{ r.setup_class }}</strong>
-            · {% if r.side == '*' %}both{% else %}{{ r.side }}{% endif %}
-            · {% if retirement.get('enabled') %}<span class="danger-text">diverted to dark</span>{% else %}<span class="muted">inert — switch is off</span>{% endif %}</span>
-        {% endfor %}
-      </p>
-      {% else %}
-      <p class="note">Nothing is retired — every path delivers on its own merits.</p>
-      {% endif %}
-      <p class="note">
-        {% if retirement.get('enabled') %}
-          Rows matching them are sent to the dark feed instead of the queue:
-          subscribers do not receive them, and they keep being measured.
-        {% else %}
-          The switch is off, so every configured retirement is inert and these
-          paths deliver exactly as before.
-        {% endif %}
-        {% if not retirement.get('is_default') %}
-          <span class="warn-text">This list has been changed from the signed-off default.</span>
-        {% endif %}
-      </p>
-      <details class="explain">
-        <summary>Why divert rather than disable</summary>
-        <div class="explain-body">
-          <p>
-            A retired path keeps stamping into the dark feed, so the decision can
+        <span class="muted small">{{ retirement.get('count', 0) }} retirement(s) configured.</span>
+        {% call info("Path retirement (live → dark)") %}
+          <p>{% if retirement.get('enabled') %}Rows matching them are sent to the
+            dark feed instead of the queue: subscribers do not receive them, and
+            they keep being measured.{% else %}The switch is off, so every
+            configured retirement is inert and these paths deliver exactly as
+            before.{% endif %}</p>
+          <p>A retired path keeps stamping into the dark feed, so the decision can
             be re-read on fresh evidence instead of frozen at the moment it was
             taken. A path that never emits can never earn its way back — that is
             the absorbing state that cost this engine 23 days of a starved feed,
-            and it is why retirement is a routing decision and not a verdict.
-          </p>
-          <p>
-            Change it on <a href="/control/routing">Control → Routing</a>, one path
-            and side at a time (the master switch <code>path_retirement_enabled</code>
-            is on <a href="/control#sec-tunables">Control → Engine → Tunables</a>).
-          </p>
-        </div>
-      </details>
+            and it is why retirement is a routing decision and not a verdict.</p>
+          <p>Change it on <a href="/control/routing">Control → Routing</a>, one
+            path and side at a time (the master switch
+            <code>path_retirement_enabled</code> is on
+            <a href="/control#sec-tunables">Control → Engine → Tunables</a>).</p>
+        {% endcall %}
+      </div>
+      {% if retirement.get('retired') %}
+      <ul class="ret-list">
+        {% for r in retirement.get('retired') %}
+          <li><strong>{{ r.setup_class }}</strong>
+            <span class="muted">{% if r.side == '*' %}both{% else %}{{ r.side }}{% endif %}</span>
+            — {% if retirement.get('enabled') %}<span class="danger-text">diverted to dark</span>{% else %}<span class="muted">inert — switch is off</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="note">Nothing is retired — every path delivers on its own merits.</p>
+      {% endif %}
+      {% if not retirement.get('is_default') %}
+      <p class="note warn-text">This list has been changed from the signed-off default.</p>
+      {% endif %}
     </div>
     <div class="sw-act"><a class="btn btn-plain" href="/control/routing">Edit on Routing</a></div>
   </div>
@@ -153,75 +153,11 @@
 {% if index %}
 <div class="panel">
   <div class="card-head">
-    <h2>Paths <span class="muted">— most evidence first</span></h2>
-    {# One selector, and the counts beside every option are measured on the WHOLE
-       ledger — a selector applied to its own counts makes each option read
-       "n = whatever I picked" (#90/#91). #}
-    <form method="get" class="form-row" style="margin:0">
-      <label>Show
-        <select name="setup" onchange="this.form.submit()">
-          <option value="">All paths ({{ index | length }})</option>
-          {% for c in index %}
-          <option value="{{ c.setup_class }}"
-            {% if filter_setup == c.setup_class %}selected{% endif %}>
-            {{ c.setup_class }} (n={{ c.summary.n_scored }})
-          </option>
-          {% endfor %}
-        </select>
-      </label>
-      {% if filter_setup %}<a class="btn btn-plain" href="/control/promotions">Clear</a>{% endif %}
-      <noscript><button class="btn btn-plain" type="submit">Apply</button></noscript>
-    </form>
-  </div>
-  <div class="table-scroll">
-  <table class="tbl small">
-    <thead>
-      <tr>
-        <th>Path</th><th>Rule</th>
-        <th class="num" title="rows with a usable PnL">n</th>
-        <th class="num" title="distinct symbol·side — read this before the average">Campaigns</th>
-        <th class="num">W/L/flat</th><th class="num">Avg PnL %</th><th class="num">95% CI</th><th class="num">Promoted</th>
-      </tr>
-    </thead>
-    <tbody>
-    {% for card in index %}
-      <tr{% if filter_setup == card.setup_class %} class="row-sel"{% endif %}>
-        <td><a href="?setup={{ card.setup_class }}"><code>{{ card.setup_class }}</code></a></td>
-        <td>
-          {% if card.state == 'live' %}<span class="badge badge-live">LIVE</span>
-          {% elif card.state == 'inert' %}<span class="badge badge-err">INERT</span>
-          {% elif card.state == 'master_off' %}<span class="badge badge-warn">MASTER OFF</span>
-          {% elif card.state == 'lane_off' %}<span class="badge badge-warn">LANE OFF</span>
-          {% elif card.state == 'off' %}<span class="badge badge-off">OFF</span>
-          {% else %}<span class="muted">—</span>{% endif %}
-        </td>
-        <td class="num">{{ card.summary.n_scored }}</td>
-        <td class="num">{{ card.summary.campaigns }}</td>
-        <td class="num nowrap">{{ card.summary.wins }}/{{ card.summary.losses }}/{{ card.summary.flats }}</td>
-        <td class="num {% if (card.summary.avg_pct|float(0)) > 0 %}pos{% elif (card.summary.avg_pct|float(0)) < 0 %}neg{% endif %}">{{ card.summary.avg_pct | pct }}%</td>
-        <td class="num muted nowrap">
-          {% if card.summary.ci_low is not none %}
-            [{{ card.summary.ci_low | pct }}, {{ card.summary.ci_high | pct }}]
-          {% else %}—{% endif %}
-        </td>
-        <td class="num muted">{{ card.lanes.split.n_promoted or '—' }}</td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
-  </div>
-  <p class="note">
-    A dash under <strong>Rule</strong> means no rule exists and every dark row
-    for that path is diverted. Open a path below to see its evidence and set one.
-  </p>
-</div>
-{% endif %}
-
-{# ── Everything that used to repeat on all thirteen cards, said once.
-   The prose is not cut — it is the guardrail — but printing it per path is
-   what turned this page into thirty-two screens. #}
-<details class="panel">
-  <summary><strong>How a rule works, and how to read the tables</strong></summary>
+    <div class="title-row"><h2>Paths <span class="muted">— most evidence first</span></h2>
+      {% call info("How a rule works, and how to read the tables", wide=true) %}
+        <p class="small">A dash under <strong>Rule</strong> means no rule exists and
+          every dark row for that path is diverted. Open a path below to see its
+          evidence and set one.</p>
 
   <p class="small">
     A promotion removes <strong>only</strong> the gate the row was carried
@@ -278,7 +214,67 @@
       <tr><td><span class="badge badge-live">LIVE</span></td><td>Matching candidates are enqueued for real.</td></tr>
     </tbody>
   </table>
-</details>
+      {% endcall %}
+    </div>
+    {# One selector, and the counts beside every option are measured on the WHOLE
+       ledger — a selector applied to its own counts makes each option read
+       "n = whatever I picked" (#90/#91). #}
+    <form method="get" class="form-row" style="margin:0">
+      <label>Show
+        <select name="setup" onchange="this.form.submit()">
+          <option value="">All paths ({{ index | length }})</option>
+          {% for c in index %}
+          <option value="{{ c.setup_class }}"
+            {% if filter_setup == c.setup_class %}selected{% endif %}>
+            {{ c.setup_class }} (n={{ c.summary.n_scored }})
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      {% if filter_setup %}<a class="btn btn-plain" href="/control/promotions">Clear</a>{% endif %}
+      <noscript><button class="btn btn-plain" type="submit">Apply</button></noscript>
+    </form>
+  </div>
+  <div class="table-scroll">
+  <table class="tbl small">
+    <thead>
+      <tr>
+        <th>Path</th><th>Rule</th>
+        <th class="num" title="rows with a usable PnL">n</th>
+        <th class="num" title="distinct symbol·side — read this before the average">Campaigns</th>
+        <th class="num">W/L/flat</th><th class="num">Avg PnL %</th><th class="num">95% CI</th><th class="num">Promoted</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for card in index %}
+      <tr{% if filter_setup == card.setup_class %} class="row-sel"{% endif %}>
+        <td><a href="?setup={{ card.setup_class }}"><code>{{ card.setup_class }}</code></a></td>
+        <td>
+          {% if card.state == 'live' %}<span class="badge badge-live">LIVE</span>
+          {% elif card.state == 'inert' %}<span class="badge badge-err">INERT</span>
+          {% elif card.state == 'master_off' %}<span class="badge badge-warn">MASTER OFF</span>
+          {% elif card.state == 'lane_off' %}<span class="badge badge-warn">LANE OFF</span>
+          {% elif card.state == 'off' %}<span class="badge badge-off">OFF</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="num">{{ card.summary.n_scored }}</td>
+        <td class="num">{{ card.summary.campaigns }}</td>
+        <td class="num nowrap">{{ card.summary.wins }}/{{ card.summary.losses }}/{{ card.summary.flats }}</td>
+        <td class="num {% if (card.summary.avg_pct|float(0)) > 0 %}pos{% elif (card.summary.avg_pct|float(0)) < 0 %}neg{% endif %}">{{ card.summary.avg_pct | pct }}%</td>
+        <td class="num muted nowrap">
+          {% if card.summary.ci_low is not none %}
+            [{{ card.summary.ci_low | pct }}, {{ card.summary.ci_high | pct }}]
+          {% else %}—{% endif %}
+        </td>
+        <td class="num muted">{{ card.lanes.split.n_promoted or '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+
 
 {% if filter_missing %}
 <div class="panel">
@@ -375,25 +371,22 @@
 
     {# The engine's own census. #}
     {% if ref.state == 'not_reported' %}
-      <p class="small muted">
-        <strong>NOT REPORTED</strong> — no refusal census reached this page.
-        That is not "nothing was refused": an engine predating the census and
-        one refusing every candidate read identically here, which is why the
-        census exists.
-        {% if ref.unavailable %}
-          Cause reported by the engine API: <em>{{ ref.unavailable }}</em>.
-        {% else %}
-          No cause was reported — most likely an engine deploy predating the
-          census.
-        {% endif %}
-      </p>
+      <div class="small"><strong>NOT REPORTED</strong> — no refusal census reached this page.
+        {% call info("Refusal census not reported") %}
+          <p>That is not "nothing was refused": an engine predating the census
+            and one refusing every candidate read identically here, which is why
+            the census exists.</p>
+          <p>{% if ref.unavailable %}Cause reported by the engine API:
+            <em>{{ ref.unavailable }}</em>.{% else %}No cause was reported — most
+            likely an engine deploy predating the census.{% endif %}</p>
+        {% endcall %}</div>
     {% elif ref.state == 'idle' %}
-      <p class="small">
-        <strong>No candidate has reached the decision.</strong> The engine is
-        reporting and has refused nothing for this path, so the rule is not
-        what is stopping it — look upstream, at whether the dark lane is
-        producing rows for this path at all.
-      </p>
+      <div class="small"><strong>No candidate has reached the decision.</strong>
+        {% call info("No candidate has reached the decision") %}
+          <p>The engine is reporting and has refused nothing for this path, so
+            the rule is not what is stopping it — look upstream, at whether the
+            dark lane is producing rows for this path at all.</p>
+        {% endcall %}</div>
     {% else %}
       <p class="small">
         The engine has refused <strong>{{ ref.cell.total }}</strong> candidate(s)
@@ -430,12 +423,13 @@
         {% endfor %}
         </tbody>
       </table>
-      <p class="small muted">
-        A rule is a conjunction, so a candidate failing three conditions is
-        counted in all three — the "Refused" column sums past the candidate
-        count by design. Read <strong>Only blocker</strong> for what one edit
-        would change.
-      </p>
+      <div class="small muted">Read <strong>Only blocker</strong> for what one edit would change.
+        {% call info("Refused vs only blocker") %}
+          <p>A rule is a conjunction, so a candidate failing three conditions is
+            counted in all three — the "Refused" column sums past the candidate
+            count by design. Read <strong>Only blocker</strong> for what one edit
+            would change.</p>
+        {% endcall %}</div>
 
       {% if ref.near_misses %}
       <details>
@@ -463,19 +457,20 @@
           </tbody>
         </table>
         </div>
-        <p class="small muted">
-          These are the values the ENGINE stamped, not the values the rule asks
-          for — the rule is already on this page and the stamps are not. A
-          bounded ring of the newest {{ ref.ring }}; {{ ref.seen }} refusals
-          seen in total.
-        </p>
+        <div class="small muted">Newest {{ ref.ring }} of {{ ref.seen }} refusals.
+          {% call info("Recent refused candidates") %}
+            <p>These are the values the ENGINE stamped, not the values the rule
+              asks for — the rule is already on this page and the stamps are
+              not. A bounded ring of the newest {{ ref.ring }}; {{ ref.seen }}
+              refusals seen in total.</p>
+          {% endcall %}</div>
       </details>
       {% endif %}
     {% endif %}
 
     {# Ops' own replay over the whole ledger. #}
     {% if sel.has_rule %}
-    <p class="small">
+    <div class="small">
       <strong>Over this path's {{ sel.n_closed }} closed dark rows, the rule as
       saved selects {{ sel.n_selected }}.</strong>
       {% if sel.n_selected %}
@@ -485,12 +480,22 @@
         (whole path: {{ sel.baseline.n_scored }} at
         {{ sel.baseline.avg_pct | pct }}%).
       {% else %}
-        <span class="badge">selects nothing</span>
-        Every table below is measured one dimension at a time; the rule is the
-        intersection of all of them, and this one is empty. Widen whichever
-        condition the "Only blocker" column names.
+        <span class="badge badge-warn">selects nothing</span>
       {% endif %}
-    </p>
+      {% call info("What this rule selects") %}
+        <p>This is <strong>ops replaying the rule</strong> over the stored
+          ledger, not a record of a decision the engine took — it answers "what
+          would this select", which the engine's counters cannot, because they
+          only cover candidates seen since it last restarted.
+          Where the two disagree the engine is right. The daily cap is not replayed: it is a
+          fact about a running process on a given day, not about a row.</p>
+        {% if not sel.n_selected %}
+        <p>Every table below is measured one dimension at a time; the rule is
+          the intersection of all of them, and this one is empty. Widen
+          whichever condition the "Only blocker" column names.</p>
+        {% endif %}
+      {% endcall %}
+    </div>
     {% if sel.sole_blocker %}
       <p class="small muted">
         On the ledger, relaxing one condition would add:
@@ -499,14 +504,6 @@
         {% endfor %}.
       </p>
     {% endif %}
-    <p class="small muted">
-      This paragraph is <strong>ops replaying the rule</strong> over the stored
-      ledger, not a record of a decision the engine took — it answers "what
-      would this select", which the engine's counters cannot, because they only
-      cover candidates seen since it last restarted. Where the two disagree the
-      engine is right. The daily cap is not replayed: it is a fact about a
-      running process on a given day, not about a row.
-    </p>
     {% endif %}
   </fieldset>
   {% endif %}
@@ -523,9 +520,9 @@
         <table class="tbl small">
           <thead>
             <tr>
-              <th>Promote</th><th>{{ dim | capitalize }}</th>
-              <th>n</th><th>Campaigns</th><th>W/L/flat</th>
-              <th>Avg PnL %</th><th>95% CI</th><th>Already promoted</th>
+              <th class="pick-col" title="Tick to promote rows with this {{ dim }}"><span class="sr-only">Promote</span>✓</th><th>{{ dim | capitalize }}</th>
+              <th class="num">n</th><th class="num" title="distinct symbol·side">Camp.</th><th class="num" title="wins / losses / flat">W/L/F</th>
+              <th class="num">Avg %</th><th class="num">95% CI</th><th class="num" title="rows this rule has already promoted">Promoted</th>
             </tr>
           </thead>
           <tbody>
@@ -536,16 +533,16 @@
                        {% if cell.value in selected %}checked{% endif %}>
               </td>
               <td><code>{{ cell.value }}</code></td>
-              <td>{{ cell.n_scored }}</td>
-              <td>{{ cell.campaigns }}</td>
-              <td>{{ cell.wins }}/{{ cell.losses }}/{{ cell.flats }}</td>
-              <td>{{ cell.avg_pct | pct }}%</td>
-              <td class="muted">
+              <td class="num">{{ cell.n_scored }}</td>
+              <td class="num">{{ cell.campaigns }}</td>
+              <td class="num nowrap">{{ cell.wins }}/{{ cell.losses }}/{{ cell.flats }}</td>
+              <td class="num {% if (cell.avg_pct|float(0)) > 0 %}pos{% elif (cell.avg_pct|float(0)) < 0 %}neg{% endif %}">{{ cell.avg_pct | pct }}</td>
+              <td class="num muted nowrap">
                 {% if cell.ci_low is not none %}
                   [{{ cell.ci_low | pct }}, {{ cell.ci_high | pct }}]
                 {% else %}—{% endif %}
               </td>
-              <td class="muted">{{ cell.n_promoted or '—' }}</td>
+              <td class="num muted">{{ cell.n_promoted or '—' }}</td>
             </tr>
           {% endfor %}
             <tr>
@@ -554,7 +551,7 @@
                        {% if any_token in selected %}checked{% endif %}>
               </td>
               <td colspan="7"><strong>Any</strong>
-                <span class="muted">— no restriction on this dimension</span></td>
+                <span class="muted">— no restriction</span></td>
             </tr>
           </tbody>
         </table>
@@ -625,9 +622,9 @@
       <input type="hidden" name="setup_class" value="{{ card.setup_class }}">
       <button type="submit" class="btn btn-soft-danger">Remove rule</button>
     </form>
-    <span class="note" style="margin:0">
-      Remove is distinct from switching it off — off keeps the conditions.
-    </span>
+    {% call info("Remove vs switch off") %}
+      <p>Remove is distinct from switching it off — off keeps the conditions.</p>
+    {% endcall %}
     {% endif %}
   </div>
 </details>

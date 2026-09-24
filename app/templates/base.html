@@ -136,6 +136,34 @@
       bar.scrollLeft = Math.max(0, bar.scrollLeft + dx - (bar.clientWidth - on.offsetWidth) / 2);
     });
   })();
+
+  /* The ⓘ popovers (_info.html). A <details> already opens and closes with no
+     script; this only makes it behave like a popover: one open at a time, a
+     tap outside or Escape closes it, and near the right edge it opens
+     leftwards instead of running off the screen. */
+  (function () {
+    function closeAll(except) {
+      document.querySelectorAll('details.info[open]').forEach(function (d) {
+        if (d !== except) d.open = false;
+      });
+    }
+    document.addEventListener('toggle', function (ev) {
+      var d = ev.target;
+      if (!d.matches || !d.matches('details.info') || !d.open) return;
+      closeAll(d);
+      d.classList.remove('flip');
+      var pop = d.querySelector('.info-pop');
+      if (pop && pop.getBoundingClientRect().right > window.innerWidth - 8) {
+        d.classList.add('flip');
+      }
+    }, true);
+    document.addEventListener('click', function (ev) {
+      if (!ev.target.closest || !ev.target.closest('details.info')) closeAll(null);
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape') closeAll(null);
+    });
+  })();
   </script>
 </body>
 </html>

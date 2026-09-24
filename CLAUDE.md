@@ -2365,6 +2365,43 @@ so below the first viewport of a long page (a full-page render, and any browser
 that ignores `background-attachment: fixed`) it fell through to **white**. The
 canvas now carries `--bg` itself.
 
+## …and the briefs go behind an ⓘ (2026-09-24, same day)
+
+The overhaul above kept every explanatory paragraph on screen, folded into
+"How this works" drawers. The owner's next two messages: *"Don't keep all that
+brief there, keep i icon over there … keep everything simple"* and, after that
+deployed, *"Still control panel looks messy only."* A drawer is still a line of
+prose between the reader and the switch.
+
+So every Control page now reads **title, state, button**, and each explanation
+sits behind an ⓘ (`app/templates/_info.html`):
+
+- **The ⓘ is a `<details>`**, so it works with JavaScript off. `base.html` adds
+  one-open-at-a-time, tap-outside and Escape to close, and a flip to the left
+  near the right edge. On a phone the popover docks to the bottom of the screen,
+  because an anchored popover near the edge runs off it and cannot be scrolled
+  sideways. `wide=true` is for the one explanation that carries tables.
+- **The sentences are moved, not cut.** They are the guardrails, and the tests
+  that pin them still find them in the HTML. What stays visible is a **state**:
+  a fault (INOPERABLE, UNREADABLE, the engine's own words), a warning a reader
+  must not miss (no age limit on the trial, a list changed from the signed-off
+  default), or a one-line consequence (*Cannot be undone.*). **An explanation
+  goes behind the ⓘ; a fault never does.**
+- **An ⓘ is never inside a `<p>`.** A `<p>` can hold only phrasing content, so
+  the parser closes it at the `<details>`. The icon then drops onto its own line
+  under the sentence it explains. Five did exactly that on Promotions.
+  `tests/test_control_info_icon.py` derives the Control pages from the nav, and
+  fails on a `<p>` around an ⓘ and on a paragraph in a page head.
+- **A status line is prose with a dot in front, not a flex row.** `.sw-state` was
+  `display: flex; flex-wrap: wrap`, so every text run and `<strong>` became its
+  own flex item. On a phone, a long line dropped onto a row of its own, away from
+  its dot.
+- **A badge marks a state worth looking at.** Routing printed an `INSUFFICIENT`
+  pill and a `NO RULE` pill on almost every one of 22 rows. Those now read as
+  plain muted text; only live/diverted, earns/loses and a live rule get colour.
+  The table went from ten columns to six: trades and average share a cell, and
+  the side rides on the path name. On a phone it went from 6,063px to 4,627px.
+
 ## The mover lifecycle panels (2026-08-13, #173–#175)
 
 Three surfaces for engine #927/#928/#929 — how a promoted pair is kept, how a path

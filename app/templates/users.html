@@ -1,14 +1,18 @@
 {% extends "base.html" %}
+{% from "_info.html" import info %}
 {% block title %}Users · 360 CE Ops{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>User tier grant</h1>
-  <p class="lede">
-    Owner-only comp for testers/influencers — manually set a subscription tier
-    without a Play Billing purchase. Every grant carries an expiry (default 30
-    days); <code>free</code> revokes immediately. Owner-gated end to end and
-    written to the audit log on the Control page.
-  </p>
+  <div class="title-row">
+    <h1>User tier grant</h1>
+    {% call info("About tier grants") %}
+      <p>Owner-only comp for testers/influencers — manually set a subscription
+        tier without a Play Billing purchase. Every grant carries an expiry
+        (default 30 days); <code>free</code> revokes immediately.</p>
+      <p>Owner-gated end to end and written to the audit log on the Control
+        page.</p>
+    {% endcall %}
+  </div>
 </div>
 
 {% if flash %}
@@ -18,7 +22,11 @@
 {% endif %}
 
 <section class="card">
-  <h2>Look up user</h2>
+  <div class="card-title"><h2>Look up user</h2>
+    {% call info("Looking up a user") %}
+      <p>Paste a full <code>+</code>-prefixed number to override the country select.</p>
+    {% endcall %}
+  </div>
   <form method="post" action="/control/users/lookup" class="form-row">
     <label>Country
       <select name="country_code">
@@ -36,9 +44,6 @@
     </label>
     <button type="submit" class="btn btn-primary">Look up</button>
   </form>
-  <p class="note">
-    Paste a full <code>+</code>-prefixed number to override the country select.
-  </p>
 </section>
 
 {% if phone %}
@@ -60,7 +65,12 @@
       <div class="kv"><span class="k">Onboarding</span><span class="v">{{ 'onboarded' if lookup.onboarded else 'not onboarded' }}</span></div>
     </div>
 
-    <h3>Grant a tier</h3>
+    <div class="title-row"><h3>Grant a tier</h3>
+      {% call info("Granting a tier") %}
+        <p>Duration is ignored when tier is <code>free</code>, which revokes
+          immediately.</p>
+      {% endcall %}
+    </div>
     <form method="post" action="/control/users/grant" class="form-row"
           onsubmit="return confirm('Grant ' + this.tier.value.toUpperCase() + ' to {{ lookup.phone }} for ' + this.duration_days.value + ' days?');">
       <input type="hidden" name="phone" value="{{ lookup.phone }}">
@@ -79,12 +89,31 @@
       </label>
       <button type="submit" class="btn btn-go">Grant</button>
     </form>
-    <p class="note">Duration is ignored when tier is <code>free</code>.</p>
   </section>
 
   <section class="card">
     <div class="card-head">
-      <h2>Exit mechanism</h2>
+      <div class="title-row"><h2>Exit mechanism</h2>
+        {% call info("About the exit mechanism") %}
+          <p>Every other control on this page changes what this account is
+            <em>entitled</em> to. This one changes how its live positions
+            <strong>exit</strong>: on anything but <code>default</code>, once
+            the mechanism comes onside the engine cancels the evaluator's SL and
+            TP ladder and re-parks a stop at the mechanism's level on every
+            closed bar.</p>
+          <p><strong>Two switches are required</strong> — this one, and the
+            engine-wide <em>Live trail governor</em> on
+            <a href="/control">Control → Engine</a>. Set here with the master
+            switch off and nothing happens — the flash will say so rather than
+            reporting a bare success. Watch it run on
+            <a href="/signals/trail-governor">Signals → Trail governor</a>.</p>
+          <p>The mechanism's stop is frequently <strong>wider</strong> than the
+            stop the trade was sized for (54% of measured SAR handovers), so a
+            position can carry more risk than its designed SL implies. The
+            measured edge over the current exit did <strong>not</strong> exclude
+            zero.</p>
+        {% endcall %}
+      </div>
       <span class="badge badge-warn">money path</span>
     </div>
     {# The state comes FIRST, and it is read off the engine's lookup payload —
@@ -110,56 +139,20 @@
       Exit mechanism now:
       {% if stored_mech is none %}
         <strong>not reported</strong>
-        <span class="muted small">— this engine's lookup does not carry the
-        field, so ops cannot say. That is not the same as
-        <code>default</code>.</span>
+        <span class="muted small">— the engine's lookup does not carry the field,
+          which is not the same as <code>default</code>.</span>
       {% elif stored_mech == 'default' %}
         <strong>default</strong>
-        <span class="muted small">— the SL/TP FSM owns the exit. The governor
-        does not touch this account.</span>
+        <span class="muted small">— the SL/TP FSM owns the exit.</span>
       {% elif governor_on %}
         <strong>{{ stored_mech|upper }}</strong>
         <span class="badge badge-ok">LIVE</span>
-        <span class="muted small">— master switch is ON, so the governor takes
-        the exit over on the next signal that comes onside. Watch it on
-        <a href="/signals/trail-governor">Signals → Trail governor</a>.</span>
       {% else %}
         <strong>{{ stored_mech|upper }}</strong>
         <span class="badge badge-warn">SET, NOT RUNNING</span>
-        <span class="muted small">— the engine-wide <em>Live trail governor</em>
-        is OFF, so this account still exits on the SL/TP FSM. Both switches are
-        required.</span>
+        <span class="muted small">— the engine-wide trail governor is off.</span>
       {% endif %}
     </p>
-    <p class="note">
-      Every other control on this page changes what this account is
-      <em>entitled</em> to. This one changes how its live positions
-      <strong>exit</strong>. <strong>Two switches are required</strong> — this
-      one, and the engine-wide <em>Live trail governor</em>.
-    </p>
-    <details class="explain">
-      <summary>How this works, and the risk</summary>
-      <div class="explain-body">
-        <p>
-          On anything but <code>default</code>, once the mechanism comes onside
-          the engine cancels the evaluator's SL and TP ladder and re-parks a
-          stop at the mechanism's level on every closed bar.
-        </p>
-        <p>
-          The engine-wide switch is on <a href="/control">Control → Engine</a>.
-          Set here with the master switch off and nothing happens — the flash
-          will say so rather than reporting a bare success. Watch it run on
-          <a href="/signals/trail-governor">Signals → Trail governor</a>.
-        </p>
-        <p>
-          The mechanism's stop is frequently <strong>wider</strong> than the
-          stop the trade was sized for (54% of measured SAR handovers), so a
-          position can carry more risk than its designed SL implies. The
-          measured edge over the current exit did <strong>not</strong> exclude
-          zero.
-        </p>
-      </div>
-    </details>
     {% if may_use(request, '/control/users/exit-mechanism', 'POST') %}
     <form method="post" action="/control/users/exit-mechanism" class="form-row"
           onsubmit="return confirm('Hand {{ lookup.phone }} exits to ' + this.exit_mechanism.value.toUpperCase() + '? This changes how REAL positions close.');">

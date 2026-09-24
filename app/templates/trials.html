@@ -1,23 +1,23 @@
 {% extends "base.html" %}
+{% from "_info.html" import info %}
 {% block title %}Trials · 360 CE Ops{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>Signup free trial</h1>
-  <p class="lede">
-    7 days of <strong>{{ funnel.tier or 'auto' }}</strong> for a new customer — no payment
-    method, activated only when the user taps the welcome offer.
-  </p>
-  <details class="explain">
-    <summary>What a trial gives away</summary>
-    <div class="explain-body">
+  <div class="title-row">
+    <h1>Signup free trial</h1>
+    {% call info("About the signup trial") %}
+      <p>
+        7 days of <strong>{{ funnel.tier or 'auto' }}</strong> for a new customer — no payment
+        method, activated only when the user taps the welcome offer.
+      </p>
       <p>
         Signals and levels are already free, so what a trial actually gives away is
         <em>automation</em>: the engine dispatching orders server-side on that user's own
         keys. Blast-radius caps, the naked-position invariant and the kill switch apply to
         a trialist exactly as they do to a paying subscriber.
       </p>
-    </div>
-  </details>
+    {% endcall %}
+  </div>
 </div>
 
 {% if error %}
@@ -27,53 +27,93 @@
 {% else %}
 
 <section class="card">
-  <h2>
-    Phase
+  <div class="card-title">
+    <h2>Phase</h2>
     {% if phase == 'live' %}<span class="badge badge-ok">LIVE</span>
     {% elif phase == 'dark' %}<span class="badge badge-warn">DARK</span>
     {% else %}<span class="badge badge-bad">BLIND</span>{% endif %}
-  </h2>
+    {% call info("What this phase means, and how to switch it") %}
+      {% if phase == 'dark' %}
+      <p>
+        Measuring, offering nothing. Every user counted here is eligible and has not
+        been offered anything. The eligible count is the number to read before deciding:
+        it is how many accounts would gain the ability to arm auto-trade the moment
+        <code>SIGNUP_TRIAL_ENABLED</code> flips.
+      </p>
+      {% elif phase == 'live' %}
+      <p>
+        The offer is live. New eligible users see the welcome sheet and can activate
+        {{ funnel.days }} days of {{ funnel.tier }} on their own capital.
+      </p>
+      {% else %}
+      <p>
+        <code>SIGNUP_TRIAL_MEASUREMENT_ENABLED=false</code>: nothing is accumulating, and
+        the cohort is frozen at whatever was last recorded. This should be on; a dark
+        change with no measurement is just an off change.
+      </p>
+      {% endif %}
+      <p>
+        <strong>Activating is deliberately not a button here.</strong> Turning on
+        {{ funnel.days }} free days of {{ funnel.tier }} for the whole eligible base is an
+        owner-sign-off decision that should cost a deploy, not a click: set
+        <code>SIGNUP_TRIAL_ENABLED=true</code> in the engine <code>.env</code> and run
+        <code>deploy.sh</code>. Full runbook, including rollback semantics, is
+        <code>docs/SIGNUP_TRIAL_ACTIVATION.md</code> in 360-v2.
+      </p>
+      <p>
+        Rollback stops <em>new</em> claims immediately but does not confiscate a running
+        trial — banked grants keep resolving until they expire, exactly like referral
+        rewards. Revoking automation from under a user mid-window is worse than letting at
+        most {{ funnel.days }} days run out.
+      </p>
+    {% endcall %}
+  </div>
   {% if phase == 'dark' %}
-  <p>
-    Measuring, offering nothing. Every user below has been counted as eligible;
-    <strong>none of them has been shown an offer</strong>. This is the number to read
-    before deciding: it is how many accounts would gain the ability to arm auto-trade the
-    moment <code>SIGNUP_TRIAL_ENABLED</code> flips.
-  </p>
+  <p class="sw-state"><span class="dot"></span>Measuring only — none of them has been shown an offer.</p>
   {% elif phase == 'live' %}
-  <p>
-    The offer is live. New eligible users see the welcome sheet and can activate
-    {{ funnel.days }} days of {{ funnel.tier }} on their own capital.
-  </p>
+  <p class="sw-state tone-ok"><span class="dot"></span>Offer is live to new eligible users.</p>
   {% else %}
-  <p>
-    <strong>Measurement is off</strong> (<code>SIGNUP_TRIAL_MEASUREMENT_ENABLED=false</code>).
-    Nothing below is accumulating — the cohort is frozen at whatever was last recorded.
-    This should be on; a dark change with no measurement is just an off change.
-  </p>
+  <p class="sw-state tone-bad"><span class="dot"></span>Measurement is off — nothing below is accumulating.</p>
   {% endif %}
   <div class="summary-row">
-    <span class="stat"><span class="n">{{ 'on' if funnel.offer_live else 'off' }}</span> user-visible flag</span>
-    <span class="stat"><span class="n">{{ 'on' if funnel.measuring else 'off' }}</span> measurement flag</span>
-    <span class="stat"><span class="n">{{ funnel.days }}</span> day window</span>
-    <span class="stat"><span class="n">{{ funnel.tier }}</span> tier granted</span>
-    <span class="stat">
-      <span class="n">{{ funnel.max_account_age_days or '∞' }}</span>
-      max account age (days)
+    <span class="stat"><span class="n">{{ 'on' if funnel.offer_live else 'off' }}</span> offer</span>
+    <span class="stat"><span class="n">{{ 'on' if funnel.measuring else 'off' }}</span> measuring</span>
+    <span class="stat"><span class="n">{{ funnel.days }}d</span> {{ funnel.tier }}</span>
+    <span class="stat" title="Maximum account age, in days, to be eligible">
+      <span class="n">{{ funnel.max_account_age_days or '∞' }}</span> max age (d)
     </span>
   </div>
   {% if not funnel.max_account_age_days %}
-  <p class="muted small">
-    No age limit: every never-paid free user is eligible, <strong>including the free base
-    that signed up before this shipped</strong>. Activating with this unset offers them all
-    a trial on their next app open. Set <code>SIGNUP_TRIAL_MAX_ACCOUNT_AGE_DAYS</code>
-    first if that burst is not wanted.
-  </p>
+  {# A <div>, not a <p>: the ⓘ is a <details>, which a <p> cannot contain, and
+     inside the line it sits at the end of the sentence instead of wrapping
+     onto a row of its own. #}
+  <div class="sw-state tone-warn"><span class="dot"></span>No age limit: every never-paid free user is eligible.
+    {% call info("Why the missing age limit matters") %}
+      <p>
+        That includes <strong>the free base that signed up before this shipped</strong>.
+        Activating with this unset offers them all a trial on their next app open. Set
+        <code>SIGNUP_TRIAL_MAX_ACCOUNT_AGE_DAYS</code> first if that burst is not wanted.
+      </p>
+    {% endcall %}
+  </div>
   {% endif %}
 </section>
 
 <section class="card">
-  <h2>Funnel</h2>
+  <div class="card-title">
+    <h2>Funnel</h2>
+    {% call info("How to read the funnel") %}
+      <p>
+        A rate reads “not measured yet” rather than 0% when its denominator is empty — an
+        offer that has never run must not look like an offer that is failing.
+      </p>
+      <p>
+        <strong>Claimed is not activated:</strong> a trialist who never connects a Binance
+        key experiences the app exactly as a free user does, so read conversion against
+        claims, not against the cohort.
+      </p>
+    {% endcall %}
+  </div>
   <div class="summary-row">
     <span class="stat"><span class="n">{{ summary.cohort or 0 }}</span> eligible</span>
     <span class="stat"><span class="n">{{ summary.offered or 0 }}</span> offered</span>
@@ -89,9 +129,8 @@
         <td>
           {% if summary.claim_rate is not none %}
           <strong>{{ '%.1f'|format(summary.claim_rate * 100) }}%</strong>
-          <span class="muted">— does the welcome copy work?</span>
           {% else %}
-          <span class="muted">not measured yet — nobody has been offered a trial</span>
+          <span class="muted">not measured yet</span>
           {% endif %}
         </td>
       </tr>
@@ -100,28 +139,20 @@
         <td>
           {% if summary.conversion_rate is not none %}
           <strong>{{ '%.1f'|format(summary.conversion_rate * 100) }}%</strong>
-          <span class="muted">— does the product work?</span>
           {% else %}
-          <span class="muted">not measured yet — nobody has trialled</span>
+          <span class="muted">not measured yet</span>
           {% endif %}
         </td>
       </tr>
       <tr>
         <td>Cohort split</td>
         <td>
-          <strong>{{ summary.cohort_dark or 0 }}</strong> counted while dark ·
-          <strong>{{ summary.cohort_live or 0 }}</strong> counted while live
+          <strong>{{ summary.cohort_dark or 0 }}</strong> while dark ·
+          <strong>{{ summary.cohort_live or 0 }}</strong> while live
         </td>
       </tr>
     </tbody>
   </table>
-  <p class="muted small">
-    A rate reads “not measured yet” rather than 0% when its denominator is empty — an
-    offer that has never run must not look like an offer that is failing.
-    <strong>Claimed is not activated:</strong> a trialist who never connects a Binance key
-    experiences the app exactly as a free user does, so read conversion against claims,
-    not against the cohort.
-  </p>
 </section>
 
 <section class="card">
@@ -171,28 +202,13 @@
   </table>
   </div>
   {% else %}
-  <p class="muted">
-    No eligible users recorded yet. Rows appear as users open the app — the cohort is
-    stamped on the profile read, so it fills without anyone needing an app update.
-  </p>
+  <div class="muted">No eligible users recorded yet.
+    {% call info("When rows appear") %}
+      <p>Rows appear as users open the app — the cohort is stamped on the profile read,
+        so it fills without anyone needing an app update.</p>
+    {% endcall %}
+  </div>
   {% endif %}
-</section>
-
-<section class="card">
-  <h2>Activating</h2>
-  <p>
-    Deliberately not a button here. Turning on {{ funnel.days }} free days of
-    {{ funnel.tier }} for the whole eligible base is an owner-sign-off decision that
-    should cost a deploy, not a click: set <code>SIGNUP_TRIAL_ENABLED=true</code> in the
-    engine <code>.env</code> and run <code>deploy.sh</code>. Full runbook, including
-    rollback semantics, is <code>docs/SIGNUP_TRIAL_ACTIVATION.md</code> in 360-v2.
-  </p>
-  <p class="muted small">
-    Rollback stops <em>new</em> claims immediately but does not confiscate a running
-    trial — banked grants keep resolving until they expire, exactly like referral rewards.
-    Revoking automation from under a user mid-window is worse than letting at most
-    {{ funnel.days }} days run out.
-  </p>
 </section>
 
 {% endif %}

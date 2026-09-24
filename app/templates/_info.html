@@ -1,0 +1,22 @@
+{#- The ⓘ — every explanation on a Control page lives behind one of these.
+
+    Owner, 2026-09-24: "Don't keep all that brief there, keep i icon over
+    there to know that's it, keep everything simple." The sentences are not
+    cut: they are the guardrails, and the tests pin them in the HTML. They just
+    stop standing between the reader and the switch.
+
+    Usage:
+        {% from "_info.html" import info %}
+        {% call info("About the kill switch") %}<p>…</p>{% endcall %}
+
+    A <details>, so it works with JavaScript off; base.html adds the niceties
+    (one open at a time, click-outside and Escape close it, flip left near the
+    right edge). On a phone the popover docks to the bottom of the screen
+    instead of hanging off the icon, where it would run off the edge.
+
+    ``wide=true`` is for the one explanation that carries tables (Promotions'
+    "how a rule works"): the popover widens and scrolls instead of growing a
+    380px column of cells. -#}
+{%- macro info(title, wide=false) -%}
+<details class="info{% if wide %} info-wide{% endif %}"><summary title="{{ title }}" aria-label="{{ title }}"></summary><div class="info-pop" role="note"><div class="info-title">{{ title }}</div>{{ caller() }}</div></details>
+{%- endmacro -%}

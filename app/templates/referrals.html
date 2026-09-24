@@ -1,14 +1,18 @@
 {% extends "base.html" %}
+{% from "_info.html" import info %}
 {% block title %}Referrals · 360 CE Ops{% endblock %}
 {% block content %}
 <div class="page-head">
-  <h1>Referral commissions</h1>
-  <p class="lede">
-    50% of each verified paid billing period of a referred user (first 3
-    periods) accrues to the referrer. Payouts are manual: pay the referrer
-    directly (their phone is the payout identity), tick the settled rows,
-    and mark them paid — audited, engine is the ledger of record.
-  </p>
+  <div class="title-row">
+    <h1>Referral commissions</h1>
+    {% call info("About referral commissions") %}
+      <p>50% of each verified paid billing period of a referred user (first 3
+        periods) accrues to the referrer.</p>
+      <p>Payouts are manual: pay the referrer directly (their phone is the
+        payout identity), tick the settled rows, and mark them paid — audited,
+        engine is the ledger of record.</p>
+    {% endcall %}
+  </div>
 </div>
 
 {% if flash %}
