@@ -337,20 +337,6 @@ table.tunables td { padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--bord
    laying out /control/routing, which needs the same thing). */
 .table-scroll { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
 
-/* /control/routing on a phone: one card per (path, side), each cell a
-   labelled line, so the action is visible without scrolling sideways. The
-   owner operates from a phone; a control he has to scroll a table to find is
-   a control he will mis-tap. */
-@media (max-width: 720px) {
-  table.routing-table thead { display: none; }
-  table.routing-table tr { display: block; border-bottom: 1px solid var(--border); padding: 0.55rem 0; }
-  table.routing-table td { display: flex; justify-content: space-between; align-items: flex-start;
-                           gap: 0.8rem; padding: 0.2rem 0.3rem; border: none; text-align: right; }
-  table.routing-table td::before { content: attr(data-label); color: var(--fg-dim);
-                                   font-size: 0.72rem; text-align: left; flex: 0 0 auto; }
-  table.routing-table td form { display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; }
-}
-
 /* ---- One unified badge system ---- */
 .badge {
   display: inline-block;
@@ -707,7 +693,12 @@ details.explain .explain-body strong { color: var(--fg); }
 .sw-name { font-weight: 640; font-size: 0.95rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .sw-name a { color: var(--fg); }
 .sw-name a:hover { color: var(--accent); }
-.sw-state { display: flex; align-items: center; gap: 0.5rem; margin: 0.3rem 0 0; font-size: 0.88rem; font-weight: 600; flex-wrap: wrap; }
+/* A status line is prose with a dot in front, not a row of flex items: as
+   flex, every text run and <strong> became its own item, so a long line
+   dropped onto a second row away from its dot on a phone. */
+.sw-state { display: block; margin: 0.3rem 0 0; font-size: 0.88rem; font-weight: 600; line-height: 1.45; }
+.sw-state > .dot:first-child { margin-right: 0.45rem; vertical-align: 0.06em; }
+.sw-state .badge { margin-left: 0.2rem; vertical-align: 0.08em; }
 .sw-state .ks-state { font-size: 0.88rem; }
 .sw-act { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
 .sw-act form { margin: 0; }
@@ -862,26 +853,40 @@ table.data-table.audit tr.row-warn td:first-child { box-shadow: inset 2px 0 0 va
    into "lumin_au / to_monthl / y" instead of scrolling. */
 table code { overflow-wrap: normal; word-break: normal; }
 
-/* /control/routing on a phone, second pass: one full-width line per cell was
-   ~8,500px of page for 21 rows. Two columns, a small label over each value,
-   the side folded into the path line — four short rows per (path, side). */
-.side-inline { display: none; font-weight: 600; }
+/* /control/routing. Six columns on a desk; on a phone one compact card per
+   (path, side) laid out by area, so the action sits beside the live-feed state
+   it changes: path / live + action / delivered + dark / rule. Four short rows,
+   not the eight labelled lines per path this replaced. */
+.th-unit { display: block; font-weight: 400; text-transform: none; letter-spacing: normal; color: var(--fg-faint); font-size: 0.7rem; }
+.rt-note { display: block; color: var(--fg-faint); font-size: 0.74rem; margin-top: 0.15rem; font-weight: 400; }
+table.routing-table td { vertical-align: middle; }
+table.routing-table .rt-path { white-space: nowrap; }
+table.routing-table .rt-path .side-long, table.routing-table .rt-path .side-short { font-weight: 650; font-size: 0.78rem; margin-left: 0.3rem; }
+table.routing-table .rt-deliv .badge, table.routing-table .rt-live .badge + .badge { margin-left: 0.25rem; }
+table.routing-table .rt-deliv, table.routing-table .rt-dark { white-space: nowrap; }
+table.routing-table .rt-deliv .rt-note { white-space: normal; }
+table.routing-table .rt-rule a { white-space: nowrap; }
 @media (max-width: 720px) {
+  table.routing-table, table.routing-table tbody { display: block; }
+  table.routing-table thead { display: none; }
   table.routing-table tbody tr {
     display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    column-gap: 0.9rem; row-gap: 0.35rem; padding: 0.75rem 0.1rem;
+    grid-template-areas: "path path" "live act" "deliv dark" "rule rule";
+    column-gap: 0.9rem; row-gap: 0.45rem; padding: 0.8rem 0.1rem;
+    border-bottom: 1px solid var(--border);
   }
-  table.routing-table td {
-    display: block; text-align: left; padding: 0; min-width: 0; line-height: 1.35;
-  }
-  table.routing-table td::before { display: block; font-size: 0.66rem; line-height: 1.3; margin-bottom: 0.1rem; }
-  table.routing-table td.cell-wide { grid-column: 1 / -1; }
-  table.routing-table td.cell-path { font-size: 0.95rem; }
-  table.routing-table td.cell-path::before, table.routing-table td.cell-side { display: none; }
-  table.routing-table .side-inline { display: inline; }
-  table.routing-table td form { flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 0.35rem 0.5rem; }
-  table.routing-table td br { display: none; }
-  table.routing-table td br + .muted, table.routing-table td br + a { display: block; }
+  table.routing-table tbody tr:last-child { border-bottom: none; }
+  table.routing-table td { display: block; padding: 0; border: none; min-width: 0; line-height: 1.35; text-align: left; }
+  table.routing-table td::before { content: attr(data-label); display: block; color: var(--fg-dim); font-size: 0.66rem; line-height: 1.3; margin-bottom: 0.1rem; }
+  table.routing-table td.rt-path { grid-area: path; font-size: 0.95rem; white-space: normal; }
+  table.routing-table td.rt-live { grid-area: live; }
+  table.routing-table td.rt-act { grid-area: act; justify-self: end; align-self: end; }
+  table.routing-table td.rt-deliv { grid-area: deliv; }
+  table.routing-table td.rt-dark { grid-area: dark; }
+  table.routing-table td.rt-rule { grid-area: rule; }
+  table.routing-table td.rt-path::before, table.routing-table td.rt-act::before { display: none; }
+  table.routing-table td.rt-rule::before { display: inline; margin-right: 0.4rem; }
+  table.routing-table td form { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.35rem 0.5rem; }
 }
 
 /* Grid children must be allowed to shrink below their content, or one long
@@ -890,3 +895,96 @@ table code { overflow-wrap: normal; word-break: normal; }
 .cell-action form { margin: 0; }
 .promo-form { margin-top: 0.4rem; }
 .positions-live td, .pulse-card .v { font-variant-numeric: tabular-nums; }
+
+/* ==========================================================================
+   The ⓘ (2026-09-24) — owner: "Don't keep all that brief there, keep i icon
+   over there to know that's it, keep everything simple." Every explanation on
+   a Control page sits behind one; the page itself carries a name, a state and
+   a control. `app/templates/_info.html` is the one writer of the markup.
+   ========================================================================== */
+details.info { display: inline-block; position: relative; vertical-align: middle; margin-left: 0.3rem; line-height: 1; }
+details.info > summary {
+  list-style: none; cursor: pointer; user-select: none;
+  width: 1.15rem; height: 1.15rem; border-radius: 50%;
+  display: inline-grid; place-items: center;
+  border: 1px solid var(--border); background: var(--bg-elev); color: var(--fg-dim);
+  font: italic 700 0.72rem/1 Georgia, "Times New Roman", serif;
+  transition: color var(--ease), border-color var(--ease), background var(--ease);
+}
+details.info > summary::-webkit-details-marker { display: none; }
+details.info > summary::before { content: "i"; }
+details.info > summary:hover, details.info[open] > summary {
+  color: var(--accent); border-color: var(--accent); background: var(--accent-soft);
+}
+.info-pop {
+  position: absolute; z-index: 40; top: calc(100% + 8px); left: -10px;
+  width: min(380px, 86vw); padding: 0.8rem 0.95rem;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-md);
+  box-shadow: 0 10px 32px rgba(0,0,0,0.5);
+  color: var(--fg-dim); font: 400 0.83rem/1.55 var(--sans);
+  text-transform: none; letter-spacing: normal; text-align: left; white-space: normal;
+}
+details.info.flip .info-pop { left: auto; right: -10px; }
+.info-title { color: var(--fg); font-weight: 650; font-size: 0.86rem; margin-bottom: 0.45rem; }
+.info-pop p, .info-pop ul { margin: 0 0 0.55rem; }
+.info-pop > :last-child { margin-bottom: 0; }
+.info-pop ul { padding-left: 1.1rem; }
+.info-pop li { margin-bottom: 0.3rem; }
+.info-pop strong { color: var(--fg); }
+.info-pop code { font-size: 0.78rem; }
+.info-pop { max-height: min(70vh, 620px); overflow-y: auto; }
+details.info-wide .info-pop { width: min(620px, 92vw); }
+.info-pop table { margin: 0.4rem 0 0.6rem; font-size: 0.78rem; }
+.info-pop table th, .info-pop table td { padding: 0.3rem 0.45rem; }
+@media (max-width: 720px) {
+  /* Docked, not anchored: an anchored popover near a phone's right edge runs
+     off the screen, and a reader cannot scroll a popover sideways. */
+  .info-pop, details.info.flip .info-pop {
+    position: fixed; left: 12px; right: 12px; bottom: 12px; top: auto;
+    width: auto; max-height: 62vh; overflow-y: auto;
+  }
+}
+
+/* A title with its ⓘ. A <details> cannot sit inside an <h1>/<h2> (phrasing
+   content only), so the pair shares a row instead. */
+.title-row { display: flex; align-items: center; gap: 0.1rem; flex-wrap: wrap; }
+.title-row > h1, .title-row > h2 { margin: 0; }
+.page-head .title-row { margin-bottom: 0.2rem; }
+.card-title { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; margin: 0 0 0.75rem; }
+.card-title > h2 { margin: 0; }
+.card-title > details.info { margin-left: 0; }
+.title-row > p { margin: 0.35rem 0; }
+
+/* Section links: one row that scrolls on a phone, never two rows of pills. */
+.ctl-jump { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.ctl-jump::-webkit-scrollbar { display: none; }
+
+/* Audit rows: the params column is one clipped line with the full JSON on
+   hover, not a column wrapped one character per line on a phone. */
+table.audit td.params, table.data-table td.params {
+  max-width: 34ch; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+@media (max-width: 720px) {
+  table.audit td.params, table.data-table td.params { max-width: 18ch; }
+}
+/* A section heading with its ⓘ and badge on one line. */
+.sec-head-row { margin: 1.4rem 0 0.6rem; gap: 0.35rem; }
+.sec-head-row > h2.sec-head { margin: 0; }
+details.info > summary { text-transform: none; letter-spacing: normal; }
+.switch-chips { margin-top: 0.75rem; }
+.switch-chips .chip { padding: 0.3rem 0.4rem 0.3rem 0.7rem; }
+.switch-chips .chip code { background: transparent; border: none; padding: 0; color: var(--fg); }
+
+/* A retirement list is a short list, not a row of pills that wrap mid-name. */
+.ret-list { list-style: none; margin: 0.45rem 0 0; padding: 0; font-size: 0.86rem; }
+.ret-list li { padding: 0.2rem 0; overflow-wrap: anywhere; }
+/* A line that ends in an ⓘ is a <div> (a <p> cannot hold a <details>), so it
+   needs the paragraph's spacing back. */
+fieldset > div.small, details > div.small { margin: 0.55rem 0; }
+/* Evidence tables on Promotions: the tick column needs no word over it, and a
+   word it does have wraps every header on a phone into a two-line band. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+th.pick-col { width: 2.2rem; text-align: center; }
+table.tbl.small th { white-space: nowrap; }
+.sw-name > details.info, .title-row > details.info { margin-left: 0; }
+.title-row { gap: 0.4rem; }

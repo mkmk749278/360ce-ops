@@ -1,12 +1,21 @@
 {% extends "base.html" %}
+{% from "_info.html" import info %}
 {% block title %}Control · 360 CE Ops{% endblock %}
 {% block content %}
+{#- Owner, 2026-09-24, after the overhaul: "Still control panel looks messy
+    only" — and, the same hour, "don't keep all that brief there, keep i icon".
+    Every explanation on this page now sits behind an ⓘ (_info.html). What is
+    left on screen is a name, a state and a control. Every sentence the tests
+    pin is still in the HTML; nothing that states a FAULT is hidden — an
+    unreadable or inoperable switch still says so in view. -#}
 <div class="page-head">
-  <h1>Engine Control</h1>
-  <p class="lede">
-    Owner-only. Every action here is owner-gated on the engine and written to
-    the <a href="#sec-audit">audit log</a> at the bottom of this page.
-  </p>
+  <div class="title-row">
+    <h1>Engine Control</h1>
+    {% call info("About this page") %}
+      <p>Owner-only. Every action here is owner-gated on the engine and written
+        to the <a href="#sec-audit">audit log</a> at the bottom of this page.</p>
+    {% endcall %}
+  </div>
 </div>
 
 {# ── Jump nav ──────────────────────────────────────────────────────────────
@@ -39,12 +48,7 @@
    class with a value we merely could not read. `throwable` is the question
    this card exists to answer; `availability` says why a reading is or is not
    a reading. The engine publishes both — this page names neither cause of its
-   own.
-
-   (2026-09-24) The at-a-glance strip that used to sit above these cards is
-   gone: it repeated every switch below it as a tile, so the page stated each
-   fact twice in two shapes. The switchboard under this card IS the glance —
-   one row per switch, state first, control beside it. #}
+   own. A fault is never hidden behind the ⓘ: its state line stays in view. #}
 {% if ks.get('throwable') is false %}
   {% set ks_tone = 'bad' %}
 {% elif ks.get('availability', 'ok') != 'ok' %}
@@ -56,34 +60,46 @@
 {% endif %}
 <section class="card hero tone-{{ ks_tone }}" aria-labelledby="ks-title">
   <div class="hero-main">
-    <div class="eyebrow" id="ks-title">Global kill switch</div>
+    <div class="eyebrow title-row" id="ks-title">Global kill switch
+      {% call info("About the kill switch") %}
+        <p>Engaging halts <strong>all</strong> auto-trade engine-wide within
+          seconds (B18). The reason you type is recorded in the audit log.</p>
+        {% if ks.get('throwable') is false %}
+        <p>The process serving this page has no Firestore client and no engine
+          bridge is reachable, so <code>POST /api/kill-switch</code> refuses. B18
+          requires a flip to take effect in under five seconds; right now it
+          cannot be made at all.</p>
+        {% elif ks.get('availability') == 'not_configured' %}
+        <p>This process holds no Firestore client, so there is no reading to
+          show. The flip is routed to the engine container, which does hold one
+          — the buttons work.</p>
+        {% elif ks.get('availability') == 'read_failed' %}
+        <p>Not a safety pause and not "off": we could not ask. A
+          <code>RESOURCE_EXHAUSTED</code> here is the daily read quota, which
+          resets at midnight Pacific — check the
+          <a href="/system/firestore">Firestore read census</a>.</p>
+        {% endif %}
+        {% if ks.get('availability', 'ok') != 'ok' %}
+        <p>The switch may be engaged or disengaged right now; this page does not
+          know, and a guess here is the thing it is built not to do. Both
+          controls are offered — the flip itself does not depend on the read.</p>
+        {% endif %}
+        {% if ks.get('source') == 'engine' %}
+        <p>Flip routed to the engine container over Redis.</p>
+        {% endif %}
+      {% endcall %}
+    </div>
   {% if ks.get('throwable') is false %}
     <p class="ks-state ks-on">⛔ INOPERABLE — the kill switch cannot be thrown.</p>
-    <p class="note">
-      The process serving this page has no Firestore client and no engine
-      bridge is reachable, so <code>POST /api/kill-switch</code> refuses. B18
-      requires a flip to take effect in under five seconds; right now it cannot
-      be made at all. Halt trading from the VPS directly until this is fixed.
-      {% if ks.get('detail') %}<br>Engine said: <code>{{ ks.detail }}</code>{% endif %}
-    </p>
+    <p class="note">Halt trading from the VPS directly until this is fixed.
+      {% if ks.get('detail') %}Engine said: <code>{{ ks.detail }}</code>{% endif %}</p>
   </div>
   {% else %}
     {% if ks.get('availability') == 'not_configured' %}
       <p class="ks-state ks-warn">⚠ STATE UNREADABLE — the switch is still throwable.</p>
-      <p class="note">
-        This process holds no Firestore client, so there is no reading to show.
-        The flip is routed to the engine container, which does hold one — the
-        buttons work.
-      </p>
     {% elif ks.get('availability') == 'read_failed' %}
       <p class="ks-state ks-warn">⚠ STATE UNREADABLE — Firestore refused the read.</p>
-      <p class="note">
-        Not a safety pause and not "off": we could not ask.
-        {% if ks.get('detail') %}Engine said: <code>{{ ks.detail }}</code>{% endif %}
-        A <code>RESOURCE_EXHAUSTED</code> here is the daily read quota, which
-        resets at midnight Pacific — check the
-        <a href="/system/firestore">Firestore read census</a>.
-      </p>
+      {% if ks.get('detail') %}<p class="note">Engine said: <code>{{ ks.detail }}</code></p>{% endif %}
     {% endif %}
   {# THE VERDICT RENDERS ONLY WHEN IT IS A READING.
      Shipped 2026-09-02 with this block unconditional, and the owner's very
@@ -94,12 +110,8 @@
      The tile above was guarded and this was not — fixed one writer, not the
      field. #}
   {% if ks.get('availability', 'ok') != 'ok' %}
-      <p class="note">
-        <strong>No state is shown because none was read.</strong> The switch may
-        be engaged or disengaged right now; this page does not know, and a guess
-        here is the thing it is built not to do. Both controls are offered — the
-        flip itself does not depend on the read.
-      </p>
+      <p class="note"><strong>No state is shown because none was read.</strong>
+        Both controls are offered.</p>
   </div>
   <div class="hero-act">
     <form method="post" action="/control/kill-switch"
@@ -118,7 +130,6 @@
   {% elif ks.get('engaged') %}
       <p class="ks-state ks-on">ENGAGED — all auto-trade is halted.</p>
       {% if ks.get('reason') %}<p class="note">Reason: <strong>{{ ks.reason }}</strong></p>{% endif %}
-      <p class="note">No new orders are placed for any user until it is disengaged.</p>
   </div>
   <div class="hero-act">
     <form method="post" action="/control/kill-switch"
@@ -129,10 +140,6 @@
   </div>
   {% else %}
       <p class="ks-state ks-off">Disengaged — auto-trade allowed.</p>
-      <p class="note">
-        Engaging halts <strong>all</strong> auto-trade engine-wide within
-        seconds (B18). The reason is recorded in the audit log.
-      </p>
   </div>
   <div class="hero-act">
     <form method="post" action="/control/kill-switch"
@@ -145,19 +152,15 @@
   </div>
   {% endif %}
   {% endif %}
-  {% if ks.get('source') == 'engine' %}
-    <p class="note" style="grid-column:1/-1;margin:0">Flip routed to the engine container over Redis.</p>
-  {% endif %}
 </section>
 
 {# ── Switchboard ───────────────────────────────────────────────────────────
-   One row per switch: what it is, what it is set to right now, and the one
-   control that changes it. Colour carries the same meaning on every row —
-   green is the normal operating state, amber is off-default or needs a look,
-   red is halted or broken — which is what the old cards could not say:
-   "billing ENABLED" rendered in the red of an outage, and "expiry DISABLED"
-   (its intended default) in the green of a healthy switch that had been
-   thrown. #}
+   One row per switch: its name (and the ⓘ that explains it), what it is set to
+   right now, and the one control that changes it. Colour carries the same
+   meaning on every row — green is the normal operating state, amber is
+   off-default or needs a look, red is halted or broken. Every row's button is
+   the same quiet style: the dot says the state, and solid colour is kept for
+   the kill switch and the danger zone, so it still means something. #}
 <section class="card">
   <div class="sw-list">
 
@@ -168,67 +171,71 @@
   {% else %}{% set g_tone = 'bad' %}{% endif %}
   <div class="sw tone-{{ g_tone }}" id="sw-auto-trade">
     <div class="sw-main">
-      <div class="sw-name">Global auto-trade</div>
+      <div class="sw-name">Global auto-trade
+        {% call info("About global auto-trade") %}
+          <p>The master gate for new entries, separate from the kill switch.
+            Disabling it stops new entries engine-wide and leaves open Binance
+            positions untouched.</p>
+          {% if glob.get('throwable') is false %}
+          <p>No Firestore client here and no engine bridge reachable, so this
+            flag cannot be flipped from this page.</p>
+          {% elif glob.get('availability') == 'not_configured' %}
+          <p>This process cannot read it; the flip goes to the engine.</p>
+          {% elif glob.get('availability') == 'read_failed' %}
+          <p>We could not ask — this is neither enabled nor disabled.</p>
+          {% endif %}
+          {% if glob.get('availability', 'ok') != 'ok' %}
+          <p>Rendering "DISABLED" here would tell you no new orders are being
+            placed, which we have not established — the engine reads this flag
+            with its own client and may well be trading. Both controls are
+            offered.</p>
+          {% endif %}
+        {% endcall %}
+      </div>
     {% if glob.get('throwable') is false %}
       <p class="sw-state ks-state ks-on"><span class="dot"></span>⛔ INOPERABLE — this flag cannot be flipped.</p>
-      <p class="note">
-        No Firestore client here and no engine bridge reachable.
-        {% if glob.get('detail') %}Engine said: <code>{{ glob.detail }}</code>{% endif %}
-      </p>
+      {% if glob.get('detail') %}<p class="note">Engine said: <code>{{ glob.detail }}</code></p>{% endif %}
     </div>
     {% else %}
       {% if glob.get('availability') == 'not_configured' %}
         <p class="sw-state ks-state ks-warn"><span class="dot"></span>⚠ STATE UNREADABLE — the flag is still flippable.</p>
-        <p class="note">This process cannot read it; the flip goes to the engine.</p>
       {% elif glob.get('availability') == 'read_failed' %}
         <p class="sw-state ks-state ks-warn"><span class="dot"></span>⚠ STATE UNREADABLE — Firestore refused the read.</p>
-        <p class="note">
-          We could not ask — this is neither enabled nor disabled.
-          {% if glob.get('detail') %}Engine said: <code>{{ glob.detail }}</code>{% endif %}
-        </p>
+        {% if glob.get('detail') %}<p class="note">Engine said: <code>{{ glob.detail }}</code></p>{% endif %}
       {% endif %}
     {% if glob.get('availability', 'ok') != 'ok' %}
-      <p class="note">
-        <strong>No state is shown because none was read.</strong> Rendering
-        "DISABLED" here would tell you no new orders are being placed, which we
-        have not established — the engine reads this flag with its own client and
-        may well be trading. Both controls are offered.
-      </p>
+      <p class="note"><strong>No state is shown because none was read.</strong></p>
     </div>
     <div class="sw-act">
       <form method="post" action="/control/auto-trade-global"
             onsubmit="return confirm('ENABLE global auto-trade engine-wide?');">
         <input type="hidden" name="enabled" value="true">
-        <button type="submit" class="btn btn-go">Enable global auto-trade</button>
+        <button type="submit" class="btn btn-plain">Enable global auto-trade</button>
       </form>
       <form method="post" action="/control/auto-trade-global"
             onsubmit="return confirm('DISABLE global auto-trade? New orders halt engine-wide (open positions are left untouched).');">
         <input type="hidden" name="enabled" value="false">
-        <button type="submit" class="btn btn-soft-danger">Disable global auto-trade</button>
+        <button type="submit" class="btn btn-plain">Disable global auto-trade</button>
       </form>
     </div>
     {% elif glob.get('enabled') %}
       <p class="sw-state"><span class="dot"></span>ENABLED — new orders allowed engine-wide.</p>
-      <p class="note">Master gate for new entries, separate from the kill switch.
-        Disabling stops new entries and leaves open Binance positions untouched.</p>
     </div>
     <div class="sw-act">
       <form method="post" action="/control/auto-trade-global"
             onsubmit="return confirm('DISABLE global auto-trade? New orders halt engine-wide (open positions are left untouched).');">
         <input type="hidden" name="enabled" value="false">
-        <button type="submit" class="btn btn-soft-danger">Disable global auto-trade</button>
+        <button type="submit" class="btn btn-plain">Disable global auto-trade</button>
       </form>
     </div>
     {% else %}
       <p class="sw-state ks-state ks-on"><span class="dot"></span>DISABLED — no new orders are placed.</p>
-      <p class="note">Master gate for new entries, separate from the kill switch.
-        Open Binance positions are not touched by this switch.</p>
     </div>
     <div class="sw-act">
       <form method="post" action="/control/auto-trade-global"
             onsubmit="return confirm('ENABLE global auto-trade engine-wide?');">
         <input type="hidden" name="enabled" value="true">
-        <button type="submit" class="btn btn-go">Enable global auto-trade</button>
+        <button type="submit" class="btn btn-plain">Enable global auto-trade</button>
       </form>
     </div>
     {% endif %}
@@ -244,14 +251,19 @@
   {% else %}{% set m_tone = 'muted' %}{% endif %}
   <div class="sw tone-{{ m_tone }}" id="sec-mode">
     <div class="sw-main">
-      <div class="sw-name">Auto-execution mode</div>
+      <div class="sw-name">Auto-execution mode
+        {% call info("About auto-execution mode") %}
+          <p><strong>Off</strong> halts new entries. <strong>Paper</strong>
+            simulates. <strong>Live</strong> fires real Binance orders, and
+            switching to it asks you to confirm.</p>
+        {% endcall %}
+      </div>
       {% if auto.get('error') %}
         <p class="sw-state ks-state ks-warn"><span class="dot"></span>Could not read current mode: {{ auto.error }}</p>
       {% else %}
         <p class="sw-state"><span class="dot"></span>Current engine-wide mode:
           <strong class="mode-{{ mode }}">{{ mode|upper }}</strong></p>
       {% endif %}
-      <p class="note">Off halts new entries · Paper simulates · Live fires real Binance orders.</p>
     </div>
     <div class="sw-act">
       <div class="seg" role="group" aria-label="Auto-execution mode">
@@ -280,35 +292,41 @@
   {% else %}{% set e_tone = 'ok' %}{% endif %}
   <div class="sw tone-{{ e_tone }}" id="sw-expiry">
     <div class="sw-main">
-      <div class="sw-name">Signal expiry <span class="muted">(max-hold)</span></div>
+      <div class="sw-name">Signal expiry
+        {% call info("About signal expiry (max-hold)") %}
+          <p>When disabled — the default — the time-based max-hold force-close
+            never fires, and trades resolve at TP or SL only. When enabled,
+            signals force-close at the max-hold time.</p>
+          <p>The 2h auto-trade reconciler stale-close safety net is independent
+            and always active.</p>
+          {% if expiry.get('initialised') is false %}
+          <p>The engine reports the flag never initialised, so the
+            <code>SIGNAL_EXPIRY_ENABLED</code> env value is in force.</p>
+          {% endif %}
+        {% endcall %}
+      </div>
     {% if expiry.get('initialised') is false %}
       <p class="sw-state"><span class="dot"></span>Uninitialised — running on the boot default
         (<strong>{{ 'enabled' if expiry.get('enabled') else 'disabled' }}</strong>).</p>
-      <p class="note">The engine reports the flag never initialised, so the
-        <code>SIGNAL_EXPIRY_ENABLED</code> env value is in force.</p>
     </div>
     {% elif expiry.get('enabled') %}
       <p class="sw-state"><span class="dot"></span>ENABLED — signals force-close at the max-hold time.</p>
-      <p class="note">Off-default. The 2h auto-trade reconciler stale-close safety
-        net is independent and always active.</p>
     </div>
     <div class="sw-act">
       <form method="post" action="/control/signal-expiry"
             onsubmit="return confirm('DISABLE signal expiry? Signals will run to TP or SL only and never expire mid-move.');">
         <input type="hidden" name="enabled" value="false">
-        <button type="submit" class="btn btn-plain">Disable expiry (run to TP/SL)</button>
+        <button type="submit" class="btn btn-plain">Disable expiry</button>
       </form>
     </div>
     {% else %}
       <p class="sw-state"><span class="dot"></span>DISABLED — signals run to TP or SL only.</p>
-      <p class="note">The default. The time-based force-close never fires; the 2h
-        auto-trade reconciler stale-close safety net is independent and always active.</p>
     </div>
     <div class="sw-act">
       <form method="post" action="/control/signal-expiry"
             onsubmit="return confirm('ENABLE signal expiry? Signals will force-close at the max-hold time instead of running to TP/SL.');">
         <input type="hidden" name="enabled" value="true">
-        <button type="submit" class="btn btn-plain">Enable expiry (force-close at max hold)</button>
+        <button type="submit" class="btn btn-plain">Enable expiry</button>
       </form>
     </div>
     {% endif %}
@@ -321,60 +339,68 @@
   {% else %}{% set b_tone = 'warn' %}{% endif %}
   <div class="sw tone-{{ b_tone }}" id="sw-billing">
     <div class="sw-main">
-      <div class="sw-name">Play billing <span class="muted">(subscription paywall)</span></div>
+      <div class="sw-name">Play billing
+        {% call info("About Play billing (subscription paywall)") %}
+          <p>The master switch for the two-tier auto-trade paywall (Assist /
+            Auto). Disabling it stops NEW purchases and RTDN processing; it does
+            not revoke existing subscribers — their tier expires naturally at
+            <code>paid_until</code>.</p>
+          <p>The paywall is trade automation only; signals and levels are
+            always free.</p>
+          {% if billing.get('configured') is false %}
+          <p>The engine has no Play package / service account, so billing
+            endpoints 503 regardless of this switch. Complete the setup runbook
+            first.</p>
+          {% elif billing.get('initialised') is false %}
+          <p>The engine reports the flag never initialised, so the
+            <code>GOOGLE_PLAY_BILLING_ENABLED</code> env value is in force.</p>
+          {% endif %}
+        {% endcall %}
+      </div>
     {% if billing.get('configured') is false %}
       <p class="sw-state"><span class="dot"></span>NOT CONFIGURED — billing endpoints 503 regardless of this switch.</p>
-      <p class="note">The engine has no Play package / service account. Complete
-        the setup runbook first.</p>
     </div>
     {% elif billing.get('initialised') is false %}
       <p class="sw-state"><span class="dot"></span>Uninitialised — running on the boot default
         (<strong>{{ 'enabled' if billing.get('enabled') else 'disabled' }}</strong>).</p>
-      <p class="note">The engine reports the flag never initialised, so the
-        <code>GOOGLE_PLAY_BILLING_ENABLED</code> env value is in force.</p>
     </div>
     {% elif billing.get('enabled') %}
       <p class="sw-state"><span class="dot"></span>ENABLED — subscription purchases are live.</p>
-      <p class="note">Assist / Auto tiers. Disabling stops NEW purchases and RTDN
-        processing; existing subscribers keep their tier until <code>paid_until</code>.
-        Signals and levels are always free.</p>
     </div>
     <div class="sw-act">
       <form method="post" action="/control/billing"
             onsubmit="return confirm('DISABLE Play billing? New purchases and RTDN processing stop. Existing subscribers keep their tier until it expires.');">
         <input type="hidden" name="enabled" value="false">
-        <button type="submit" class="btn btn-soft-danger">Disable billing (stop new purchases)</button>
+        <button type="submit" class="btn btn-plain">Disable billing</button>
       </form>
     </div>
     {% else %}
       <p class="sw-state"><span class="dot"></span>DISABLED — new purchases blocked.</p>
-      <p class="note">Existing subscribers keep their tier until it expires at
-        <code>paid_until</code>; nothing is revoked.</p>
     </div>
     <div class="sw-act">
       <form method="post" action="/control/billing"
             onsubmit="return confirm('ENABLE Play billing? Subscription purchases will be verified and granted live.');">
         <input type="hidden" name="enabled" value="true">
-        <button type="submit" class="btn btn-go">Enable billing (go live)</button>
+        <button type="submit" class="btn btn-plain">Enable billing</button>
       </form>
     </div>
     {% endif %}
   </div>
 
-  {# Trail governor — read-only here, and it says so. It is the one mechanism
-     that moves a REAL resting stop, and its state is read off the governor's
-     own diag (governor_summary → the governor page's lane_state), never off
+  {# Trail governor — read-only here. It is the one mechanism that moves a
+     REAL resting stop, and its state is read off the governor's own diag
+     (governor_summary → the governor page's lane_state), never off
      `trail_governor_enabled`: the switch says what was asked for, the diag
-     says what is happening, and on 2026-08-10 the two came apart. Kept last
-     in the list so a reading here is never mistaken for a neighbour's. #}
+     says what is happening, and on 2026-08-10 the two came apart. The badge
+     sits on the name line, ahead of the ⓘ, so a reading here is never
+     mistaken for a neighbour's. #}
   {% if governor.state == 'governing' %}{% set t_tone = 'warn' %}
   {% elif governor.state == 'armed' %}{% set t_tone = 'ok' %}
   {% elif governor.state == 'off' %}{% set t_tone = 'muted' %}
   {% else %}{% set t_tone = 'bad' %}{% endif %}
   <div class="sw tone-{{ t_tone }}" id="sw-governor">
     <div class="sw-main">
-      <div class="sw-name"><a href="/signals/trail-governor">Trail governor <span class="stat-away">↗</span></a></div>
-      <p class="sw-state">
+      <div class="sw-name"><a href="/signals/trail-governor">Trail governor <span class="stat-away">↗</span></a>
         {% if governor.state == 'governing' %}
           <span class="badge badge-warn">Governing {{ governor.governed }}</span>
         {% elif governor.state == 'armed' %}
@@ -393,76 +419,63 @@
         {% if governor.state in ('armed', 'governing') and governor.timeframe %}
           <span class="muted small">on {{ governor.timeframe }} bars</span>
         {% endif %}
-      </p>
-      <p class="note">The only mechanism that moves a real resting stop.
-        Read-only here — the master switch is under Tunables → Stops &amp; exits,
-        and each account opts in on <a href="/control/users">Control → Users</a>.</p>
+        {% call info("About the trail governor") %}
+          <p>The only mechanism that moves a real resting stop. It is read-only
+            here: the master switch is under Tunables → Stops &amp; exits, and
+            each account opts in on <a href="/control/users">Control → Users</a>.</p>
+          <p>This row reads what the governor is <em>doing</em> (its own diag),
+            not what its switch says.</p>
+        {% endcall %}
+      </div>
     </div>
     <div class="sw-act">
-      <a class="btn btn-plain" href="/signals/trail-governor">Open governor page</a>
+      <a class="btn btn-plain" href="/signals/trail-governor">Open</a>
     </div>
   </div>
 
   </div><!-- /.sw-list -->
 </section>
 
-<h2 class="sec-head" id="sec-positions">Open positions <span class="muted">— live, refreshes every 5s</span></h2>
+<h2 class="sec-head" id="sec-positions">Open positions</h2>
 <section class="card">
   <div hx-get="/control/positions" hx-trigger="load, every 5s" hx-swap="innerHTML">
     <p class="muted">Loading positions…</p>
   </div>
 </section>
 
-<h2 class="sec-head" id="sec-tunables">Engine tunables
-  {% if changed_total %}<span class="pill-chg">{{ changed_total }} changed</span>{% endif %}</h2>
+<div class="title-row sec-head-row">
+  <h2 class="sec-head" id="sec-tunables">Engine tunables</h2>
+  {% if changed_total %}<span class="pill-chg">{{ changed_total }} changed</span>{% endif %}
+  {% call info("About engine tunables") %}
+    <p>Live runtime knobs. A change applies within 5 seconds, survives
+      restarts, and needs no redeploy. They write to the engine's
+      <code>control/runtime_tunables</code> store. The 2026-07-07 exit overhaul
+      ships ACTIVE with every knob controlled from here; its defaults were
+      calibrated on the 7-day study (52% of stops were shakeouts; 84% of
+      break-even scratches were winners that resumed).</p>
+    <p>{% if changed_total %}<strong>{{ changed_total }}</strong> of
+      {{ tunable_groups.values()|map('length')|sum }} are off their boot
+      default — those rows are marked changed.{% else %}Every tunable is
+      currently at its boot default.{% endif %}</p>
+    <p><strong>Filtering hides rows, it does not exclude them from a save</strong>
+      — a hidden field still posts its current value, so applying a category
+      always writes that whole category exactly as it stands.</p>
+    <p>An edit you have not applied is marked blue and counted on the Apply
+      bar, which follows you down an open category. Each knob's ⓘ has its
+      description and key.</p>
+  {% endcall %}
+</div>
 <section class="card">
-  <p class="lede">
-    Live runtime knobs. A change applies within 5 seconds, survives restarts,
-    and needs no redeploy.
-  </p>
-  <details class="explain">
-    <summary>How this works</summary>
-    <div class="explain-body">
-      <p>
-        These write to the engine's <code>control/runtime_tunables</code>
-        store — the engine picks changes up within 5 seconds, survives
-        restarts, and never needs a <code>.env</code> edit. The 2026-07-07 exit
-        overhaul ships ACTIVE with every knob controlled from here; its
-        defaults were calibrated on the 7-day study (52% of stops were
-        shakeouts; 84% of break-even scratches were winners that resumed).
-      </p>
-      <p>
-        Categories are collapsed; open the one you need, or filter.
-        <strong>Filtering hides rows, it does not exclude them from a save</strong>
-        — a hidden field still posts its current value, so applying a category
-        always writes that whole category exactly as it stands.
-      </p>
-      <p>
-        An edit you have not applied is marked in blue and counted on the Apply
-        bar, which follows you down an open category. Click a description to
-        read all of it.
-      </p>
-    </div>
-  </details>
   {% if tunable_groups %}
   <div class="tun-toolbar">
     <input type="search" id="tun-filter" class="tun-filter"
-           placeholder="Filter {{ tunable_groups.values()|map('length')|sum }} tunables by name, key or description…"
+           placeholder="Filter {{ tunable_groups.values()|map('length')|sum }} tunables…"
            autocomplete="off" aria-label="Filter tunables">
     <label class="tg tun-only-changed">
       <input type="checkbox" class="toggle" id="tun-changed-only"> Only changed
     </label>
     <span class="muted small" id="tun-count"></span>
   </div>
-  <p class="muted small">
-    {% if changed_total %}
-      <strong>{{ changed_total }}</strong> of
-      {{ tunable_groups.values()|map('length')|sum }} are off their boot
-      default — those rows are marked <span class="pill-chg">changed</span>.
-    {% else %}
-      Every tunable is currently at its boot default.
-    {% endif %}
-  </p>
   {% endif %}
   {% if not tunables_initialised and not tunable_groups %}
     <p class="muted">Engine tunables unavailable — the engine reports the
@@ -505,9 +518,11 @@
                 <label for="tun-{{ t.key }}"><strong>{{ t.label }}</strong></label>
                 {% if t.unit %}<span class="muted small">{{ t.unit }}</span>{% endif %}
                 {% if t.changed %}<span class="pill-chg">changed</span>{% endif %}
-                <code class="tun-key">{{ t.key }}</code>
+                {% call info(t.label) %}
+                  <p>{{ t.description }}</p>
+                  <p>Key <code>{{ t.key }}</code></p>
+                {% endcall %}
               </div>
-              <p class="muted tunable-desc">{{ t.description }}</p>
             </td>
             <td class="tunable-input">
               {% if t.type == 'bool' %}
@@ -722,13 +737,9 @@
   window.addEventListener('beforeunload', function (ev) {
     if (pending > 0) { ev.preventDefault(); ev.returnValue = ''; }
   });
-  /* A description is clamped to two lines; a click shows all of it. */
-  document.addEventListener('click', function (ev) {
-    var d = ev.target.closest && ev.target.closest('.tunable-desc');
-    if (d) d.closest('.tun-row').classList.toggle('expanded');
-  });
 })();
 </script>
+
 
 {# The one irreversible action on the page rendered in a card identical to the
    five reversible ones above it. Given its own section head and frame so the
@@ -737,18 +748,18 @@
 <section class="card card-danger">
   <div class="sw">
     <div class="sw-main">
-      <div class="sw-name">Full signal reset</div>
-      <p class="note">
-        Clears ALL signals everywhere: active signals shown in the app,
-        signal history feed, performance stats, invalidation records,
-        and paper trade positions for all users. Use after a doctrinal
-        change or to start a fresh test cycle.
-      </p>
-      <p class="note danger-text">
-        ⚠ This cannot be undone. Active signals are cleared from the app
-        immediately (isolated mode: within ≤15s). Paper positions are
-        closed at zero-move fills.
-      </p>
+      <div class="sw-name">Full signal reset
+        {% call info("About the full signal reset") %}
+          <p>Clears ALL signals everywhere: active signals shown in the app,
+            signal history feed, performance stats, invalidation records,
+            and paper trade positions for all users. Use after a doctrinal
+            change or to start a fresh test cycle.</p>
+          <p>⚠ This cannot be undone. Active signals are cleared from the app
+            immediately (isolated mode: within ≤15s). Paper positions are
+            closed at zero-move fills.</p>
+        {% endcall %}
+      </div>
+      <p class="sw-state danger-text">Cannot be undone.</p>
     </div>
     <div class="sw-act">
       <form method="post" action="/control/reset-signals"
@@ -764,14 +775,15 @@
   {% if audit %}
   <div class="table-scroll">
   <table class="data-table audit">
-    <thead><tr><th>When (UTC)</th><th>Action</th><th>Params</th><th>Result</th></tr></thead>
+    <thead><tr><th>When (UTC)</th><th>Action</th><th>Result</th><th>Params</th></tr></thead>
     <tbody>
       {% for e in audit %}
+      {% set params = e.get('params', {})|tojson %}
       <tr class="{% if e.get('ok') %}row-ok{% else %}row-err{% endif %}">
         <td class="nowrap">{{ e.get('ts')|when }}</td>
         <td><code>{{ e.get('action', '') }}</code></td>
-        <td class="params">{{ e.get('params', {})|tojson }}</td>
-        <td>{% if e.get('ok') %}<span class="badge badge-ok">ok</span>{% else %}<span class="badge badge-bad">failed</span> <span class="params">{{ e.get('result') }}</span>{% endif %}</td>
+        <td class="nowrap">{% if e.get('ok') %}<span class="badge badge-ok">ok</span>{% else %}<span class="badge badge-bad" title="{{ e.get('result') }}">failed</span>{% endif %}</td>
+        <td class="params" title="{{ params }}">{{ params }}</td>
       </tr>
       {% endfor %}
     </tbody>
