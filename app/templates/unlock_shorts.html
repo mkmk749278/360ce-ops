@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% from "_info.html" import info %}
+{% block content %}
+
+{%- macro signed(v, places=2) -%}
+{%- if v is none -%}—{%- else -%}<span class="{{ 'pos' if v > 0 else ('neg' if v < 0 else '') }}">{{ '%+.*f'|format(places, v) }}</span>{%- endif -%}
+{%- endmacro -%}
+
+{%- macro filters_badge(r) -%}
+{%- if r.get('selected') is sameas true -%}<span class="badge badge-ok">PASS</span>
+{%- elif r.get('selected') is sameas false -%}<span class="badge badge-warn">REJECT</span>
+<span class="muted small">{% if r.get('crowded') %}crowded{% endif %}{% if r.get('crowded') and r.get('running') %} · {% endif %}{% if r.get('running') %}running{% endif %}</span>
+{%- else -%}<span class="badge badge-muted">UNKNOWN</span>
+{%- endif -%}
+{%- endmacro -%}
+
+<div class="page-head">
+  <div class="title-row">
+    <h1>Unlock shorts <span class="badge badge-muted">DARK</span></h1>
+    {% call info("What this lane measures", wide=true) %}
+      <p>Short the two weeks before a large <strong>team / investor</strong> token
+      unlock: enter at the close of <strong>T−14</strong>, cover at the close of
+      <strong>T+2</strong>. An unlock qualifies at ≥ {{ '%.1f'|format((report.rule.get('min_fraction') or 0.005) * 100) }}% of
+      max supply, to insiders, on a Binance USDT perp.</p>
+      <p>Why: insiders hold tokens with a near-zero cost basis and the date is
+      public, so the market leans on the price beforehand. Research:
+      <code>{{ report.rule.get('research_doc') or 'docs/SHORTS_MARKET_RESEARCH_2026_09_25.md' }}</code>.</p>
+      <p><strong>Dark means dark.</strong> Nothing here reaches a subscriber, the
+      signal queue or an order. The engine reads public market data and the
+      DefiLlama vesting calendar and writes one ledger; this page renders it.</p>
+      <p>Two squeeze filters are <strong>stamped, never applied</strong> — every
+      unlock is walked, so the rule and the filtered rule are measured side by side:
+      <em>crowded</em> (last settled funding ≤ {{ '%.2f'|format((report.rule.get('crowded_funding') or -0.0003) * 100) }}%) and
+      <em>running</em> (up more than {{ '%.0f'|format((report.rule.get('running_ret_14d') or 0.2) * 100) }}% in the 14 days into entry).
+      They were exploratory in the research; this lane is how they earn or lose their place.</p>
+      <p>Every figure is the <strong>short's</strong> PnL in % of notional:
+      positive means the short made money. Fees ({{ report.rule.get('fee_rt_pct', 0.07) }}%) and slippage
+      ({{ report.rule.get('slip_rt_pct', 0.10) }}%) per round trip and the funding actually settled while the row was open are all charged.</p>
+    {% endcall %}
+  </div>
+  <p class="lede muted">The one short mechanism that survived twelve months of research, measured forward on real
+  prices before anyone may trade it.</p>
+</div>
+
+{# ── lane state ───────────────────────────────────────────────────────── #}
+<div class="card">
+  <p>
+    {% if report.state == 'live' %}<span class="badge badge-ok">LIVE</span>
+    {% elif report.state == 'off' %}<span class="badge badge-warn">OFF</span>
+    {% elif report.state == 'stale' %}<span class="badge badge-err">STALE</span>
+    {% elif report.state == 'missing' %}<span class="badge badge-warn">NOT WRITTEN</span>
+    {% else %}<span class="badge badge-err">UNREADABLE</span>{% endif %}
+    {% if report.written_at %}
+      engine wrote this {{ report.written_age_sec|duration }} ago
+      <span class="muted small">({{ report.written_at|when }})</span>
+    {% endif %}
+  </p>
+  {% if report.state_detail %}<p class="small">{{ report.state_detail }}</p>{% endif %}
+  {% if report.load_refused %}
+  <p class="small"><span class="badge badge-err">WINDOW NOT RESTORED</span>
+    the engine refused its stored ledger at boot (<code>{{ report.load_refused }}</code>) and started clean.</p>
+  {% endif %}
+  {% if report.state not in ('missing', 'unreadable') %}
+  {# A div, not a paragraph: an ⓘ is a details element, and the parser closes a
+     paragraph at it — the icon then drops onto its own line (the Control
+     overhaul's lesson). #}
+  <div class="small">
+    Calendar
+    {% if report.calendar_state == 'ok' %}<span class="badge badge-ok">OK</span>
+    {% elif report.calendar_state == 'retrying' %}<span class="badge badge-warn">RETRYING</span>
+    {% elif report.calendar_state == 'stale' %}<span class="badge badge-err">STALE</span>
+    {% elif report.calendar_state == 'failing' %}<span class="badge badge-err">NEVER READ</span>
+    {% else %}<span class="badge badge-muted">NOT YET READ</span>{% endif %}
+    {% if report.calendar.get('last_ok_at') %}
+      read {{ report.calendar_age_sec|duration }} ago ·
+      {{ report.calendar.get('qualifying_events', '—') }} qualifying unlocks ·
+      {{ report.calendar.get('tokens_total', '—') }} tokens tracked
+    {% endif %}
+    {% call info("About the calendar") %}
+      <p>DefiLlama's public <code>emissionsIndex</code>, read once a day in a separate
+      process so the engine never holds the 22 MB file. A failed read retries hourly
+      and keeps the existing schedule; a read made while Binance's symbol list was
+      not loaded is retried rather than counted, because "could not map" is not
+      "not listed".</p>
+      {% if report.calendar.get('last_changes') %}
+      <p>Last read: {% for k, v in report.calendar['last_changes'].items() %}<code>{{ k }}</code> {{ v }}{% if not loop.last %} · {% endif %}{% endfor %}</p>
+      {% endif %}
+    {% endcall %}
+  </div>
+  {% if report.calendar.get('last_error') %}
+  <p class="small"><span class="badge badge-warn">LAST CALENDAR ERROR</span>
+    {{ report.calendar['last_error'] }}
+    {% if report.calendar.get('last_error_at') %}<span class="muted">· {{ report.calendar['last_error_at']|when }}</span>{% endif %}</p>
+  {% endif %}
+  {% endif %}
+</div>
+
+{% if report.state not in ('missing', 'unreadable') %}
+
+{# ── headline counts ──────────────────────────────────────────────────── #}
+<div class="kpis">
+  <div class="kpi"><div class="kpi-label">Scheduled</div><div class="kpi-value">{{ report.upcoming|length }}</div>
+    <div class="muted small">waiting for T−14</div></div>
+  <div class="kpi"><div class="kpi-label">Open</div><div class="kpi-value">{{ report.open_rows|length }}</div>
+    <div class="muted small">{% if report.stalled_open %}<span class="neg">{{ report.stalled_open }} stalled</span>{% else %}walked hourly{% endif %}</div></div>
+  <div class="kpi"><div class="kpi-label">Closed</div><div class="kpi-value">{{ report.closed_total }}</div>
+    <div class="muted small">with every variant priced</div></div>
+  <div class="kpi"><div class="kpi-label">First verdict due</div>
+    <div class="kpi-value small">{{ report.first_verdict_due|when if report.first_verdict_due else '—' }}</div>
+    <div class="muted small">the earliest T+2 close owed</div></div>
+</div>
+
+{# ── results ──────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="title-row">
+    <h2>Results — closed rows</h2>
+    {% call info("How to read this table", wide=true) %}
+      <p><strong>Read n first.</strong> An interval is printed only from {{ 5 }} rows and is
+      symbol-clustered: a token with monthly vesting adds a row a month, and those rows
+      are not independent evidence.</p>
+      <p>The four groups are never pooled. <em>All unlocks</em> is the rule as registered;
+      the other three split it by the filters. <em>Filter input missing</em> is its own
+      group — folding it into either side is how a filter takes credit for rows it never judged.</p>
+      <p>The variants are never blended into one number: no stop, the two stops and the two
+      hedges answer different questions.</p>
+      {% for key, label, desc in variants %}<p><strong>{{ label }}</strong> — {{ desc }}.</p>{% endfor %}
+    {% endcall %}
+  </div>
+  {% set bt = report.rule.get('backtest') or {} %}
+  {% if bt %}
+  <p class="muted small">Backtest reference ({{ bt.get('window', '') }}), not a live result and never pooled with one:
+    all unlocks, no stop {{ signed(bt.get('all_no_stop_net_pct')) }}% · BTC-hedged {{ signed(bt.get('all_btc_hedged_net_pct')) }}% ·
+    filters pass, 20% stop {{ signed(bt.get('selected_stop20_net_pct')) }}% · filters pass, alt-hedged {{ signed(bt.get('selected_alt_hedged_net_pct')) }}%.
+    {{ bt.get('note', '') }}</p>
+  {% endif %}
+  {% if report.closed_total == 0 %}
+  <p class="small">No row has closed yet.
+    {% if report.first_verdict_due %}The first can close no earlier than <strong>{{ report.first_verdict_due|when }}</strong> —
+    a row is held from T−14 to T+2, so the first verdict arrives about sixteen days after the first entry.{% endif %}</p>
+  {% else %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>Group</th><th>Variant</th><th class="num">n</th><th class="num">Avg net %</th>
+      <th class="num">Median %</th><th class="num">Win %</th><th>95% interval</th><th class="num">Stops hit</th></tr></thead>
+    <tbody>
+    {% for bkey, blabel in buckets %}
+      {% for vkey, vlabel, vdesc in variants %}
+      {% set c = report.matrix[bkey][vkey] %}
+      <tr>
+        <td class="small">{% if loop.first %}<strong>{{ blabel }}</strong> <span class="muted">({{ report.bucket_n[bkey] }})</span>{% endif %}</td>
+        <td class="small">{{ vlabel }}</td>
+        <td class="num">{{ c.n }}{% if c.missing %} <span class="muted small">+{{ c.missing }} unpriced</span>{% endif %}</td>
+        <td class="num">{{ signed(c.mean) }}</td>
+        <td class="num">{{ signed(c.median) }}</td>
+        <td class="num">{{ c.win|pct(0) }}</td>
+        <td class="small nowrap">{% if c.ci %}[{{ signed(c.ci[0]) }}, {{ signed(c.ci[1]) }}]{% else %}<span class="muted">n &lt; 5</span>{% endif %}</td>
+        <td class="num">{{ c.stops_hit if c.stops_hit is not none else '' }}</td>
+      </tr>
+      {% endfor %}
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+
+{# ── open rows ────────────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="title-row">
+    <h2>Open — being walked</h2>
+    {% call info("How to read the open rows") %}
+      <p><strong>Freshness leads.</strong> A live mark is only honest beside a row that can
+      say whether it is still being walked: <em>behind</em> is how many hourly bars the
+      engine's walk is short of now, graded on the engine's own stamps. Three or more is
+      <span class="badge badge-err">STALLED</span>.</p>
+      <p>The mark is this page's own live price (one request for the whole book). The
+      unrealized figure is gross — fees are charged at close. <em>Worst so far</em> is how
+      far price has risen above entry: the squeeze the stops are measured against.</p>
+      <p>A stop shows <em>hit</em> once the engine's walk has seen a bar touch it. A
+      negative room with no hit means the mark has crossed the level and the walk has not
+      reached that bar yet.</p>
+    {% endcall %}
+  </div>
+  {% if not report.open_rows %}
+  <p class="muted small">No open rows. Entries are stamped at 00:00 UTC on each unlock's T−13.</p>
+  {% else %}
+  {% if not report.marks_available %}<p class="small"><span class="badge badge-warn">NO LIVE MARKS</span> the price request failed or the ban breaker is open; marks read —.</p>{% endif %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>Freshness</th><th>Symbol</th><th>Unlock</th><th>Filters</th><th class="num">Entry</th>
+      <th class="num">Mark</th><th class="num">Unrealized %</th><th class="num">Funding %</th>
+      <th class="num">Worst so far %</th><th class="num">Room to 20%</th><th class="num">Room to 40%</th><th class="num">Exit in</th></tr></thead>
+    <tbody>
+    {% for r in report.open_rows %}
+    <tr>
+      <td class="small nowrap">{% if r.get('stalled') %}<span class="badge badge-err">STALLED</span>{% endif %}
+        {{ r.get('bars_behind', '—') }} behind
+        {% if r.get('last_miss_reason') %}<span class="muted">· {{ r['last_miss_reason'] }}</span>{% endif %}</td>
+      <td class="mono">{{ r.symbol }}</td>
+      <td class="small nowrap">{{ r.unlock_date }} · {{ '%.2f'|format((r.fraction or 0) * 100) }}%</td>
+      <td class="small">{{ filters_badge(r) }}</td>
+      <td class="num">{{ r.entry_price|price }}</td>
+      <td class="num">{{ r.mark|price }}</td>
+      <td class="num">{{ signed(r.unrealized_gross_pct) }}</td>
+      <td class="num">{{ signed(r.funding_so_far_pct, 3) }}</td>
+      <td class="num">{{ r.mae_pct|pct(1) }}</td>
+      {% for pct in (20, 40) %}
+      <td class="num">{% set room = r.room[pct] %}{% if room == 'hit' %}<span class="badge badge-err">HIT</span>{% elif room is none %}—{% elif room < 0 %}<span class="badge badge-warn">CROSSED</span>{% else %}{{ room|pct(1) }}{% endif %}</td>
+      {% endfor %}
+      <td class="num nowrap">{{ '%.1f'|format(r.days_to_exit) if r.days_to_exit is not none else '—' }}d</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+
+{# ── upcoming ─────────────────────────────────────────────────────────── #}
+<div class="card">
+  <h2>Upcoming entries</h2>
+  {% if not report.upcoming %}
+  <p class="muted small">Nothing scheduled.{% if report.calendar_state != 'ok' %} The calendar has not been read successfully yet — see above.{% endif %}</p>
+  {% else %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>Entry (close of T−14)</th><th class="num">In</th><th>Symbol</th><th>Token</th><th>Unlock</th>
+      <th class="num">% of max supply</th><th>To</th></tr></thead>
+    <tbody>
+    {% for r in report.upcoming[:60] %}
+    <tr>
+      <td class="small nowrap">{{ r.entry_due_ts|when }}</td>
+      <td class="num">{{ '%.1f'|format(r.days_to_entry) if r.days_to_entry is not none else '—' }}d</td>
+      <td class="mono">{{ r.symbol }}</td>
+      <td class="small">{{ r.token_name }}</td>
+      <td class="small nowrap">{{ r.unlock_date }}</td>
+      <td class="num">{{ '%.2f'|format((r.fraction or 0) * 100) }}</td>
+      <td class="small">{{ r.recipients }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if report.upcoming|length > 60 %}<p class="muted small">Showing the next 60 of {{ report.upcoming|length }}; the export has every row.</p>{% endif %}
+  {% endif %}
+</div>
+
+{# ── closed rows ──────────────────────────────────────────────────────── #}
+{% if report.closed_rows %}
+<div class="card">
+  <h2>Closed rows</h2>
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>Symbol</th><th>Unlock</th><th>Filters</th><th class="num">Entry</th><th class="num">Exit</th>
+      <th class="num">No stop %</th><th class="num">20% stop %</th><th class="num">40% stop %</th>
+      <th class="num">BTC-hedged %</th><th class="num">Alt-hedged %</th></tr></thead>
+    <tbody>
+    {% for r in report.closed_rows %}
+    {% set res = r.results or {} %}
+    <tr>
+      <td class="mono">{{ r.symbol }}</td>
+      <td class="small nowrap">{{ r.unlock_date }} · {{ '%.2f'|format((r.fraction or 0) * 100) }}%</td>
+      <td class="small">{{ filters_badge(r) }}</td>
+      <td class="num">{{ r.entry_price|price }}</td>
+      <td class="num">{{ r.exit_price|price }}{% if r.exit_basis == 'bar_close' %} <span class="muted small">bar close</span>{% endif %}</td>
+      <td class="num">{{ signed(res.get('net_pct')) }}</td>
+      <td class="num">{{ signed((res.get('stop20') or {}).get('net_pct')) }}{% if (res.get('stop20') or {}).get('hit') %} <span class="muted small">hit</span>{% endif %}</td>
+      <td class="num">{{ signed((res.get('stop40') or {}).get('net_pct')) }}{% if (res.get('stop40') or {}).get('hit') %} <span class="muted small">hit</span>{% endif %}</td>
+      <td class="num">{{ signed(res.get('btc_hedged_pct')) }}</td>
+      <td class="num">{{ signed(res.get('alt_hedged_pct')) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if report.closed_capped %}<p class="muted small">Showing the newest {{ report.closed_rows|length }} of {{ report.closed_total }}; the export is uncapped.</p>{% endif %}
+</div>
+{% endif %}
+
+{# ── refusals and statuses ────────────────────────────────────────────── #}
+<div class="card">
+  <div class="title-row">
+    <h2>Every row, by status</h2>
+    {% call info("Why refusals are counted, not hidden") %}
+      <p>A row the lane could not measure honestly is kept and named. <em>Missed</em> entries
+      are never backfilled — a number reconstructed after the fact and filed beside recorded
+      ones is the most dangerous artefact this system could produce. <em>Late</em> separates
+      the lane's own start from a calendar that published late, because only the second says
+      anything about whether the rule is tradeable.</p>
+    {% endcall %}
+  </div>
+  {% if not report.status_rows %}
+  <p class="muted small">No rows yet.</p>
+  {% else %}
+  <table class="kv">
+    {% for st, n, copy, known in report.status_rows %}
+    <tr><th>{{ st }}{% if not known %} <span class="badge badge-warn">unclassified</span>{% endif %}</th>
+      <td>{{ n }} <span class="muted small">{{ copy }}</span></td></tr>
+    {% endfor %}
+  </table>
+  {% if report.reason_rows %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>Status</th><th>Reason</th><th class="num">Rows</th><th>What it means</th></tr></thead>
+    <tbody>
+    {% for st, why, n, copy, known in report.reason_rows %}
+    <tr><td class="small">{{ st }}</td>
+      <td class="mono small">{{ why }}{% if not known %} <span class="badge badge-warn">unclassified</span>{% endif %}</td>
+      <td class="num">{{ n }}</td><td class="small">{{ copy }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+
+{# ── lane internals ───────────────────────────────────────────────────── #}
+<div class="card">
+  <div class="title-row">
+    <h2>Lane internals</h2>
+    {% call info("Vendor budget") %}
+      <p>Public Binance endpoints only, through the engine's shared rate limiter. At most
+      {{ report.rule.get('max_calls_per_cycle', 150) }} calls per 5-minute cycle, charged before each
+      call. An entry the budget or a failed fetch could not cover waits for the next cycle
+      rather than stamping its filters as unknown.</p>
+    {% endcall %}
+  </div>
+  <table class="kv">
+    <tr><th>Last cycle</th><td class="small">{% if report.last_cycle_at %}{{ report.last_cycle_at|when }} ·
+      {% for k, v in report.last_cycle.items() if v %}<code>{{ k }}</code> {{ v }}{% if not loop.last %} · {% endif %}{% else %}nothing due{% endfor %}{% else %}—{% endif %}</td></tr>
+    <tr><th>This boot</th><td class="small">{% for k, v in report.counters.items() if v %}<code>{{ k }}</code> {{ v }}{% if not loop.last %} · {% endif %}{% else %}—{% endfor %}</td></tr>
+    <tr><th>Rows in file</th><td>{{ report.n_rows }}{% if report.evicted %} <span class="muted small">· {{ report.evicted }} older terminal rows rotated out</span>{% endif %}</td></tr>
+  </table>
+</div>
+
+{% endif %}
+
+<p class="export-row small"><a href="/signals/unlock-shorts/export.csv">Export every row (CSV, uncapped)</a></p>
+
+{% endblock %}

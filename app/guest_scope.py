@@ -113,6 +113,9 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/signals/governor-live/export.csv",
         "/signals/dark-live",
         "/signals/dark-live/export.csv",
+        # Unlock-short dark lane: measurement only, no control on the page.
+        "/signals/unlock-shorts",
+        "/signals/unlock-shorts/export.csv",
         "/signals/entry-features",
         "/signals/entry-features/export.csv",
         "/signals/ai-governor",
