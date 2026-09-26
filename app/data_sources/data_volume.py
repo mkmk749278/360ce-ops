@@ -158,6 +158,10 @@ STRUCTURAL_SNAP_FILE = f"structural_snap_v{STRUCTURAL_SNAP_VERSION}.json"
 STRUCTURAL_VETO_VERSION = 1
 STRUCTURAL_VETO_FILE = f"structural_veto_v{STRUCTURAL_VETO_VERSION}.json"
 
+#: Unlock-short dark lane (engine ``src/unlock_shorts.py``, 2026-09-25).
+UNLOCK_SHORTS_VERSION = 1
+UNLOCK_SHORTS_FILE = f"unlock_shorts_v{UNLOCK_SHORTS_VERSION}.json"
+
 
 
 class DataVolumeReader:
@@ -239,6 +243,22 @@ class DataVolumeReader:
         events with different fixes.
         """
         return self._load(STRUCTURAL_VETO_FILE)
+
+    def unlock_shorts(self) -> Any:
+        """Unlock-short dark lane (engine ``src/unlock_shorts.py``).
+
+        Shape::
+
+            {"schema": 1, "written_at": <epoch>, "enabled": bool,
+             "rule": {...}, "calendar": {...}, "counters": {...},
+             "last_cycle": {...}, "last_cycle_at": <epoch>, "evicted": N,
+             "rows": [<row>, ...]}
+
+        The rule, the calendar's freshness and the per-boot counters ride in
+        the file, so the page renders the engine's thresholds rather than a
+        copy of them — one writer, one reader.
+        """
+        return self._load(UNLOCK_SHORTS_FILE)
 
     def invalidation_records(self) -> Any:
         return self._load("invalidation_records.json")
