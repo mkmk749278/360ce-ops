@@ -786,6 +786,38 @@ Rules the page carries, all ports rather than inventions:
 entry is knowable only at entry — so records closed before that deploy render as their
 own `UNPLACED` bucket rather than being folded into a real regime.
 
+### Two rebased rows, and why neither is "the" real result (2026-09-26)
+
+The entry-fidelity panel carries a third row, **rebased, break-even at the
+fill** (engine `entry_fidelity.be_at_fill_pnl_pct`, ported here and pinned
+against the engine in `tests/test_entry_fidelity_page.py`).
+
+**The first rebased row is right about levels and wrong about one outcome.**
+It keeps every exit LEVEL and moves only the entry. A stop or a target rests
+at an absolute price, so that is correct for them. A break-even stop rests
+*relative to its anchor*: the book parks it at the stamped entry, while a live
+position parks it at its own fill (`pretp_dispatcher`: `entry_price_filled`).
+So the first row books every drifted scratch as a loss of the whole drift,
+which no user takes.
+
+On MVRTP longs with drift ≥ 0.5%, that reads **−0.29% rebased and −0.05% at
+the fill**. A 1m-tape replay with live break-even semantics put the same rows
+at −0.03% to −0.08% (360-v2 `docs/LONGS_RESEARCH_2026_09_26.md` §11).
+
+The second row is still an approximation. A live position's break-even also
+*arms* from its fill, so on a drifted trade it arms later, and some scratches
+would have ended elsewhere. Hence three rows, one population, no blend. This
+is the both-fills rule arriving at a third surface.
+
+**The admission filter and split live on this page** for the same study
+(core pairs vs promoted movers). `UNSTAMPED` is its own option, never folded
+into `CORE`, and every selector counts with every filter but its own.
+
+**One pointer rotted here.** This port's docstring named
+`tests/test_entry_fidelity_contract.py` as its guard, a file that never
+existed. The real contract tests sit in `test_entry_fidelity_page.py`.
+A pointer to the guard is part of the guard: grep it, don't trust it.
+
 
 ## `/diagnostics/data-intake` — the price-action lane card
 

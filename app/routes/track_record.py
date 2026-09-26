@@ -77,6 +77,10 @@ WINDOWS = ("1d", "7d", "30d", "90d", "all", "custom")
 # ``amount * pnl_pct / 100`` with no leverage assumption invented.
 DEFAULT_AMOUNT_USDT = 100.0
 
+#: The filter value for a row closed before the engine stamped
+#: ``pair_admission`` (2026-07-30). Named, never folded into CORE.
+ADMISSION_UNSTAMPED = "UNSTAMPED"
+
 # Round-trip cost, both legs, as a percentage of notional. 0.07 = Binance USD-M
 # maker 0.02% on the entry + taker 0.05% on the exit — the owner's default
 # (2026-08-03). Editable, and 0 renders the gross book.
@@ -322,6 +326,12 @@ def reduce_records(records: Any) -> list[dict]:
             # spreadsheet is exactly where the first two would get averaged into
             # the third.
             "pair_admission": str(rec.get("pair_admission") or ""),
+            # The same fact as a filter value. ``pair_admission`` stays raw for
+            # the export; this names the empty string, because a selector
+            # option reading "" is unclickable and a row closed before the
+            # engine stamped admission (2026-07-30) is its own population —
+            # never folded into CORE, which is what "" would read as.
+            "admission": str(rec.get("pair_admission") or "") or ADMISSION_UNSTAMPED,
             "promotion_age_sec": rec.get("promotion_age_sec"),
             # Which KIND of mover admitted the pair: signed 24h % at promotion,
             # positive for a top gainer and negative for a top loser. The
@@ -348,7 +358,16 @@ def reduce_records(records: Any) -> list[dict]:
             "first_observed_stale": bool(rec.get("first_observed_stale")),
             "entry_drift_pct": _fidelity["drift_pct"],
             "rebased_pnl_pct": _fidelity["rebased_pnl_pct"],
+            # The same row with a break-even exit priced at the fill, where a
+            # live position's break-even actually sits — see
+            # ``entry_fidelity.be_at_fill_pnl_pct``. A THIRD column beside the
+            # other two, never a replacement for either.
+            "rebased_be_at_fill_pct": _fidelity["rebased_be_at_fill_pct"],
             "rebase_refusal": _fidelity["refusal"],
+            # The target the trade closed against (engine, 2026-09-26). 0.0 is
+            # the engine's "not knowable" for a row closed before the stamp —
+            # carried as-is so the export says what the engine said.
+            "shipped_tp1_distance_pct": rec.get("shipped_tp1_distance_pct"),
             # MFE as recorded, and the unclamped peak beside it. The recorded
             # pair cannot cross zero, so "+0.00%" means "never went positive",
             # "printed exactly its entry" and "never measured" at once; the
@@ -480,6 +499,7 @@ def filter_rows(
     setup: str = "",
     symbol: str = "",
     direction: str = "",
+    admission: str = "",
 ) -> list[dict]:
     """Apply the selectors (pure). Undateable rows drop out of any dated range."""
     out = list(rows)
@@ -503,6 +523,8 @@ def filter_rows(
         out = [r for r in out if r["symbol"] == symbol]
     if direction:
         out = [r for r in out if r["direction"] == direction]
+    if admission:
+        out = [r for r in out if r["admission"] == admission]
     return out
 
 
@@ -807,8 +829,14 @@ _TRADE_COLS = [
     # two populations get averaged into one. ``rebase_refusal`` travels with
     # them so a blank is a named state rather than a missing number, and
     # ``peak_pnl_pct`` travels beside ``mfe_pct`` for the same reason.
-    "first_observed_price", "entry_drift_pct", "rebased_pnl_pct", "rebase_refusal",
+    "first_observed_price", "entry_drift_pct", "rebased_pnl_pct",
+    # Beside ``rebased_pnl_pct``, never instead of it: the same row with a
+    # break-even exit priced at the fill (see entry_fidelity.be_at_fill_pnl_pct).
+    "rebased_be_at_fill_pct", "rebase_refusal",
     "mfe_pct", "peak_pnl_pct",
+    # The target the trade closed against, which the record never carried
+    # before 2026-09-26 — every entry/exit study had to approximate it.
+    "shipped_tp1_distance_pct",
 ]
 
 
@@ -855,15 +883,19 @@ def _page_context(request: Request, **q) -> dict:
     # Every selector is measured with every OTHER filter applied, never its own
     # — a selector applied to its own counts makes each option describe only
     # itself (the rule /signals/sar needed).
-    scoped = filter_rows(
+    base = filter_rows(
         all_rows, start=start, end=end,
         setup=q["setup"], symbol=q["symbol"], direction=q["direction"],
     )
+    admission = q.get("admission", "")
+    scoped = filter_rows(base, admission=admission)
     rows = filter_rows(scoped, regime=q["regime"])
     return {
         "rows": rows,
         "all_rows": all_rows,
         "scoped": scoped,
+        # The admission selector's own scope: every filter but itself.
+        "scoped_admission": filter_rows(base, regime=q["regime"]),
         "start": start,
         "end": end,
         "range_label": range_label,
@@ -883,6 +915,7 @@ async def track_record(
     setup: str = Query(""),
     symbol: str = Query(""),
     direction: str = Query(""),
+    admission: str = Query(""),
     amount: str = Query(""),
     fee_pct: str = Query(""),
     balance: str = Query(""),
@@ -905,6 +938,7 @@ async def track_record(
     q = dict(
         window=window, date_from=date_from, date_to=date_to,
         regime=regime, setup=setup, symbol=symbol, direction=direction,
+        admission=admission,
     )
     ctx = _page_context(request, **q)
     rows, all_rows, scoped = ctx["rows"], ctx["all_rows"], ctx["scoped"]
@@ -914,6 +948,10 @@ async def track_record(
     # panel computed over the whole ledger above a filtered table is not a
     # summary of anything the reader is looking at (#90).
     fidelity = entry_fidelity.summarise(rows)
+    # The same census per admission, over the same rows — the split the owner
+    # needs to decide "MVRTP longs on core pairs only" without flipping the
+    # filter back and forth (docs/LONGS_RESEARCH_2026_09_26.md §11.2).
+    fidelity_by_admission = entry_fidelity.split_by(rows, "admission")
     mfe_floor = entry_fidelity.mfe_floor(rows)
     concurrency = peak_concurrency(rows)
     required_usdt = concurrency["peak"] * amount_usdt
@@ -933,6 +971,7 @@ async def track_record(
         ),
         "summary": summary,
         "fidelity": fidelity,
+        "fidelity_by_admission": fidelity_by_admission,
         "mfe_floor": mfe_floor,
         "trades": ordered[:PER_TRADE_LIMIT],
         "trades_shown": min(len(ordered), PER_TRADE_LIMIT),
@@ -974,6 +1013,15 @@ async def track_record(
         "filter_setup": setup,
         "filter_symbol": symbol,
         "filter_direction": direction,
+        "filter_admission": admission,
+        # Iterated from the DATA — a new admission kind the engine starts
+        # stamping appears here on its own. Counts measured with every other
+        # filter applied but not their own.
+        "admissions": sorted({r["admission"] for r in all_rows}),
+        "admission_counts": {
+            name: sum(1 for r in ctx["scoped_admission"] if r["admission"] == name)
+            for name in sorted({r["admission"] for r in all_rows})
+        },
         "error": ctx["error"],
     })
 
@@ -989,6 +1037,7 @@ async def track_record_export(
     setup: str = Query(""),
     symbol: str = Query(""),
     direction: str = Query(""),
+    admission: str = Query(""),
     amount: str = Query(""),
     fee_pct: str = Query(""),
 ):
@@ -1001,6 +1050,7 @@ async def track_record_export(
         window=window if window in WINDOWS else "30d",
         date_from=date_from, date_to=date_to,
         regime=regime, setup=setup, symbol=symbol, direction=direction,
+        admission=admission,
     )
     ctx = _page_context(request, **q)
     buckets = bucket_rows(
@@ -1021,6 +1071,7 @@ async def track_record_trades_export(
     setup: str = Query(""),
     symbol: str = Query(""),
     direction: str = Query(""),
+    admission: str = Query(""),
     amount: str = Query(""),
     fee_pct: str = Query(""),
     sort: str = Query(""),
@@ -1039,6 +1090,7 @@ async def track_record_trades_export(
         window=window if window in WINDOWS else "30d",
         date_from=date_from, date_to=date_to,
         regime=regime, setup=setup, symbol=symbol, direction=direction,
+        admission=admission,
     )
     ctx = _page_context(request, **q)
     rows = decorate_money(ctx["rows"], amount=amount_usdt, fee_pct=fee)

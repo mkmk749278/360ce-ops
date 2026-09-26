@@ -112,6 +112,41 @@ def test_the_port_agrees_with_the_engine_on_a_shared_vector(
     assert ours["rebased_pnl_pct"] == pytest.approx(theirs.rebased_pnl_pct, abs=1e-9)
 
 
+@pytest.mark.parametrize(
+    "entry,pnl,direction,observed,label",
+    [
+        (100.0, 0.0, "LONG", 101.2, "BREAKEVEN_EXIT"),
+        (100.0, -0.15, "SHORT", 99.0, "BREAKEVEN_EXIT"),
+        (100.0, -3.0, "LONG", 101.0, "SL_HIT"),
+        (100.0, 4.1, "LONG", 100.6, "TP1_HIT"),
+        (100.0, 0.0, "LONG", 101.0, None),
+    ],
+)
+def test_break_even_at_fill_agrees_with_the_engine(
+    entry, pnl, direction, observed, label
+):
+    """The third figure is a port too, driven against the original — an ops
+    column the engine does not compute is a mirror nobody pinned."""
+    engine_ef = _engine_module()
+    if "outcome_label" not in engine_ef.rebase.__code__.co_varnames:
+        pytest.skip("engine beside ops predates break-even-at-fill (360-v2 #1070)")
+    theirs = engine_ef.rebase(
+        entry=entry, pnl_pct=pnl, direction=direction, observed_entry=observed,
+        outcome_label=label,
+    )
+    ours = ef.rebase_record(
+        {"entry": entry, "pnl_pct": pnl, "direction": direction,
+         "first_observed_price": observed, "outcome_label": label}
+    )
+    if theirs.rebased_be_at_fill_pct is None:
+        assert ours["rebased_be_at_fill_pct"] is None
+    else:
+        assert ours["rebased_be_at_fill_pct"] == pytest.approx(
+            theirs.rebased_be_at_fill_pct, abs=1e-9
+        )
+    assert ef.BREAKEVEN_EXIT == engine_ef.BREAKEVEN_EXIT
+
+
 def test_the_refusal_NAMES_match_the_engines():
     engine_ef = _engine_module()
     assert ef.REFUSAL_NO_ENTRY == engine_ef.REFUSAL_NO_ENTRY
@@ -139,6 +174,7 @@ def test_every_field_this_page_reads_is_one_the_ENGINE_actually_writes():
     for field in (
         "first_observed_price", "first_observed_source", "first_observed_stale",
         "peak_pnl_pct", "trough_pnl_pct", "max_favorable_excursion_pct",
+        "outcome_label", "pair_admission",
     ):
         assert field in written, f"ops reads {field}, the engine does not write it"
 
@@ -247,6 +283,75 @@ class TestSummarise:
         assert entry["known"] is False
 
 
+class TestBreakevenAtFill:
+    """The rebased book misprices exactly one row class: a break-even exit
+    rests relative to its anchor, and a live position's anchor is its fill."""
+
+    def _rows(self, *recs):
+        return reduce_records(list(recs))
+
+    def test_a_drifted_scratch_reads_as_a_scratch_at_the_fill(self):
+        row = self._rows(
+            _rec(pnl=0.0, outcome_label="BREAKEVEN_EXIT", first_observed_price=101.2)
+        )[0]
+        assert row["rebased_pnl_pct"] == pytest.approx(-1.1858, abs=1e-4)
+        assert row["rebased_be_at_fill_pct"] == pytest.approx(0.0)
+
+    def test_a_stop_is_the_same_in_both(self):
+        row = self._rows(_rec(first_observed_price=101.0))[0]  # SL_HIT fixture
+        assert row["rebased_be_at_fill_pct"] == pytest.approx(row["rebased_pnl_pct"])
+
+    def test_the_census_publishes_it_beside_rebased_with_the_break_even_count(self):
+        out = ef.summarise(self._rows(
+            _rec(signal_id="a", pnl=0.0, outcome_label="BREAKEVEN_EXIT",
+                 first_observed_price=101.2),
+            _rec(signal_id="b", pnl=0.0, outcome_label="BREAKEVEN_EXIT",
+                 first_observed_price=100.0),
+            _rec(signal_id="c", first_observed_price=101.0),
+        ))
+        assert out["breakeven_exits"] == 2
+        stop = (97.0 / 101.0 - 1) * 100
+        assert out["be_at_fill_total_pct"] == pytest.approx(stop, abs=1e-6)
+        assert out["rebased_total_pct"] < out["be_at_fill_total_pct"]
+        # Beside, never instead: the rebased figure is still there, unmoved.
+        assert out["rebased_total_pct"] == pytest.approx(
+            (100.0 / 101.2 - 1) * 100 + stop, abs=1e-6
+        )
+
+    def test_there_is_still_no_blended_number(self):
+        out = ef.summarise(self._rows(_rec(first_observed_price=99.0)))
+        for forbidden in ("avg_pct", "combined_avg_pct", "blended_avg_pct"):
+            assert forbidden not in out
+
+
+class TestSplitBy:
+    def test_it_iterates_the_data_and_sorts_by_count_not_result(self):
+        rows = reduce_records([
+            _rec(signal_id="a", pair_admission="CORE", first_observed_price=99.0, pnl=-3.0),
+            _rec(signal_id="b", pair_admission="CORE", first_observed_price=99.0, pnl=-3.0),
+            _rec(signal_id="c", pair_admission="SOME_NEW_KIND",
+                 first_observed_price=99.0, pnl=5.0),
+            _rec(signal_id="d", first_observed_price=99.0),
+        ])
+        out = ef.split_by(rows, "admission")
+        values = [g["value"] for g in out]
+        # The largest group leads even though it is the worst; a value ops
+        # has never heard of renders under its own name; an unstamped row is
+        # its own group, never CORE.
+        assert values[0] == "CORE"
+        assert "SOME_NEW_KIND" in values
+        assert "UNSTAMPED" in values
+        core = out[0]
+        assert core["rows"] == 2 and core["priced"] == 2
+        assert core["book_avg_pct"] == pytest.approx(-3.0)
+
+    def test_every_group_is_its_own_full_census(self):
+        rows = reduce_records([_rec(pair_admission="CORE")])  # unstamped fill
+        out = ef.split_by(rows, "admission")
+        assert out[0]["priced"] == 0
+        assert "book_avg_pct" not in out[0]
+
+
 class TestMfeFloor:
     def test_it_separates_the_floor_from_a_reading(self):
         out = ef.mfe_floor(
@@ -338,9 +443,38 @@ class TestPage:
             header = r.text.splitlines()[0]
             for col in (
                 "first_observed_price", "entry_drift_pct", "rebased_pnl_pct",
-                "rebase_refusal", "mfe_pct", "peak_pnl_pct",
+                "rebased_be_at_fill_pct", "rebase_refusal", "mfe_pct",
+                "peak_pnl_pct", "shipped_tp1_distance_pct",
             ):
                 assert col in header
+
+    def test_the_break_even_row_and_its_caveat_render(self, monkeypatch):
+        self._stub(monkeypatch, [
+            _rec(signal_id="a", pnl=0.0, outcome_label="BREAKEVEN_EXIT",
+                 first_observed_price=101.2),
+            _rec(signal_id="b", first_observed_price=101.0),
+        ])
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/track-record?window=all")
+        assert r.status_code == 200
+        assert "Rebased, break-even at the fill" in r.text
+        # Copy is part of the measurement: the page must not crown either row.
+        assert "neither is &ldquo;the&rdquo; real result" in r.text
+        assert "still an approximation" in r.text
+
+    def test_the_admission_split_renders_with_every_group(self, monkeypatch):
+        self._stub(monkeypatch, [
+            _rec(signal_id="a", pair_admission="CORE", first_observed_price=99.0),
+            _rec(signal_id="b", pair_admission="MOVER_TOP24H", first_observed_price=99.0),
+            _rec(signal_id="c", first_observed_price=99.0),
+        ])
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/track-record?window=all")
+        assert "By how the pair was admitted" in r.text
+        for value in ("CORE", "MOVER_TOP24H", "UNSTAMPED"):
+            assert f"<code>{value}</code>" in r.text
 
     def test_the_recorded_figures_above_are_untouched(self, monkeypatch):
         """Beside, never instead: adding the panel must not move the number the

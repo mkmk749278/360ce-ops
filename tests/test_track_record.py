@@ -947,6 +947,69 @@ class TestRoute:
             assert f"newest {PER_TRADE_LIMIT}" in r.text
 
 
+class TestAdmissionFilter:
+    """Core pairs vs promoted movers — the split the owner reads to decide
+    whether MVRTP longs belong on core pairs only (360-v2
+    docs/LONGS_RESEARCH_2026_09_26.md §11.2)."""
+
+    def _stub(self, monkeypatch, records):
+        monkeypatch.setattr(
+            DataVolumeReader, "signal_performance", lambda self: records
+        )
+
+    def _records(self):
+        return [
+            _rec(signal_id="c1", pair_admission="CORE", regime="RANGING"),
+            _rec(signal_id="c2", pair_admission="CORE", regime="VOLATILE"),
+            _rec(signal_id="m1", pair_admission="MOVER_TOP24H", regime="RANGING"),
+            _rec(signal_id="u1", regime="RANGING"),
+        ]
+
+    def test_the_filter_narrows_the_book(self, monkeypatch):
+        self._stub(monkeypatch, self._records())
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/track-record/trades.csv?window=all&admission=CORE")
+        lines = [ln for ln in r.text.splitlines() if ln.strip()]
+        assert len(lines) == 3, "header + the two CORE rows"
+        assert all("c1" in ln or "c2" in ln for ln in lines[1:])
+
+    def test_an_unstamped_row_is_its_own_option_never_core(self, monkeypatch):
+        self._stub(monkeypatch, self._records())
+        with TestClient(app) as client:
+            _login(client)
+            r = client.get("/track-record/trades.csv?window=all&admission=UNSTAMPED")
+        lines = [ln for ln in r.text.splitlines() if ln.strip()]
+        assert len(lines) == 2 and "u1" in lines[1]
+
+    def test_each_selector_counts_with_every_filter_but_its_own(self, monkeypatch):
+        """#90/#91: a selector applied to its own counts makes every option
+        read "n = whatever I picked"."""
+        self._stub(monkeypatch, self._records())
+        with TestClient(app) as client:
+            _login(client)
+            body = client.get(
+                "/track-record?window=all&admission=CORE&regime=RANGING"
+            ).text
+        # Admission options measured WITH the regime filter, not their own.
+        assert ">CORE (1)<" in body
+        assert ">MOVER_TOP24H (1)<" in body
+        assert ">UNSTAMPED (1)<" in body
+        # Regime options measured WITH the admission filter, not their own.
+        assert ">RANGING (1)<" in body
+        assert ">VOLATILE (1)<" in body
+
+    def test_the_exports_carry_the_filter(self, monkeypatch):
+        """A download that drops the filter describes a different book than the
+        screen — #97 wearing a download button."""
+        self._stub(monkeypatch, self._records())
+        with TestClient(app) as client:
+            _login(client)
+            body = client.get("/track-record?window=all&admission=CORE").text
+        assert "trades.csv?window=all" in body
+        assert "&admission=CORE&" in body
+
+
 def test_the_per_trade_export_carries_the_ENTRY_time_not_only_the_close():
     """Without it, every off-page analysis has to guess where the trade started.
 
