@@ -423,9 +423,12 @@ def _client(payload=None, provenance=None, prices=None, raise_prices=False):
         vol_arms = vol.trail_arms
         vol_prov = vol.trail_arms_provenance
         klines_fetch = klines.fetch_all_prices
-        vol.trail_arms = lambda mechanism, dark=False: (
+        # A FRESH copy per read: the route marks rows in place, and handing it
+        # the module-level FIXTURE polluted every later ``_rows()`` — the
+        # order-dependence a shuffled run found on 2026-09-26.
+        vol.trail_arms = lambda mechanism, dark=False: json.loads(json.dumps(
             payload if payload is not None else FIXTURE
-        )
+        ))
         vol.trail_arms_provenance = lambda mechanism, dark=False: _prov
         klines.fetch_all_prices = _fetch_all_prices
         try:

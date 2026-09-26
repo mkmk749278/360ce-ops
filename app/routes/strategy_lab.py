@@ -427,7 +427,7 @@ def reduce_path_silence(records: Any) -> list[dict]:
 
     The per-gate table pools every setup into one row, so it cannot answer the
     question the delivered book actually poses. On 2026-07-31 the last 100
-    delivered signals were **76% MOVER_\*** — ``SR_FLIP_RETEST`` shipped one
+    delivered signals were **76% MOVER_ paths** — ``SR_FLIP_RETEST`` shipped one
     signal in nine days, ``RANGE_FADE`` and ``MEAN_REVERT`` zero — and the
     reason is not one global gate. It is per path, and it splits three ways:
     the detector never fires, the regime setup-compat gate confines it, or its

@@ -46,7 +46,7 @@ def wired(monkeypatch):
     recorded: list[dict] = []
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
     monkeypatch.setattr(
-        control_route.audit, "record", lambda *a, **k: recorded.append(k)
+        control_route.audit, "record", lambda *a, **k: None if k.get("action") == "login" else recorded.append(k)
     )
 
     async def fake_auto_mode(self):

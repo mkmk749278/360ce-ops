@@ -19,6 +19,7 @@ What these tests pin, and why each is shaped the way it is:
 from __future__ import annotations
 
 import os
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
@@ -64,10 +65,9 @@ def test_the_spec_round_trips_through_the_real_engine_parser():
     """A cross-repo string is a contract: drive the engine's own parser."""
     import sys
 
-    engine = pathlib.Path(os.environ.get("ENGINE_REPO") or (
-        pathlib.Path(__file__).resolve().parents[2] / "360-v2"))
+    engine = ENGINE_REPO
     if not (engine / "src" / "path_retirement.py").exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import path_retirement  # type: ignore

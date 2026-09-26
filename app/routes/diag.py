@@ -3,7 +3,19 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Form, Request
 
+from app import audit
+
 router = APIRouter()
+
+
+def _audit_run(request: Request, script: str, args: list[str], result) -> None:
+    """A diag run is a ``docker exec`` into the production engine: audited."""
+    rc = getattr(result, "returncode", None)
+    audit.record(
+        request.app.state.settings.audit_log_path, action="diag_run",
+        params={"script": script, "args": args},
+        result={"error": f"returncode={rc}"}, ok=rc == 0,
+    )
 
 
 @router.get("/diag/geometry")
@@ -27,6 +39,7 @@ async def diag_geometry_post(
         args.extend(["--path", setup_class])
     runner = request.app.state.diag_runner
     result = await runner.run("diag_geometry_vs_reality", args)
+    _audit_run(request, "diag_geometry_vs_reality", args, result)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "diag.html",
@@ -51,6 +64,7 @@ async def diag_paper_post(
     hours = max(1, min(hours, 720))
     runner = request.app.state.diag_runner
     result = await runner.run("diag_paper_health", ["--hours", str(hours)])
+    _audit_run(request, "diag_paper_health", ["--hours", str(hours)], result)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "diag.html",

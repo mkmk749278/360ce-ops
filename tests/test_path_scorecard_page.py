@@ -13,7 +13,6 @@ repeated it one level up with the shape right and the path wrong.
 from __future__ import annotations
 
 import os
-import pathlib
 import sys
 
 import pytest
@@ -21,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.routes import path_scorecard as page
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 
 @pytest.fixture()
@@ -33,9 +33,9 @@ def client():
 
 def _engine_summarise():
     """The engine's real reducer, never a shape this repo invented."""
-    engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import path_scorecard as eng  # type: ignore
@@ -80,9 +80,9 @@ def test_every_verdict_the_engine_can_emit_has_copy_on_this_page():
     """The table looks each verdict up; a verdict ops has never heard of
     renders under its raw name badged `unclassified` rather than dropped. This
     pins that the four the engine defines today are all described."""
-    engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import path_scorecard as eng  # type: ignore

@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from pathlib import Path
 
 import pytest
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
@@ -229,9 +229,9 @@ def _engine_channel_cap_report() -> dict:
     import asyncio
     import sys
 
-    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src.signal_router import SignalRouter  # type: ignore

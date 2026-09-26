@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import sys
 from contextlib import contextmanager
-from pathlib import Path
 
 import pytest
 
 from app.routes.router_drops import reduce_direction_cap
 from app.template_filters import share_of
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 
 def _construct_router(SignalRouter, queue):
@@ -67,18 +67,19 @@ def _construct_router(SignalRouter, queue):
     return SignalRouter(**kwargs)
 
 
-# The engine repo sits beside this one in every session that has both. CI for
-# this repo checks out ops alone, so the cross-repo test below skips there —
+# The engine repo sits beside this one in every session that has both. The
+# `lint + tests` job checks out ops alone, so the cross-repo test below skips
+# there (the `contracts` workflow clones the engine and fails on any skip) —
 # and the skip states WHICH of the two reasons applies, because "the engine
 # repo is not here" and "it is here and its dependencies are not" have
 # different fixes and a single 'skipped' hides that.
-_ENGINE = Path(__file__).resolve().parents[2] / "360-v2"
+_ENGINE = ENGINE_REPO
 
 
 def _engine_reachable() -> str:
     """Empty string when the engine's router can be imported; else the reason."""
     if not _ENGINE.is_dir():
-        return "no engine repo beside ops — and CI never checks it out either"
+        return ENGINE_ABSENT
     sys.path.insert(0, str(_ENGINE))
     try:
         import src.signal_router  # noqa: F401

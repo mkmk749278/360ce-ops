@@ -13,20 +13,19 @@ shipped for the same reason.
 """
 from __future__ import annotations
 
-import pathlib
 import sys
-from typing import Any, Dict
 
 import pytest
 
 from app.routes import ai_governor as page
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 
 def _engine_diag() -> dict:
     """The engine's own assembler, never a shape this repo invented."""
-    engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src.execution import ai_governor as gov  # type: ignore
@@ -70,9 +69,9 @@ def test_every_block_this_page_renders_is_one_the_engine_emits():
     seeded through the engine's own ledger so the full shape is always
     exercised.
     """
-    engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import ai_governor_ledger as led  # type: ignore

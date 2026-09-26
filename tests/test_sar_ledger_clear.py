@@ -32,7 +32,7 @@ def _login(client: TestClient) -> None:
 def _capture_audit(monkeypatch) -> list:
     calls: list = []
     monkeypatch.setattr(
-        sar_route.audit, "record", lambda *a, **k: calls.append(k) or None
+        sar_route.audit, "record", lambda *a, **k: None if k.get("action") == "login" else calls.append(k) or None
     )
     return calls
 

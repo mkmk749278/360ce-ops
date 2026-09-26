@@ -16,19 +16,17 @@ invented.
 from __future__ import annotations
 
 import os
-import pathlib
 import sys
 
 import pytest
 
 from app.data_sources import sar_hold
+from tests.engine_repo import ENGINE_REPO
 
 #: `$ENGINE_REPO` first, else the sibling checkout. The old default
 #: hardcoded one machine's absolute layout, so the engine half of this
 #: contract skipped silently anywhere else.
-ENGINE = os.getenv("ENGINE_REPO") or str(
-    pathlib.Path(__file__).resolve().parents[2] / "360-v2"
-)
+ENGINE = str(ENGINE_REPO)
 
 
 def _engine():

@@ -63,11 +63,19 @@ async def login(request: Request, body: LoginBody) -> dict[str, Any]:
     """
     settings = request.app.state.settings
     gate = request.app.state.totp_gate
-    password_ok = hmac.compare_digest(body.password, settings.auth_token)
+    # Bytes, not str — see app/routes/auth.py (a non-ASCII password was a 500).
+    password_ok = hmac.compare_digest(
+        body.password.encode("utf-8"), settings.auth_token.encode("utf-8"),
+    )
     totp_ok = gate.verify(body.totp)
     if not (password_ok and totp_ok):
         raise HTTPException(status_code=401, detail="invalid credentials")
     token = request.app.state.app_tokens.issue(label=body.label)
+    # Success only — see app/routes/auth.py for why failures are not written.
+    audit.record(
+        settings.audit_log_path, action="login",
+        params={"channel": "app", "label": body.label}, result={}, ok=True,
+    )
     return {"token": token, "token_type": "bearer"}
 
 
@@ -81,6 +89,10 @@ async def whoami() -> dict[str, Any]:
 async def revoke_all(request: Request) -> dict[str, Any]:
     """Lost-phone switch: revoke every issued app-token."""
     revoked = request.app.state.app_tokens.revoke_all()
+    audit.record(
+        request.app.state.settings.audit_log_path, action="app_tokens_revoke_all",
+        params={"revoked": revoked}, result={}, ok=True,
+    )
     return {"revoked": revoked}
 
 
@@ -268,12 +280,23 @@ async def register_device(request: Request, body: DeviceBody) -> dict[str, Any]:
     if not token:
         raise HTTPException(status_code=422, detail="fcm_token required")
     request.app.state.device_registry.register(token, platform=body.platform)
+    # A device registered here RECEIVES every Tier-0 page. Only the token's
+    # tail is recorded: the full FCM token addresses the device.
+    audit.record(
+        request.app.state.settings.audit_log_path, action="device_register",
+        params={"platform": body.platform, "token_tail": token[-8:]}, result={}, ok=True,
+    )
     return {"ok": True, "devices": request.app.state.device_registry.count()}
 
 
 @router.delete("/devices", dependencies=[Depends(require_app_token)])
 async def unregister_device(request: Request, body: DeviceBody) -> dict[str, Any]:
-    removed = request.app.state.device_registry.unregister(body.fcm_token.strip())
+    token = body.fcm_token.strip()
+    removed = request.app.state.device_registry.unregister(token)
+    audit.record(
+        request.app.state.settings.audit_log_path, action="device_unregister",
+        params={"token_tail": token[-8:], "removed": removed}, result={}, ok=True,
+    )
     return {"ok": True, "removed": removed}
 
 

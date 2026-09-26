@@ -1,0 +1,95 @@
+name: Cross-repo contracts
+
+# The ~20 tests that drive the ENGINE's real code (tests/engine_repo.py) skip
+# when the engine is not beside ops — and `lint + tests` never checks it out,
+# so until 2026-09-26 every one of them skipped on every CI run, green. Engine
+# #1037 broke one of those contracts with both repos' CI green over it; the
+# break surfaced on a developer's machine (CLAUDE.md, "The cross-repo contract
+# tests did NOT run in CI").
+#
+# This job clones the engine's `main` and runs exactly those tests, and it
+# FAILS rather than skips when anything is missing — a secret, the clone, an
+# engine dependency — because a skip is green and a green tick over a skipped
+# contract is the state this replaces.
+#
+# Kept apart from `lint + tests` on purpose: an engine-main change can turn this
+# red on an unrelated ops PR. That is the contract doing its job, and it should
+# not block the ops suite's own verdict. The daily run catches engine-side drift
+# on days with no ops PR.
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contracts-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: engine contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # The engine is private, so the clone needs GH_PAT (the same secret
+      # deploy.yml uses). Missing secret or failed clone = red, never a skip.
+      - name: Clone the engine (main)
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$GH_PAT" ]; then
+            echo "::error::GH_PAT is not available to this workflow, so the engine cannot be cloned and no cross-repo contract can run."
+            echo "::error::Add GH_PAT to this repository's Actions secrets (the value 360-v2 already holds). A fork PR never receives secrets."
+            exit 1
+          fi
+          dest="$RUNNER_TEMP/360-v2"
+          git clone --depth 1 "https://x-access-token:${GH_PAT}@github.com/mkmk749278/360-v2.git" "$dest"
+          # Drop the token from the clone's config before any PR code runs.
+          git -C "$dest" remote set-url origin https://github.com/mkmk749278/360-v2.git
+          echo "ENGINE_REPO=$dest" >> "$GITHUB_ENV"
+          echo "Engine: $(git -C "$dest" log -1 --format='%h %s')" >> "$GITHUB_STEP_SUMMARY"
+
+      # Ops pins win. The engine asks for newer fastapi/httpx than ops runs,
+      # and the contract is "ops' reader against the engine's writer" in ops'
+      # environment — so those are dropped from the engine's list and every
+      # ops pin is a constraint (extras stripped: pip refuses them in -c).
+      - name: Install ops + engine deps (ops pins win)
+        run: |
+          grep -viE '^\s*(fastapi|uvicorn|httpx|pytest|pytest-asyncio)\b' \
+            "$ENGINE_REPO/requirements.txt" > "$RUNNER_TEMP/engine-reqs.txt"
+          sed -E 's/\[[^]]*\]//' requirements.txt > "$RUNNER_TEMP/ops-constraints.txt"
+          pip install -r requirements-dev.txt -r "$RUNNER_TEMP/engine-reqs.txt" \
+            -c "$RUNNER_TEMP/ops-constraints.txt"
+          pip check
+
+      # Exactly the tests that locate the engine — derived, not listed.
+      - name: Run the contract tests (any skip fails)
+        env:
+          OPS_SESSION_SECRET: test-secret
+          OPS_AUTH_TOKEN: test-token
+        run: |
+          set -o pipefail
+          mapfile -t files < <(grep -l "from tests.engine_repo import" tests/test_*.py)
+          echo "contract files: ${#files[@]}"
+          [ "${#files[@]}" -ge 10 ] || { echo "::error::found only ${#files[@]} contract files — the selector is broken"; exit 1; }
+          pytest -q -rs "${files[@]}" | tee "$RUNNER_TEMP/contracts.log"
+          if grep -E '^SKIPPED' "$RUNNER_TEMP/contracts.log"; then
+            echo "::error::a cross-repo contract SKIPPED with the engine present — that is the silent state this job exists to refuse. See the SKIPPED lines above."
+            exit 1
+          fi

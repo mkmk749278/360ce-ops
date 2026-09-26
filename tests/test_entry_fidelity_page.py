@@ -28,9 +28,9 @@ from __future__ import annotations
 import os
 import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test")
@@ -67,9 +67,9 @@ def _rec(**kw) -> dict:
 
 def _engine_module():
     """Import the ENGINE's entry_fidelity, not a shape this repo invented."""
-    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import entry_fidelity as engine_ef  # type: ignore
@@ -157,9 +157,9 @@ def test_the_refusal_NAMES_match_the_engines():
 def test_every_field_this_page_reads_is_one_the_ENGINE_actually_writes():
     """#817 with the arrow reversed: a field ops reads and no repo writes is a
     full-looking table describing nothing. Checked against the real record."""
-    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src.performance_tracker import SignalRecord  # type: ignore

@@ -9,12 +9,14 @@ reads public Binance klines). See ``app/data_sources/exit_backtest.py``.
 """
 from __future__ import annotations
 
+import dataclasses
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Form, Request
 from starlette.responses import RedirectResponse, StreamingResponse
 
+from app import audit
 from app.data_sources.exit_backtest import ExitBacktestParams
 
 router = APIRouter()
@@ -53,6 +55,15 @@ async def exit_backtest_page(request: Request, flash: str = "", ok: str = ""):
     )
 
 
+def _audit_start(request: Request, params: ExitBacktestParams, ok: bool, msg: str) -> None:
+    """Starting a backtest runs a job against the production engine: audited."""
+    audit.record(
+        request.app.state.settings.audit_log_path, action="exit_backtest_run",
+        params=dataclasses.asdict(params),
+        result={"error": msg}, ok=ok,
+    )
+
+
 @router.post("/exit-backtest/run")
 async def exit_backtest_run(
     request: Request,
@@ -77,6 +88,7 @@ async def exit_backtest_run(
         max_forward_bars=max_forward_bars,
     )
     ok, msg = runner.start(params)
+    _audit_start(request, params, ok, msg)
     # HTMX submit: return the status partial straight from THIS request, so the
     # confirmation (RUNNING / already-running / failure) is shown inline
     # immediately — no dependency on a full-page redirect completing, which is
@@ -117,6 +129,7 @@ async def exit_backtest_run_now(
         funding_bps=1.0, lookahead=20, max_forward_bars=192,
     )
     ok, msg = runner.start(params)
+    _audit_start(request, params, ok, msg)
     q = urlencode({"flash": msg, "ok": "1" if ok else "0"})
     return RedirectResponse(f"/exit-backtest?{q}", status_code=303)
 

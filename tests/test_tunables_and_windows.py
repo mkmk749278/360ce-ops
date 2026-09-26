@@ -110,7 +110,7 @@ def test_tunables_post_calls_engine_and_audits(monkeypatch, tmp_path):
     recorded: list = []
     monkeypatch.setattr(EngineApiClient, "set_tunables", fake_set)
     monkeypatch.setattr(
-        control_route.audit, "record", lambda *a, **k: recorded.append(k)
+        control_route.audit, "record", lambda *a, **k: None if k.get("action") == "login" else recorded.append(k)
     )
 
     with TestClient(app) as client:

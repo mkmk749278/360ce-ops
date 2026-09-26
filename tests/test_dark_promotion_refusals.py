@@ -20,10 +20,10 @@ on the page still reads well-evidenced.
 from __future__ import annotations
 
 import os
-import pathlib
 import sys
 
 import pytest
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
@@ -33,9 +33,7 @@ from app.data_sources import dark_promotion as dp  # noqa: E402
 #: Where the engine repo is. `$ENGINE_REPO` first, else the sibling checkout.
 #: The old form hardcoded one machine's absolute layout, so every contract
 #: below skipped silently on any other checkout — and on every CI run.
-_ENGINE_REPO = pathlib.Path(
-    os.getenv("ENGINE_REPO") or pathlib.Path(__file__).resolve().parents[2] / "360-v2"
-)
+_ENGINE_REPO = ENGINE_REPO
 
 
 def _row(
@@ -240,7 +238,7 @@ def test_every_dimension_the_engine_can_report_has_ops_copy():
     repo is present rather than from a copy kept here."""
     engine = _ENGINE_REPO / "src" / "dark_promotion.py"
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     import re
     src = engine.read_text(encoding="utf-8")
     block = re.search(
@@ -267,7 +265,7 @@ def test_every_dimension_the_engine_can_report_has_ops_copy():
 def _engine_module():
     repo = _ENGINE_REPO
     if not (repo / "src" / "dark_promotion.py").exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     if str(repo) not in sys.path:
         sys.path.insert(0, str(repo))
     try:

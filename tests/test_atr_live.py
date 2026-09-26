@@ -84,7 +84,10 @@ def _client(payloads=None, provenance=None):
     payloads = payloads or {}
 
     def _arms(mechanism, dark=False):
-        return payloads.get((mechanism, bool(dark)))
+        # A fresh copy per read — the route marks rows in place (see
+        # test_sar_live._client for the order-dependence this caused).
+        got = payloads.get((mechanism, bool(dark)))
+        return None if got is None else json.loads(json.dumps(got))
 
     def _prov(mechanism, dark=False):
         if provenance is not None:

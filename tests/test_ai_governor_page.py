@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test-secret")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
@@ -133,11 +134,10 @@ STUB_SCORECARD: dict = {
 def _engine_diag() -> dict:
     """Call the engine's own `build_diag`, not a shape this repo invented."""
     import sys
-    import pathlib
 
-    engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src.execution import ai_governor as gov  # type: ignore
@@ -149,11 +149,10 @@ def _engine_diag() -> dict:
 def _engine_scorecard():
     """The engine's REAL scorecard assembler, for the same reason as above."""
     import sys
-    from pathlib import Path
 
-    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src.execution import ai_governor as gov
@@ -172,11 +171,10 @@ def _engine_paired():
     level and the engine nests it — the shape right and the PATH wrong.
     """
     import sys
-    from pathlib import Path
 
-    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import ai_governor_live as cf  # type: ignore
@@ -694,12 +692,11 @@ def test_every_undecidable_reason_the_engine_can_emit_has_copy():
     """A reason with no sentence renders unclassified, which is honest but
     useless. The engine's own vocabulary is the source of the requirement."""
     import sys
-    from pathlib import Path
 
-    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
         import pytest as _pytest
-        _pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        _pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import ai_governor_score as sc
@@ -1105,11 +1102,10 @@ def test_every_unpairable_reason_the_engine_can_emit_has_copy():
     correct — but a reason the ENGINE already declares and this page has never
     been told about is an omission, not a future-proofing case."""
     import sys
-    from pathlib import Path
 
-    engine = Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import ai_governor_live as cf  # type: ignore

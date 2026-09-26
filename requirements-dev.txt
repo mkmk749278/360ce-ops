@@ -2,3 +2,5 @@
 pytest==8.0.0
 pytest-asyncio==0.23.5
 fakeredis[asyncio]==2.23.3
+# A hung test fails by NAME instead of silently eating the job (timeout in pyproject.toml).
+pytest-timeout==2.3.1

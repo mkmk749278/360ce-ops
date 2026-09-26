@@ -176,7 +176,7 @@ def test_grant_calls_engine_and_audits(monkeypatch):
     monkeypatch.setattr(EngineApiClient, "grant_tier", fake_grant)
     monkeypatch.setattr(
         users_route.audit, "record",
-        lambda *a, **k: recorded.append(k),
+        lambda *a, **k: None if k.get("action") == "login" else recorded.append(k),
     )
 
     with TestClient(app) as client:
@@ -247,7 +247,7 @@ def test_grant_engine_error_surfaces_failure_flash(monkeypatch):
     monkeypatch.setattr(EngineApiClient, "grant_tier", fake_grant)
     monkeypatch.setattr(
         users_route.audit, "record",
-        lambda *a, **k: recorded.append(k),
+        lambda *a, **k: None if k.get("action") == "login" else recorded.append(k),
     )
 
     with TestClient(app) as client:
@@ -396,7 +396,7 @@ def test_the_change_is_audited(monkeypatch):
     })
     recorded: list = []
     monkeypatch.setattr(
-        users_route.audit, "record", lambda *a, **k: recorded.append(k)
+        users_route.audit, "record", lambda *a, **k: None if k.get("action") == "login" else recorded.append(k)
     )
     with TestClient(app) as client:
         _login(client)

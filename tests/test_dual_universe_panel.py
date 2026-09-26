@@ -19,16 +19,16 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import contextmanager
-from pathlib import Path
 
 import pytest
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
 
 from app.data_sources.engine_api import EngineApiClient  # noqa: E402
 
-_ENGINE = Path(__file__).resolve().parents[2] / "360-v2"
+_ENGINE = ENGINE_REPO
 
 
 @contextmanager
@@ -225,7 +225,7 @@ def test_no_overlap_badge_when_nothing_is_dual(monkeypatch):
 
 def _engine_reachable() -> str:
     if not _ENGINE.is_dir():
-        return "no engine repo beside ops — and CI never checks it out either"
+        return ENGINE_ABSENT
     sys.path.insert(0, str(_ENGINE))
     try:
         import src.api.snapshot  # noqa: F401

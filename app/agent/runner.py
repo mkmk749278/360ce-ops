@@ -15,6 +15,8 @@ import asyncio
 import logging
 import os
 import time
+from dataclasses import dataclass
+from typing import Any
 
 from app.config import load_settings
 from app.data_sources.engine_api import EngineApiClient
@@ -207,6 +209,269 @@ async def _redis_idletime(
 # Main loop
 # ---------------------------------------------------------------------------
 
+#: Which data SOURCE each alert family is read from. An active alert whose
+#: source did not answer this cycle is CARRIED FORWARD — neither resolved nor
+#: re-paged — because "the detector produced nothing" and "the condition
+#: cleared" are different facts when the detector could not look.
+#:
+#: Found 2026-09-26 by driving this loop for two cycles: a naked-position alert
+#: on cycle 1, then one ``positions_diag`` timeout, and the agent paged a
+#: RECOVERY for a position that was still naked — the one alert that must never
+#: be wrong in that direction, and exactly when the engine is least reachable.
+#: The same shape reached task_dead, container_down, the daily kill-switch
+#: (engine_status:degraded), signal_silence, the redis snapshot alerts and the
+#: restart alerts.
+#:
+#: Deliberately NOT listed: the alerts that ARE a source failing
+#: (engine_unreachable, api_health:error, docker_ps_unavailable,
+#: redis_unreachable, redis_probe_unreadable). They must resolve the moment the
+#: source answers again.
+ALERT_SOURCES: tuple[tuple[str, str], ...] = (
+    ("naked_position:", "positions_diag"),
+    ("task_dead:", "tasks"),
+    ("container_absent:", "docker_ps"),
+    ("container_down:", "docker_ps"),
+    ("signing_service:", "docker_ps"),
+    ("engine_status:", "pulse"),
+    ("signal_silence", "pulse"),
+    ("engine_restart", "pulse"),
+    ("engine_disconnected", "health"),
+    ("redis_stale", "redis_probe"),
+    ("snapshot_key_missing", "redis_probe"),
+)
+
+
+#: The alerts that ARE a source failing. Never carried forward: they must
+#: resolve the moment their source answers. Every fingerprint the detectors can
+#: emit is in exactly one of this set or ``ALERT_SOURCES`` (asserted by
+#: tests/test_agent_cycle.py, derived from detectors.py).
+SOURCE_FAILURE_ALERTS: frozenset[str] = frozenset({
+    "engine_unreachable",
+    "api_health:error",
+    "docker_ps_unavailable",
+    "redis_unreachable",
+    "redis_probe_unreadable",
+})
+
+
+def source_of(fingerprint: str) -> str | None:
+    for prefix, source in ALERT_SOURCES:
+        if fingerprint.startswith(prefix):
+            return source
+    return None
+
+
+@dataclass
+class Detectors:
+    """Built ONCE in ``run()``: EngineRestartDetector is stateful across cycles."""
+
+    naked: Any
+    tasks: Any
+    signing: Any
+    core: Any
+    engine_status: Any
+    api_health: Any
+    silence: Any
+    redis: Any
+    restart: Any
+
+
+@dataclass
+class CycleReport:
+    cycle_ok: bool
+    triggered: set[str]
+    carried: set[str]
+    resolved: set[str]
+    blind: set[str]
+
+
+async def run_cycle(
+    *,
+    api: Any,
+    alert_state: AlertStateStore,
+    notifier: Any,
+    detectors: Detectors,
+    redis_client: Any = None,
+    poll_interval: int = 60,
+) -> CycleReport:
+    """One detection cycle: fetch, detect, notify, resolve, heartbeat."""
+    cycle_ok = True
+    triggered_fingerprints: set[str] = set()
+    #: Sources that did not answer usably this cycle.
+    blind: set[str] = set()
+
+    # ---- Fetch all data sources -----------------------------------
+    pulse: dict = {}
+    health: dict = {}
+    diag_positions: list[dict] = []
+    tasks: list[str] = []
+    container_statuses: dict[str, str] = {}
+    redis_probe = RedisProbe(
+        ok=False, cause="not_run", detail="the cycle did not reach the probe",
+    )
+    auto_mode: dict = {}
+
+    try:
+        pulse = await api.pulse() or {}
+    except Exception as exc:
+        log.warning("pulse fetch failed: %s", exc)
+        pulse = {"error": str(exc)}
+        cycle_ok = False
+    if "error" in pulse:
+        blind.add("pulse")
+
+    try:
+        health = await api.health() or {}
+    except Exception as exc:
+        health = {"error": str(exc)}
+        cycle_ok = False
+    if "error" in health:
+        blind.add("health")
+
+    try:
+        diag_raw = await api.positions_diag() or {}
+        if isinstance(diag_raw, dict) and "error" in diag_raw:
+            # EngineApiClient REPORTS a timeout as {"error": …} rather than
+            # raising, so this — not the except below — is the production
+            # path. It used to read as "no positions" and clear the alert.
+            log.warning("positions_diag unavailable: %s", diag_raw.get("error"))
+            blind.add("positions_diag")
+        else:
+            diag_positions = diag_raw.get("items") or []
+    except Exception as exc:
+        log.warning("positions_diag fetch failed: %s", exc)
+        blind.add("positions_diag")
+        cycle_ok = False
+
+    try:
+        tasks_raw = await api._get("/internal/diag/tasks") or {}
+        tasks = tasks_raw.get("tasks") or []
+    except Exception as exc:
+        log.warning("diag/tasks fetch failed: %s", exc)
+        cycle_ok = False
+    if not tasks:
+        # BackgroundTaskDetector reads an empty census as "unavailable", so
+        # it cannot clear a task_dead alert either.
+        blind.add("tasks")
+
+    try:
+        auto_mode = await api.auto_mode() or {}
+    except Exception:
+        auto_mode = {}
+
+    try:
+        container_statuses = await _docker_ps_statuses()
+    except Exception as exc:
+        log.warning("docker ps failed: %s", exc)
+        cycle_ok = False
+    if not container_statuses:
+        blind.add("docker_ps")
+
+    try:
+        redis_probe = await _redis_idletime()
+    except Exception as exc:
+        # _redis_idletime does not raise — it reports. This stays as the
+        # last line of defence so an unexpected raise cannot silently
+        # leave the previous cycle's probe in scope.
+        log.warning("redis idletime check raised: %s", exc)
+        redis_probe = RedisProbe(
+            ok=False, cause="exception", detail=f"{type(exc).__name__}: {exc}",
+        )
+        cycle_ok = False
+
+    # ---- Run detectors -------------------------------------------
+    all_results: list[DetectorResult] = []
+
+    for detector, args in [
+        (detectors.naked, {"diag_items": diag_positions}),
+        (detectors.tasks, {"tasks": tasks}),
+        (detectors.signing, {"container_statuses": container_statuses}),
+        (detectors.core, {"container_statuses": container_statuses}),
+        (detectors.engine_status, {"pulse": pulse}),
+        (detectors.api_health, {"health": health}),
+        (detectors.silence, {"pulse": pulse, "mode": auto_mode.get("mode") or pulse.get("mode", "off")}),
+        (detectors.redis, {"probe": redis_probe}),
+        (detectors.restart, {"pulse": pulse, "now": time.time()}),
+    ]:
+        try:
+            results = detector.check(**args)
+            all_results.extend(results)
+        except Exception:
+            log.exception("%s raised unexpectedly", getattr(detector, "name", detector))
+            cycle_ok = False
+
+    # The redis probe is only a MEASUREMENT when it ran and its answer parsed;
+    # an unreadable answer cannot clear a stale-snapshot alert either.
+    if not redis_probe.ok or any(
+        r.fingerprint in ("redis_unreachable", "redis_probe_unreadable")
+        for r in all_results
+    ):
+        blind.add("redis_probe")
+
+    # ---- Process results -----------------------------------------
+    for result in all_results:
+        triggered_fingerprints.add(result.fingerprint)
+        try:
+            action = await alert_state.process(result)
+            if action.should_notify:
+                await notifier.send_alert(action)
+        except Exception:
+            log.exception("alert_state.process failed for %s", result.fingerprint)
+
+    # ---- Resolve cleared alerts ----------------------------------
+    carried: set[str] = set()
+    resolved: set[str] = set()
+    try:
+        active = await alert_state.active_fingerprints()
+        for fp in active - triggered_fingerprints:
+            if source_of(fp) in blind:
+                carried.add(fp)
+                log.warning(
+                    "not resolving %s: its source (%s) did not answer this cycle",
+                    fp, source_of(fp),
+                )
+                continue
+            done = await alert_state.resolve(fp)
+            if done is not None:
+                resolved.add(fp)
+                await notifier.send_recovery(done)
+    except Exception:
+        log.exception("resolution pass failed")
+
+    # ---- Tier 2 heartbeat ----------------------------------------
+    if cycle_ok:
+        await notifier.ping_heartbeat()
+    else:
+        log.debug("Cycle had failures — skipping healthchecks.io ping")
+
+    # ---- Tier 3: the agent's own liveness, where ops can see it ---
+    # The dead-man's switch above is deliberately NOT pinged on a failed
+    # cycle, so on that channel a degraded agent and a dead one look the
+    # same. This one is published either way and carries `cycle_ok`, so
+    # `/system/liveness` can tell them apart. Best-effort by construction:
+    # a heartbeat that could break a detection cycle would be a monitoring
+    # surface that reduces monitoring.
+    await heartbeat.publish(
+        redis_client,
+        cycle_ok=cycle_ok,
+        # A carried alert is still firing as far as anyone can tell.
+        alerts_firing=len(triggered_fingerprints | carried),
+        detector_count=len(all_results),
+        redis_probe_summary=redis_probe.summary(),
+        redis_probe_ok=redis_probe.ok,
+        poll_interval_s=poll_interval,
+        # Read off the notifier rather than off env in the web container:
+        # this process is the one that knows what it can send through, and
+        # a second copy of that check is how /alerts came to print
+        # "Nothing pages you" over a working Telegram sink.
+        sinks=notifier.armed_sinks(),
+    )
+    return CycleReport(
+        cycle_ok=cycle_ok, triggered=triggered_fingerprints,
+        carried=carried, resolved=resolved, blind=blind,
+    )
+
+
 async def run() -> None:
     settings = load_settings()
     poll_interval = int(os.getenv("AGENT_POLL_INTERVAL_S", "60"))
@@ -260,142 +525,19 @@ async def run() -> None:
         loop_threshold=int(os.getenv("AGENT_RESTART_LOOP_THRESHOLD", "2")),
     )
 
+    detectors = Detectors(
+        naked=d1, tasks=d2, signing=d3, core=d3b, engine_status=d4,
+        api_health=d6, silence=d7, redis=d8, restart=d9,
+    )
+
     log.info("Monitoring agent started — poll interval %ss", poll_interval)
 
     while True:
-        cycle_ok = True
-        triggered_fingerprints: set[str] = set()
-
-        # ---- Fetch all data sources -----------------------------------
-        pulse: dict = {}
-        health: dict = {}
-        diag_positions: list[dict] = []
-        tasks: list[str] = []
-        container_statuses: dict[str, str] = {}
-        redis_probe = RedisProbe(
-            ok=False, cause="not_run", detail="the cycle did not reach the probe",
+        await run_cycle(
+            api=api, alert_state=alert_state, notifier=notifier,
+            detectors=detectors, redis_client=redis_client,
+            poll_interval=poll_interval,
         )
-        auto_mode: dict = {}
-
-        try:
-            pulse = await api.pulse() or {}
-        except Exception as exc:
-            log.warning("pulse fetch failed: %s", exc)
-            pulse = {"error": str(exc)}
-            cycle_ok = False
-
-        try:
-            health = await api.health() or {}
-        except Exception as exc:
-            health = {"error": str(exc)}
-            cycle_ok = False
-
-        try:
-            diag_raw = await api.positions_diag() or {}
-            diag_positions = diag_raw.get("items") or []
-        except Exception as exc:
-            log.warning("positions_diag fetch failed: %s", exc)
-            cycle_ok = False
-
-        try:
-            tasks_raw = await api._get("/internal/diag/tasks") or {}
-            tasks = tasks_raw.get("tasks") or []
-        except Exception as exc:
-            log.warning("diag/tasks fetch failed: %s", exc)
-            cycle_ok = False
-
-        try:
-            auto_mode = await api.auto_mode() or {}
-        except Exception as exc:
-            auto_mode = {}
-
-        try:
-            container_statuses = await _docker_ps_statuses()
-        except Exception as exc:
-            log.warning("docker ps failed: %s", exc)
-            cycle_ok = False
-
-        try:
-            redis_probe = await _redis_idletime()
-        except Exception as exc:
-            # _redis_idletime does not raise — it reports. This stays as the
-            # last line of defence so an unexpected raise cannot silently
-            # leave the previous cycle's probe in scope.
-            log.warning("redis idletime check raised: %s", exc)
-            redis_probe = RedisProbe(
-                ok=False, cause="exception", detail=f"{type(exc).__name__}: {exc}",
-            )
-            cycle_ok = False
-
-        # ---- Run detectors -------------------------------------------
-        all_results: list[DetectorResult] = []
-
-        for detector, args in [
-            (d1, {"diag_items": diag_positions}),
-            (d2, {"tasks": tasks}),
-            (d3, {"container_statuses": container_statuses}),
-            (d3b, {"container_statuses": container_statuses}),
-            (d4, {"pulse": pulse}),
-            (d6, {"health": health}),
-            (d7, {"pulse": pulse, "mode": auto_mode.get("mode") or pulse.get("mode", "off")}),
-            (d8, {"probe": redis_probe}),
-            (d9, {"pulse": pulse, "now": time.time()}),
-        ]:
-            try:
-                results = detector.check(**args)
-                all_results.extend(results)
-            except Exception:
-                log.exception("%s raised unexpectedly", detector.name)
-                cycle_ok = False
-
-        # ---- Process results -----------------------------------------
-        for result in all_results:
-            triggered_fingerprints.add(result.fingerprint)
-            try:
-                action = await alert_state.process(result)
-                if action.should_notify:
-                    await notifier.send_alert(action)
-            except Exception:
-                log.exception("alert_state.process failed for %s", result.fingerprint)
-
-        # ---- Resolve cleared alerts ----------------------------------
-        try:
-            active = await alert_state.active_fingerprints()
-            for fp in active - triggered_fingerprints:
-                resolved = await alert_state.resolve(fp)
-                if resolved is not None:
-                    await notifier.send_recovery(resolved)
-        except Exception:
-            log.exception("resolution pass failed")
-
-        # ---- Tier 2 heartbeat ----------------------------------------
-        if cycle_ok:
-            await notifier.ping_heartbeat()
-        else:
-            log.debug("Cycle had failures — skipping healthchecks.io ping")
-
-        # ---- Tier 3: the agent's own liveness, where ops can see it ---
-        # The dead-man's switch above is deliberately NOT pinged on a failed
-        # cycle, so on that channel a degraded agent and a dead one look the
-        # same. This one is published either way and carries `cycle_ok`, so
-        # `/system/liveness` can tell them apart. Best-effort by construction:
-        # a heartbeat that could break a detection cycle would be a monitoring
-        # surface that reduces monitoring.
-        await heartbeat.publish(
-            redis_client,
-            cycle_ok=cycle_ok,
-            alerts_firing=len(triggered_fingerprints),
-            detector_count=len(all_results),
-            redis_probe_summary=redis_probe.summary(),
-            redis_probe_ok=redis_probe.ok,
-            poll_interval_s=poll_interval,
-            # Read off the notifier rather than off env in the web container:
-            # this process is the one that knows what it can send through, and
-            # a second copy of that check is how /alerts came to print
-            # "Nothing pages you" over a working Telegram sink.
-            sinks=notifier.armed_sinks(),
-        )
-
         await asyncio.sleep(poll_interval)
 
 
