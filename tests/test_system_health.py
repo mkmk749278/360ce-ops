@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from tests.engine_repo import ENGINE_REPO
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
@@ -308,7 +309,7 @@ class TestRoster:
         declared = {e.name for e in sh.ROSTER}
         found: set[str] = set()
         for compose in (repo / "docker-compose.yml",
-                        repo.parent / "360-v2" / "docker-compose.yml"):
+                        ENGINE_REPO / "docker-compose.yml"):
             if not compose.exists():
                 continue          # the engine repo is not always checked out beside this one
             found |= set(re.findall(r"container_name:\s*(\S+)", compose.read_text()))

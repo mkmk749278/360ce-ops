@@ -84,3 +84,24 @@ def test_every_engine_pointer_resolves_relative_to_this_checkout():
     assert not unwired, (
         "names the engine repo without deriving where it is: " + ", ".join(unwired)
     )
+
+
+def test_the_engine_location_and_skip_reason_have_one_writer():
+    """``tests/engine_repo.py`` is the one place that says where the engine is
+    and why a contract skipped. Three idioms used to do both, and only four
+    sites honoured ``$ENGINE_REPO`` — so the ``contracts`` workflow, which
+    points ``$ENGINE_REPO`` at its clone, would have run some contracts and
+    silently skipped the rest. A second copy of the reason is how a skip line
+    goes on saying "CI never checks it out" after CI starts to."""
+    helper = TESTS / "engine_repo.py"
+    copies = [
+        f"{path.name}:{n}"
+        for path in sorted(TESTS.glob("*.py"))
+        if path not in (helper, Path(__file__))
+        for n, line in _code_lines(path)
+        if "no engine repo beside ops" in line or 'parents[2] / "360-v2' in line
+    ]
+    assert not copies, (
+        "locate the engine through tests.engine_repo (ENGINE_REPO / ABSENT), "
+        "not a local copy:\n  " + "\n  ".join(copies)
+    )

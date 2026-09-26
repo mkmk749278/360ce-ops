@@ -21,11 +21,11 @@ built for.
 from __future__ import annotations
 
 import inspect
-import pathlib
 
 from app.data_sources import engine_api
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
-ENGINE_CONFIG = pathlib.Path(__file__).resolve().parents[2] / "360-v2/config/__init__.py"
+ENGINE_CONFIG = ENGINE_REPO / "config" / "__init__.py"
 
 
 def test_the_diag_timeout_exceeds_the_engines_own_poll_deadline():
@@ -35,7 +35,7 @@ def test_the_diag_timeout_exceeds_the_engines_own_poll_deadline():
     if not ENGINE_CONFIG.exists():
         import pytest
 
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
 
     text = ENGINE_CONFIG.read_text()
     marker = 'DIAG_POLL_TIMEOUT_SEC: float = _safe_float("DIAG_POLL_TIMEOUT_SEC", '

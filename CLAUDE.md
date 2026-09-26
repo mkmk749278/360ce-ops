@@ -139,13 +139,20 @@ gh run list --workflow=ci.yml     --json startedAt,updatedAt,conclusion --limit 
 gh run list --workflow=deploy.yml --json startedAt,updatedAt,conclusion --limit 10
 ```
 
-The suite is ~1,890 tests and most of its cost is page rendering — measured at
-**3.8s/test** across the render-heavy files against a **0.59s/test** average —
-so it grows with the surface rather than with the number of tests. Expect this
-to drift upward, and raise `timeout-minutes` in `ci.yml` before it starts
-cancelling runs rather than after.
+**Correction 2026-09-26: most of that cost was the network, not rendering.**
+The paragraph that stood here blamed page renders (3.8s/test on the
+render-heavy files). Instrumented, one suite run made **1,638 real HTTP
+requests** — 1,108 to the *production* engine (`ENGINE_API_BASE` defaulted to
+`https://api.luminapp.org` and nothing overrode it, including 9
+`POST /internal/diag/catalog/run`), 491 to GitHub, 39 to Binance — each render
+waiting on a real round trip that CI answered with a 401. `tests/conftest.py`
+now points every base URL at a `.invalid` host and refuses non-local httpx and
+socket traffic (`tests/test_network_guard.py` pins it). The same suite then ran
+in **1m47s** locally, and the 115s guest-control test in 7s. Re-derive the CI
+figure above after a few hermetic runs; a new test that "needs" the network
+needs a stub instead.
 
-## The cross-repo contract tests do NOT run in CI (2026-09-17)
+## The cross-repo contract tests did NOT run in CI (2026-09-17; wired 2026-09-26)
 
 Many tests here drive the **engine's real** assembler rather than a fixture,
 because "a fixture chooses a location and then agrees with you about it" cost
@@ -210,6 +217,27 @@ wired, **a failed clone must fail the job**, because the skip is silent by
 construction and a green tick over a skipped contract is the state we are
 already in. The smaller companion is a shared `tests/engine_repo.py` helper so
 there is one writer of that path and one skip reason instead of three idioms.
+
+**Wired 2026-09-26, on the owner's go-ahead** (test-suite audit, "fix
+everything"). Both halves shipped together:
+
+- `tests/engine_repo.py` is now the one writer of `ENGINE_REPO` (`$ENGINE_REPO`,
+  else the sibling) and of the skip reason. Before it, only four of the fifteen
+  contract files honoured `$ENGINE_REPO`, so a CI job cloning the engine
+  anywhere but the sibling path would have run four and silently skipped the
+  rest. `test_engine_repo_pointer.py` now fails on a local copy of either.
+- `.github/workflows/contracts.yml` clones engine `main` with `GH_PAT`, installs
+  the engine's deps **under ops' pins** (ops' fastapi 0.110 / httpx 0.27 win —
+  the contract is ops' reader in ops' environment), runs exactly the files that
+  import `tests.engine_repo`, and **fails on any SKIPPED line**. A missing
+  secret or failed clone is red with its remedy named, never a skip. It runs on
+  PRs and daily, and is a separate workflow from `lint + tests` so an engine-main
+  change reads as a contract failure rather than as the ops suite breaking.
+  Measured locally with the engine present: 15 files, 399 passed, 0 skipped;
+  without it, 28 SKIPPED lines, and the job fails.
+
+**If `contracts` is red on a PR that touched nothing engine-facing, read the
+engine's recent merges before this PR** — that is the contract doing its job.
 
 ## What the Strategy Lab is (and what it must not do)
 

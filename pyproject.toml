@@ -21,3 +21,6 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Per-test ceiling (pytest-timeout, requirements-dev.txt). Generous: it exists
+# to turn a hang into a named failure, not to police speed.
+timeout = 300

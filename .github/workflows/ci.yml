@@ -9,8 +9,10 @@ name: CI
 on:
   pull_request:
     branches: [main]
-  push:
-    branches-ignore: [main]   # main's gate lives in deploy.yml (pre-build test step)
+  # No `push` trigger (2026-09-26): with both, every commit on a PR branch ran
+  # the whole suite TWICE (measured: every PR commit in the last 40 runs has a
+  # push run and a pull_request run on the same SHA). main's gate lives in
+  # deploy.yml (pre-build test step).
   workflow_dispatch:
 
 permissions:
@@ -25,14 +27,14 @@ jobs:
     name: lint + tests
     runs-on: ubuntu-latest
     # Measured 2026-09-03, four runs: 6m52s, 8m40s, 9m28s, and one CANCELLED at
-    # 10m15s — the cap itself, not a hanging job. The suite is ~1,890 tests and
-    # most of the cost is page renders (test_guest_access drives every control
-    # on every guest-readable page), so it grows with the surface. A budget the
-    # suite can reach on a slow runner turns a green change red at random, and
-    # a red that means nothing is worse than no signal at all.
-    #
-    # 20 is ~2x the measured worst. Re-derive rather than trust this comment:
+    # 10m15s. Most of that was NOT page rendering: it was ~1,600 real HTTP
+    # calls per run to the production engine, GitHub and Binance, each waiting
+    # on the network. The suite is hermetic since 2026-09-26 (tests/conftest.py)
+    # and ran in 1m47s locally without coverage afterwards; re-derive the CI
+    # figure rather than trust this comment:
     #   gh run list --workflow=ci.yml --json startedAt,updatedAt,conclusion
+    # Kept at 20 until a few hermetic runs have been measured. Per-test hangs
+    # are bounded separately by pytest-timeout (pyproject.toml).
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4

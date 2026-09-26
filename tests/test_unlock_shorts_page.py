@@ -17,6 +17,7 @@ import sys
 from contextlib import contextmanager
 
 import pytest
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
@@ -277,12 +278,12 @@ def test_the_router_is_included_before_signal_detail():
 
 # ── local contract: regenerate from the engine and compare shapes ────────
 
-ENGINE = pathlib.Path(os.environ.get("ENGINE_REPO") or (HERE.parent.parent / "360-v2")).resolve()
+ENGINE = ENGINE_REPO
 
 
 @pytest.mark.skipif(
     not (ENGINE / "scripts" / "gen_ops_unlock_shorts_fixture.py").exists(),
-    reason="no engine repo beside ops — and CI never checks it out either",
+    reason=ENGINE_ABSENT,
 )
 def test_the_committed_fixture_matches_what_the_engine_writes_today():
     """Run the engine's generator and compare every row's KEYS with the fixture.

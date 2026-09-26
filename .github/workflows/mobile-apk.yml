@@ -50,6 +50,11 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          # Pinned (2026-09-26): `stable` alone moves under the build, so the
+          # same commit could compile and test on one run and not the next,
+          # with nothing in the diff to blame. 3.47.5 is what the suite was
+          # last run green on; bump it deliberately, in its own PR.
+          flutter-version: 3.47.5
           cache: true
 
       - name: Flutter version

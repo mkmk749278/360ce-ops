@@ -27,6 +27,7 @@ import os
 from contextlib import contextmanager
 
 import pytest
+from tests.engine_repo import ENGINE_REPO, ABSENT as ENGINE_ABSENT
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test")
@@ -57,11 +58,10 @@ def _engine_manifest(key: str) -> dict:
     rather than asserting against a guess.
     """
     import sys
-    import pathlib
 
-    engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import trail_mechanisms  # type: ignore
@@ -332,11 +332,10 @@ def test_the_page_says_no_arm_here_can_be_executed_rather_than_cannot_tell():
 def test_the_engine_keeps_the_governor_out_of_the_permission_list():
     """The claim the page makes, pinned against the engine that decides it."""
     import sys
-    import pathlib
 
-    engine = pathlib.Path(__file__).resolve().parents[2] / "360-v2"
+    engine = ENGINE_REPO
     if not engine.exists():
-        pytest.skip("no engine repo beside ops — and CI never checks it out either")
+        pytest.skip(ENGINE_ABSENT)
     sys.path.insert(0, str(engine))
     try:
         from src import trail_mechanisms  # type: ignore
