@@ -2462,6 +2462,78 @@ sits behind an ⓘ (`app/templates/_info.html`):
   The table went from ten columns to six: trades and average share a cell, and
   the side rides on the path name. On a phone it went from 6,063px to 4,627px.
 
+## One tap, one knob (2026-09-26)
+
+Owner: *"Make control panel simple easy to toggle, not like raw data."* After
+two overhauls the page still asked for three steps to flip an on/off knob:
+open the category, flip it, then scroll to a category-wide Apply bar that
+re-posted every sibling as it stood on load. Every knob also carried a
+`default X · range a–b` line whether or not it meant anything.
+
+- **Every on/off tunable is its own form** and saves on the tap that flips
+  it. The tap asks first, posts `_bool_keys=<key>` and nothing else, and
+  redirects to `/control#tun-row-<key>`. The page reopens the category and
+  scrolls back to the knob. With JavaScript off, a Save button does the same
+  thing. A test asserts each switch form carries exactly one knob name.
+- **`_return` is an element id, never a URL.** It must match
+  `^[A-Za-z0-9_-]+$`, or the redirect falls back to `/control`.
+- **The result is a toast**, because the save lands you far from the top of
+  the page. A failure stays until it is closed.
+- **The switchboard's text buttons became switches, and only over a
+  reading.** An unreadable flag keeps both text buttons: a switch drawn in
+  either position is a verdict nobody observed. The first cut matched its
+  replacement marker on the tone line and put a switch *inside* the
+  unreadable branch. A test now fails on exactly that, verified by putting
+  the bug back.
+- **Typed values sit behind "Fine-tune values"** and are applied per
+  category, as before. A default shows only beside a knob that is off it;
+  the range lives in the ⓘ and in the input's own `min`/`max`.
+- **`retired_paths` is read-only here**, as chips with a link to Routing.
+  Routing re-reads the list at write time; a category form here re-posted it
+  as the page had loaded it.
+- **The audit reads as sentences** (`BE arm: flat trigger → 1.2`). The raw
+  params stay in the hover.
+
+**`meta.values` 500'd the page on its first render**, the fourth time a
+payload key has collided with a dict method here (`keys`, `copy`, now
+`values`). The key is `value_knobs`, and a test asserts no category key
+shadows a dict method, derived from the helper's real output.
+
+## The mode toggle is a request, not a switch (2026-09-26)
+
+Owner: *"There is some problem with auto execution mode toggle, not showing
+correctly."* Nothing on the page was broken. It was reporting the wrong fact.
+In production (isolated mode) `POST /api/auto-mode` only **queues** the change
+in Redis. The engine applies it at the end of its next ~15s writer cycle, and
+the api re-reads engine state every 10s. So:
+
+- ops flashed **"Auto-mode set to PAPER"** beside a toggle still reading LIVE,
+  for up to ~40s;
+- when the engine **refused** the change (it will not switch while it holds
+  open positions, nor go LIVE without exchange keys), the refusal was written
+  only to the engine's log. The toggle never moved, and the page had already
+  said "set";
+- every 409 printed "Already in LIVE — no change", refusals included;
+- a runtime change does not survive a restart, so every deploy put the engine
+  back to `AUTO_EXECUTION_MODE` without a word.
+
+Engine #1073 publishes the engine's answer and makes the queue
+readable through `GET /api/auto-mode/command`. `mode_view()` grades the row
+into five states — `ok` / `pending` / `applying` / `not_applied` / `refused` —
+and the POST flash uses the engine's own words.
+
+- **The mode shown is always the engine's.** This browser's request, held in
+  the session, is a note about a click. It can hold a "switching" window open
+  and never supplies the reading.
+- **404 is `not_reported`, never "nothing pending"**, and a blank transport
+  error is `unreadable`. Both are graded by key presence (`mode_queue`), per
+  the 2026-09-03 rule.
+- **The page reloads itself only while a change is on its way**, bounded
+  server-side by `MODE_REQUEST_WINDOW_SEC`. It never reloads over a half-typed
+  tunable.
+- **A mode that differs from the boot mode says so.** A choice that silently
+  reverts on the next deploy is the one this page must not leave unsaid.
+
 ## The mover lifecycle panels (2026-08-13, #173–#175)
 
 Three surfaces for engine #927/#928/#929 — how a promoted pair is kept, how a path
