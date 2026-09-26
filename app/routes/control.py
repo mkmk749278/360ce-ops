@@ -15,6 +15,9 @@ control action.
 """
 from __future__ import annotations
 
+import json
+import re
+
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
@@ -46,6 +49,26 @@ def anchor_for(category: str) -> str:
     while "--" in slug:
         slug = slug.replace("--", "-")
     return f"tun-{slug or 'other'}"
+
+
+#: The tunable the Routing page owns. It renders here read-only, as the list
+#: it is, with a link to the page that edits it. Editing it from a category
+#: form wrote back the whole string as the page had loaded it, which could
+#: undo a divert made on Routing a minute earlier: that page re-reads the list
+#: at write time, and a stale form does not.
+ROUTING_OWNED_KEYS = frozenset({"retired_paths"})
+
+
+def split_tunables(entries: list) -> tuple[list, list]:
+    """Split a category into its on/off switches and its values.
+
+    A switch saves on the tap that flips it; a value is typed, so it is still
+    applied from a form. Keeping them apart is what lets a switch be one tap
+    without dragging every number in its category into the same save.
+    """
+    switches = [e for e in entries if e.get("type") == "bool"]
+    values = [e for e in entries if e.get("type") != "bool"]
+    return switches, values
 
 
 def is_changed(entry: dict) -> bool:
@@ -105,6 +128,30 @@ def group_tunables(tunables: object) -> tuple[dict[str, list], bool]:
     return {c: groups[c] for c in sorted(groups, key=_rank)}, initialised
 
 
+def category_meta(tunable_groups: dict[str, list]) -> list[dict]:
+    """One dict per category, in render order, for the template.
+
+    The typed knobs sit under ``value_knobs`` and not ``values``: Jinja
+    resolves ``meta.values`` to the dict's own ``values`` method before the
+    item of that name, and the page 500'd on its first render. ``/system/redis``
+    paid for the same collision on ``keys``, and the throttle table on
+    ``copy`` — a test now asserts no key here shadows a dict method.
+    """
+    out = []
+    for cat, entries in tunable_groups.items():
+        switches, values = split_tunables(entries)
+        out.append({
+            "category": cat,
+            "anchor": anchor_for(cat),
+            "count": len(entries),
+            "changed": sum(1 for e in entries if e.get("changed")),
+            "switches": switches,
+            "value_knobs": values,
+            "value_knobs_changed": sum(1 for e in values if e.get("changed")),
+        })
+    return out
+
+
 def governor_summary(payload: object) -> dict:
     """The trail governor, reduced for its row on the switchboard.
 
@@ -138,6 +185,79 @@ def governor_summary(payload: object) -> dict:
     }
 
 
+#: Readable names for the control actions this repo writes. A name missing
+#: here is not an error: it renders humanised from the raw action, so a new
+#: writer reads sensibly the day it ships instead of rendering blank.
+_ACTION_TITLES = {
+    "auto_mode": "Auto-execution mode",
+    "kill_switch": "Kill switch",
+    "auto_trade_global": "Global auto-trade",
+    "signal_expiry": "Signal expiry",
+    "play_billing": "Play billing",
+    "tunables_update": "Engine tunables",
+    "tunables": "Engine tunables",
+    "signal_reset_full": "Full signal reset",
+    "close_signal": "Close signal",
+}
+
+#: How many tunable writes one audit row lists before summarising the rest.
+_AUDIT_VALUES_SHOWN = 3
+
+
+def _audit_value(value: object) -> str:
+    """One value as a person reads it. Bools arrive as ``True`` or ``"True"``
+    (the tunables writer stores ``str(v)``), and both read as on/off."""
+    if isinstance(value, bool) or value in ("True", "False"):
+        return "on" if value in (True, "True") else "off"
+    if value is None or value == "":
+        return "empty"
+    return str(value)
+
+
+def describe_audit(entry: object, labels: dict | None = None) -> dict:
+    """An audit row as a sentence, with the raw params kept for the hover.
+
+    The table used to print ``{"be_arm_trigger_pct": 1.2}``: correct, and
+    unreadable at a glance. Tunable keys resolve to the label the engine
+    publishes; a key it no longer publishes keeps its raw name rather than
+    vanishing.
+    """
+    labels = labels or {}
+    e = entry if isinstance(entry, dict) else {}
+    action = str(e.get("action") or "")
+    params = e.get("params") if isinstance(e.get("params"), dict) else {}
+    title = _ACTION_TITLES.get(action) or (
+        action.replace("_", " ").strip().capitalize() or "Unknown action"
+    )
+    lines: list[str] = []
+    values = params.get("values")
+    if action == "kill_switch":
+        lines.append("Engaged" if params.get("engaged") else "Disengaged")
+        if params.get("reason"):
+            lines.append(f"Reason: {params['reason']}")
+    elif action == "auto_mode" and params.get("mode"):
+        lines.append(f"Set to {str(params['mode']).upper()}")
+    elif "enabled" in params and len(params) == 1:
+        lines.append("Turned on" if params.get("enabled") else "Turned off")
+    elif isinstance(values, dict):
+        items = list(values.items())
+        for key, val in items[:_AUDIT_VALUES_SHOWN]:
+            lines.append(f"{labels.get(key, key)} → {_audit_value(val)}")
+        if len(items) > _AUDIT_VALUES_SHOWN:
+            lines.append(f"…and {len(items) - _AUDIT_VALUES_SHOWN} more")
+    else:
+        for key, val in params.items():
+            lines.append(f"{str(key).replace('_', ' ')}: {_audit_value(val)}")
+    return {
+        "ts": e.get("ts"),
+        "title": title,
+        "lines": lines,
+        "ok": bool(e.get("ok")),
+        "result": e.get("result"),
+        "raw": json.dumps(params, default=str),
+    }
+
+
 async def _render(request: Request):
     api = request.app.state.engine_api
     settings = request.app.state.settings
@@ -161,16 +281,12 @@ async def _render(request: Request):
     flash = request.session.pop("_control_flash", None)
 
     tunable_groups, tunables_initialised = group_tunables(tunables)
-    groups_meta = [
-        {
-            "category": cat,
-            "anchor": anchor_for(cat),
-            "count": len(entries),
-            "changed": sum(1 for e in entries if e.get("changed")),
-        }
-        for cat, entries in tunable_groups.items()
-    ]
+    groups_meta = category_meta(tunable_groups)
     changed_total = sum(g["changed"] for g in groups_meta)
+    labels = {
+        str(e.get("key")): str(e.get("label") or e.get("key"))
+        for entries in tunable_groups.values() for e in entries
+    }
 
     return templates.TemplateResponse(
         "control.html",
@@ -187,7 +303,11 @@ async def _render(request: Request):
             "groups_meta": groups_meta,
             "changed_total": changed_total,
             "tunables_initialised": tunables_initialised,
-            "audit": audit.tail(settings.audit_log_path, limit=25),
+            "audit": [
+                describe_audit(e, labels)
+                for e in audit.tail(settings.audit_log_path, limit=25)
+            ],
+            "routing_owned": ROUTING_OWNED_KEYS,
             "flash": flash,
         },
     )
@@ -398,6 +518,25 @@ async def control_billing(request: Request, enabled: str = Form(...)):
     return RedirectResponse("/control", status_code=303)
 
 
+#: Form fields that steer the handler and are never tunable values.
+_FORM_META_KEYS = frozenset({"_bool_keys", "_str_keys", "_label", "_return"})
+
+#: A return target is an element id on /control and nothing else, so a posted
+#: value can never turn the redirect into a trip off the page.
+_RETURN_ANCHOR = re.compile(r"^[A-Za-z0-9_-]{1,120}$")
+
+
+def _return_to(form) -> str:
+    """Where a tunables save lands: back at the switch that was tapped.
+
+    Without it every save reloaded /control at the top with every category
+    collapsed, so flipping three switches meant finding the category three
+    times.
+    """
+    anchor = str(form.get("_return", "")).strip()
+    return f"/control#{anchor}" if _RETURN_ANCHOR.match(anchor) else "/control"
+
+
 @router.post("/control/tunables")
 async def control_tunables(request: Request):
     """Update one or more engine runtime tunables (noise-floor stops, BE
@@ -418,7 +557,7 @@ async def control_tunables(request: Request):
     str_keys = {k for k in str(form.get("_str_keys", "")).split(",") if k}
     values: dict[str, object] = {}
     for key, raw in form.multi_items():
-        if key in ("_bool_keys", "_str_keys"):
+        if key in _FORM_META_KEYS:
             continue
         if key in bool_keys:
             continue  # handled below so unchecked boxes become False
@@ -439,13 +578,20 @@ async def control_tunables(request: Request):
         result={"initialised": result.get("initialised")} if isinstance(result, dict) else {},
         ok=ok,
     )
-    if ok:
+    # A single switch names itself in the flash: "Mean revert live → OFF"
+    # says what just happened, "1 value(s) updated" makes you look for it.
+    label = str(form.get("_label", "")).strip()[:160]
+    single = next(iter(values.items())) if len(values) == 1 else None
+    if ok and single and label and single[0] in bool_keys:
+        text = f"{label} → {'ON' if single[1] else 'OFF'}. Live within 5 seconds."
+    elif ok:
         text = f"Engine tunables updated ({len(values)} value(s)) — live within 5 seconds."
     else:
         detail = result.get("error") if isinstance(result, dict) else result
-        text = f"Tunables update failed: {detail}"
+        what = f"{label}: " if single and label else ""
+        text = f"{what}Tunables update failed: {detail}"
     request.session["_control_flash"] = {"ok": ok, "text": text}
-    return RedirectResponse("/control", status_code=303)
+    return RedirectResponse(_return_to(form), status_code=303)
 
 
 @router.post("/control/reset-signals")

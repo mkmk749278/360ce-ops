@@ -947,3 +947,239 @@ def test_an_old_engine_without_availability_still_prints_its_verdict(monkeypatch
 # The audit captures above ignore ``action="login"``: since 2026-09-26 a
 # successful owner sign-in is itself audited (app/routes/auth.py), and these
 # tests log in before exercising the control action they are about.
+
+
+# ---- one-tap switches (2026-09-26) ---------------------------------------
+#
+# Owner: "make control panel simple easy to toggle, not like raw data". An
+# on/off knob now saves on the tap that flips it, as its own form, and the
+# switchboard's text buttons became switches. What these guard is what makes
+# a one-tap control safe to have: it writes one knob, it never shows a state
+# nobody read, and it cannot be steered off the page.
+
+
+def _switch_forms(html: str) -> list[str]:
+    import re
+
+    return re.findall(r'<form[^>]*class="tg-tile[^"]*"[^>]*>.*?</form>', html, re.S)
+
+
+def test_each_on_off_knob_is_its_own_form(monkeypatch):
+    """A tap must write exactly the knob that was tapped. A switch sharing a
+    form with its category would post every sibling as it stood on load —
+    the whole category re-written by one tap."""
+    import re
+
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(
+            _knob("alpha", "Signal gating", True, True),
+            _knob("beta", "Signal gating", False, False),
+            _knob("gamma", "Signal gating", 0.5, 0.5),
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    forms = _switch_forms(html)
+    assert len(forms) == 2
+    for key, form in zip(("alpha", "beta"), forms):
+        assert f'name="_bool_keys" value="{key}"' in form
+        names = set(re.findall(r'name="([a-z]\w*)"', form))
+        assert names == {key}, f"switch form for {key} posts {names}"
+        assert 'action="/control/tunables"' in form
+    # The typed value lives in a separate form, with no bool keys in it.
+    assert 'name="gamma"' not in "".join(forms)
+    assert 'name="_bool_keys" value=""' in html
+
+
+def test_a_switch_save_writes_one_knob_and_returns_to_it(monkeypatch):
+    sent: dict = {}
+
+    async def fake_set(self, values):
+        sent.update(values)
+        return {"initialised": True, "tunables": []}
+
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(EngineApiClient, "set_tunables", fake_set)
+    monkeypatch.setattr(control_route.audit, "record", lambda *a, **k: None)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post(
+            "/control/tunables",
+            data={"_bool_keys": "mean_revert_live", "_label": "MEAN_REVERT live",
+                  "_return": "tun-row-mean_revert_live"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303  # PRG: a refresh cannot re-fire it
+        assert r.headers["location"] == "/control#tun-row-mean_revert_live"
+        page = client.get("/control").text
+    # The steering fields never reach the engine as tunables.
+    assert sent == {"mean_revert_live": False}
+    assert "MEAN_REVERT live → OFF" in page
+
+
+def test_the_return_target_cannot_leave_the_page(monkeypatch):
+    """`_return` is an element id and nothing else — never a URL."""
+    async def fake_set(self, values):
+        return {"initialised": True, "tunables": []}
+
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(EngineApiClient, "set_tunables", fake_set)
+    monkeypatch.setattr(control_route.audit, "record", lambda *a, **k: None)
+    with TestClient(app) as client:
+        _login(client)
+        for bad in ("//evil.example.com", "https://evil.example.com",
+                    "x#y", "../login", "a b", "javascript:alert(1)", ""):
+            r = client.post(
+                "/control/tunables",
+                data={"_bool_keys": "k", "_return": bad},
+                follow_redirects=False,
+            )
+            assert r.headers["location"] == "/control", bad
+
+
+def test_a_failed_switch_save_says_which_knob_failed(monkeypatch):
+    async def fake_set(self, values):
+        return {"error": "HTTP 503"}
+
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(EngineApiClient, "set_tunables", fake_set)
+    monkeypatch.setattr(control_route.audit, "record", lambda *a, **k: None)
+    with TestClient(app) as client:
+        _login(client)
+        client.post("/control/tunables",
+                    data={"_bool_keys": "k", "k": "on", "_label": "Knob K"},
+                    follow_redirects=False)
+        page = client.get("/control").text
+    assert "Knob K: Tunables update failed: HTTP 503" in _flat(page)
+    assert 'data-autohide="0"' in page, "a failure must not fade on its own"
+
+
+def test_the_switchboard_draws_a_switch_only_over_a_reading(monkeypatch):
+    """A switch drawn in either position is a verdict. Over a flag we could
+    not read, the page keeps both text buttons and draws no switch — the
+    2026-09-02 rule that an unreadable state renders no verdict."""
+    readable = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+        {"enabled": True, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+    )
+    assert ('role="switch"\n        aria-checked="true" aria-label="Disable global '
+            'auto-trade"') in readable
+
+    unreadable = _get_control(
+        monkeypatch,
+        {"engaged": False, "initialised": True, "availability": "ok",
+         "throwable": True, "source": "local"},
+        {"enabled": False, "initialised": False, "availability": "read_failed",
+         "throwable": True, "source": "engine", "detail": "quota"},
+    )
+    row = unreadable[unreadable.index('id="sw-auto-trade"'):
+                     unreadable.index('id="sec-mode"')]
+    assert 'role="switch"' not in row
+    assert "Enable global auto-trade" in row and "Disable global auto-trade" in row
+
+
+def test_the_routing_list_renders_read_only_and_is_never_posted_from_here(
+    monkeypatch,
+):
+    """`retired_paths` is edited on /control/routing, which re-reads the list
+    at write time. A category form here re-posted it as the page loaded it,
+    and could undo a divert made on Routing a minute earlier."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(
+            _knob("path_retirement_enabled", "Signal gating", True, True),
+            _knob("retired_paths", "Signal gating",
+                  "MOVER_TREND_PULLBACK:SHORT, VOLUME_SURGE_BREAKOUT:*",
+                  "", type="str"),
+            _knob("structural_snap_apply_paths", "Signal gating", "", "",
+                  type="str"),
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert 'name="retired_paths"' not in html
+    str_keys = html[html.index('name="_str_keys"'):]
+    str_keys = str_keys[: str_keys.index(">")]
+    assert "retired_paths" not in str_keys
+    assert "structural_snap_apply_paths" in str_keys
+    assert 'href="/control/routing"' in html
+    assert '<span class="chip">MOVER_TREND_PULLBACK:SHORT</span>' in html
+    assert '<span class="chip">VOLUME_SURGE_BREAKOUT:*</span>' in html
+
+
+def test_default_and_range_show_only_when_they_mean_something(monkeypatch):
+    """"default 10 · range 5–100" under every knob was most of what read as
+    raw. The default shows beside a knob that is OFF it; the range lives in
+    the ⓘ and in the input's own min/max."""
+    _patch_reads(monkeypatch)
+    monkeypatch.setattr(
+        EngineApiClient, "tunables_state",
+        _tunables(
+            _knob("still", "Signal gating", 10, 10, type="int", min=5, max=100),
+            _knob("moved", "Signal gating", 0.9, 0.4, min=0.0, max=1.0),
+        ),
+    )
+    with TestClient(app) as client:
+        _login(client)
+        html = client.get("/control").text
+    assert _flat(html).count('<div class="tun-meta">default') == 1
+    assert '<div class="tun-meta">default 0.4</div>' in html
+    assert "· range" not in html
+    assert 'min="5" max="100"' in _flat(html)
+
+
+def test_no_category_key_shadows_a_dict_method():
+    """Jinja resolves `meta.values` to `dict.values` before the item named
+    `values`; the first cut of this page 500'd on exactly that. Derived from
+    the helper's real output, not from a list of names to avoid."""
+    groups, _ = control_route.group_tunables({
+        "initialised": True,
+        "tunables": [_knob("a", "Signal gating", True, True),
+                     _knob("b", "Signal gating", 1.0, 1.0)],
+    })
+    for meta in control_route.category_meta(groups):
+        assert not set(meta) & set(dir({})), set(meta) & set(dir({}))
+
+
+def test_audit_rows_read_as_sentences():
+    labels = {"be_arm_trigger_pct": "BE arm: flat trigger", "mean_revert_live": "MEAN_REVERT live"}
+    row = control_route.describe_audit(
+        {"action": "tunables_update", "ok": True,
+         "params": {"values": {"be_arm_trigger_pct": "1.2", "mean_revert_live": "False"}}},
+        labels,
+    )
+    assert row["title"] == "Engine tunables"
+    assert row["lines"] == ["BE arm: flat trigger → 1.2", "MEAN_REVERT live → off"]
+    # The raw params survive for the hover — nothing is thrown away.
+    assert '"be_arm_trigger_pct": "1.2"' in row["raw"]
+
+    many = control_route.describe_audit(
+        {"action": "tunables_update",
+         "params": {"values": {f"k{i}": str(i) for i in range(7)}}}, {})
+    assert many["lines"][-1] == "…and 4 more" and len(many["lines"]) == 4
+
+    ks = control_route.describe_audit(
+        {"action": "kill_switch", "params": {"engaged": True, "reason": "drill"}})
+    assert ks["lines"] == ["Engaged", "Reason: drill"]
+    assert control_route.describe_audit(
+        {"action": "auto_trade_global", "params": {"enabled": False}}
+    )["lines"] == ["Turned off"]
+
+    # A writer this page has never heard of reads sensibly, not blank.
+    unknown = control_route.describe_audit(
+        {"action": "path_divert",
+         "params": {"setup_class": "MOVER_AVWAP_SCALP", "side": "SHORT"}})
+    assert unknown["title"] == "Path divert"
+    assert unknown["lines"] == ["setup class: MOVER_AVWAP_SCALP", "side: SHORT"]
+    # A key the engine no longer publishes keeps its raw name.
+    gone = control_route.describe_audit(
+        {"action": "tunables_update", "params": {"values": {"old_knob": "3"}}}, {})
+    assert gone["lines"] == ["old_knob → 3"]

@@ -988,3 +988,139 @@ th.pick-col { width: 2.2rem; text-align: center; }
 table.tbl.small th { white-space: nowrap; }
 .sw-name > details.info, .title-row > details.info { margin-left: 0; }
 .title-row { gap: 0.4rem; }
+
+/* ---- Control: one-tap switches (2026-09-26) -------------------------------
+   Owner: "make control panel simple easy to toggle, not like raw data". A
+   switch shows the state it is in and one tap asks to change it; the
+   switchboard's text buttons and the tunables' per-category Apply for an
+   on/off knob were both one step too many. */
+.swt {
+  --swt: var(--pos);
+  display: inline-flex; align-items: center; gap: 0.55rem;
+  background: transparent; border: none; box-shadow: none;
+  padding: 0.25rem 0.1rem; margin: 0; color: var(--fg-dim);
+  font-weight: 650; font-size: 0.84rem; cursor: pointer;
+}
+.swt:hover { filter: none; color: var(--fg); }
+.swt:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--r-pill); }
+.swt-track {
+  position: relative; flex: 0 0 auto; width: 2.9rem; height: 1.6rem;
+  border-radius: var(--r-pill); background: var(--bg-hover); border: 1px solid var(--border);
+  transition: background var(--ease), border-color var(--ease);
+}
+.swt-knob {
+  position: absolute; top: 3px; left: 3px;
+  width: calc(1.6rem - 8px); height: calc(1.6rem - 8px); border-radius: 50%;
+  background: var(--fg-dim); transition: transform var(--ease), background var(--ease);
+}
+.swt-text { min-width: 1.7em; text-align: left; }
+/* The switch takes its row's tone, so "on" is not green over an amber state
+   (signal expiry on is off-default). */
+.sw.tone-warn .swt { --swt: var(--warn); }
+.sw.tone-bad .swt { --swt: var(--neg); }
+.swt-on .swt-track {
+  border-color: var(--swt);
+  background: color-mix(in srgb, var(--swt) 26%, transparent);
+}
+.swt-on .swt-knob { transform: translateX(1.3rem); background: var(--swt); }
+.swt-on .swt-text { color: var(--swt); }
+
+/* ---- Tunables: switch tiles + a values drawer ----------------------------- */
+.tun-body { padding: 0.75rem 0.8rem 0.8rem; }
+.tun-body > .tunable-group { padding: 0; margin: 0; }
+.tg-grid {
+  display: grid; gap: 0.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 21rem), 1fr));
+}
+.tg-tile {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+  margin: 0; padding: 0.6rem 0.75rem; min-width: 0;
+  background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+}
+.tg-tile.tun-row-chg { border-color: rgba(227,179,65,0.5); box-shadow: inset 3px 0 0 var(--warn); }
+/* Block, not flex: as flex items the ⓘ and the default note dropped onto a
+   line of their own whenever a label wrapped. Inline, they follow the last
+   word of the label. */
+.tg-tile-name { display: block; min-width: 0; font-size: 0.86rem; font-weight: 600; line-height: 1.4; }
+.tg-tile-name label { cursor: pointer; overflow-wrap: anywhere; }
+.tg-tile-def { font-size: 0.7rem; font-weight: 650; color: var(--warn); white-space: nowrap; margin-left: 0.35rem; }
+.tg-tile .tg { flex: 0 0 auto; }
+.tg-auto { flex: 0 0 auto; }
+.tg-save { flex: 0 0 auto; }
+.js-tg .tg-save { display: none; }
+.tg-tile.is-saving { opacity: 0.55; pointer-events: none; }
+.just-saved { animation: just-saved 2.4s ease-out 1; }
+@keyframes just-saved {
+  0%, 35% { outline: 2px solid var(--accent); outline-offset: 2px; }
+  100% { outline: 2px solid transparent; outline-offset: 2px; }
+}
+
+details.tun-vals { margin-top: 0.8rem; border: 1px solid var(--border-soft); border-radius: var(--r-sm); }
+details.tun-vals > summary {
+  list-style: none; display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.55rem 0.75rem; font-weight: 600; font-size: 0.84rem; color: var(--fg-dim);
+}
+details.tun-vals > summary::-webkit-details-marker { display: none; }
+details.tun-vals > summary::before { content: '▸'; }
+details.tun-vals[open] > summary::before { content: '▾'; }
+details.tun-vals[open] > summary { border-bottom: 1px solid var(--border-soft); }
+details.tun-vals > .tunable-group { padding: 0 0.75rem 0.75rem; margin: 0; }
+details.tun-vals .tun-apply { margin: 0.6rem -0.75rem -0.75rem; }
+.tv-list { display: flex; flex-direction: column; }
+.tv-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.4rem 1rem;
+  align-items: center; padding: 0.55rem 0; border-top: 1px solid var(--border-soft);
+}
+.tv-row:first-child { border-top: none; }
+.tv-name { display: block; min-width: 0; font-size: 0.86rem; font-weight: 600; line-height: 1.4; }
+.tv-name label { cursor: pointer; }
+.tv-name > .muted, .tv-name > .pill-chg { margin-left: 0.3rem; }
+.tv-label { overflow-wrap: anywhere; }
+.tv-input { display: flex; flex-direction: column; align-items: flex-end; gap: 0.3rem; min-width: 0; }
+.tv-input input[type=number] { width: 8.5rem; }
+.tv-input select { min-width: 8.5rem; }
+.tv-input input[type=text] { width: min(24rem, 60vw); }
+.tv-input .tun-meta { margin-top: 0; text-align: right; }
+.tv-row.tun-row-chg .tv-name { box-shadow: inset 3px 0 0 var(--warn); padding-left: 0.55rem; }
+.tv-row.tun-row-dirty .tv-name { box-shadow: inset 3px 0 0 var(--accent); padding-left: 0.55rem; }
+.tv-chips { justify-content: flex-end; margin: 0; }
+
+/* ---- The result of a control action, as a toast --------------------------- */
+.flash-toast {
+  position: fixed; left: 50%; bottom: 1.1rem; transform: translateX(-50%); z-index: 60;
+  margin: 0; display: flex; align-items: flex-start; gap: 0.8rem;
+  width: max-content; max-width: min(40rem, calc(100vw - 2rem));
+  box-shadow: var(--shadow); transition: opacity 400ms ease, transform 400ms ease;
+}
+.flash-toast.flash-ok {
+  background: linear-gradient(rgba(63,185,80,0.14), rgba(63,185,80,0.14)), var(--bg-elev);
+}
+.flash-toast.flash-err {
+  background: linear-gradient(rgba(255,92,87,0.14), rgba(255,92,87,0.14)), var(--bg-elev);
+}
+.flash-toast.is-gone { opacity: 0; transform: translate(-50%, 0.6rem); pointer-events: none; }
+.flash-x {
+  background: transparent; border: none; box-shadow: none; color: inherit;
+  font-size: 1.15rem; line-height: 1; padding: 0 0.15rem; margin: 0; cursor: pointer;
+}
+.flash-x:hover { filter: none; opacity: 0.8; }
+
+/* ---- Audit: sentences, not JSON ------------------------------------------ */
+.audit-what strong { font-weight: 620; }
+.audit-line { color: var(--fg-dim); font-size: 0.8rem; margin-top: 0.1rem; overflow-wrap: anywhere; }
+
+@media (max-width: 720px) {
+  .tv-row { grid-template-columns: minmax(0, 1fr); }
+  .tv-input { align-items: flex-start; }
+  .tv-input .tun-meta { text-align: left; }
+  .tv-input input[type=text] { width: 100%; }
+  .tv-chips { justify-content: flex-start; }
+  .tun-body { padding: 0.65rem 0.6rem 0.7rem; }
+  details.tun-vals > .tunable-group { padding: 0 0.6rem 0.7rem; }
+  details.tun-vals .tun-apply { margin: 0.6rem -0.6rem -0.7rem; }
+  .sw .sw-act { justify-content: flex-start; }
+  /* A switch is small enough to stay beside its name on a phone; only the
+     rows with wide controls (the mode selector, two text buttons) stack. */
+  .sw:has(.swt), .sw#sw-governor { grid-template-columns: minmax(0, 1fr) auto; }
+  .sw:has(.swt) .sw-act, .sw#sw-governor .sw-act { justify-content: flex-end; }
+}

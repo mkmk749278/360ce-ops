@@ -2462,6 +2462,43 @@ sits behind an ⓘ (`app/templates/_info.html`):
   The table went from ten columns to six: trades and average share a cell, and
   the side rides on the path name. On a phone it went from 6,063px to 4,627px.
 
+## One tap, one knob (2026-09-26)
+
+Owner: *"Make control panel simple easy to toggle, not like raw data."* After
+two overhauls the page still asked for three steps to flip an on/off knob:
+open the category, flip it, then scroll to a category-wide Apply bar that
+re-posted every sibling as it stood on load. Every knob also carried a
+`default X · range a–b` line whether or not it meant anything.
+
+- **Every on/off tunable is its own form** and saves on the tap that flips
+  it. The tap asks first, posts `_bool_keys=<key>` and nothing else, and
+  redirects to `/control#tun-row-<key>`. The page reopens the category and
+  scrolls back to the knob. With JavaScript off, a Save button does the same
+  thing. A test asserts each switch form carries exactly one knob name.
+- **`_return` is an element id, never a URL.** It must match
+  `^[A-Za-z0-9_-]+$`, or the redirect falls back to `/control`.
+- **The result is a toast**, because the save lands you far from the top of
+  the page. A failure stays until it is closed.
+- **The switchboard's text buttons became switches, and only over a
+  reading.** An unreadable flag keeps both text buttons: a switch drawn in
+  either position is a verdict nobody observed. The first cut matched its
+  replacement marker on the tone line and put a switch *inside* the
+  unreadable branch. A test now fails on exactly that, verified by putting
+  the bug back.
+- **Typed values sit behind "Fine-tune values"** and are applied per
+  category, as before. A default shows only beside a knob that is off it;
+  the range lives in the ⓘ and in the input's own `min`/`max`.
+- **`retired_paths` is read-only here**, as chips with a link to Routing.
+  Routing re-reads the list at write time; a category form here re-posted it
+  as the page had loaded it.
+- **The audit reads as sentences** (`BE arm: flat trigger → 1.2`). The raw
+  params stay in the hover.
+
+**`meta.values` 500'd the page on its first render**, the fourth time a
+payload key has collided with a dict method here (`keys`, `copy`, now
+`values`). The key is `value_knobs`, and a test asserts no category key
+shadows a dict method, derived from the helper's real output.
+
 ## The mover lifecycle panels (2026-08-13, #173–#175)
 
 Three surfaces for engine #927/#928/#929 — how a promoted pair is kept, how a path

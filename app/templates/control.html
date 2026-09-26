@@ -2,6 +2,20 @@
 {% from "_info.html" import info %}
 {% block title %}Control · 360 CE Ops{% endblock %}
 {% block content %}
+{#- A switch shows the state it is IN, and one tap asks to change it.
+
+    It is a submit button inside the existing PRG form — the hidden field
+    carries the target value and the form's own confirm() still runs — so it
+    works with JavaScript off and posts exactly what the text buttons did.
+    Its accessible name is the action ("Disable global auto-trade"), and it
+    renders only when the state was actually READ: an unreadable switch keeps
+    both text buttons below, because a switch drawn in either position would
+    be a verdict nobody observed. -#}
+{%- macro switch(on, action_label) -%}
+<button type="submit" class="swt{% if on %} swt-on{% endif %}" role="switch"
+        aria-checked="{{ 'true' if on else 'false' }}" aria-label="{{ action_label }}"
+        title="{{ action_label }}"><span class="swt-track" aria-hidden="true"><span class="swt-knob"></span></span><span class="swt-text">{{ 'On' if on else 'Off' }}</span></button>
+{%- endmacro -%}
 {#- Owner, 2026-09-24, after the overhaul: "Still control panel looks messy
     only" — and, the same hour, "don't keep all that brief there, keep i icon".
     Every explanation on this page now sits behind an ⓘ (_info.html). What is
@@ -32,9 +46,15 @@
   <a href="#sec-audit">Audit</a>
 </nav>
 
+{#- A toast, not a banner: a switch save returns you to the switch you
+    tapped, which is usually far below the top of the page, and a result
+    printed up there is a result nobody sees. A failure stays until closed. -#}
 {% if flash %}
-<div class="flash {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}">
-  {{ flash.text }}
+<div class="flash flash-toast {% if flash.ok %}flash-ok{% else %}flash-err{% endif %}"
+     role="status" data-autohide="{{ '1' if flash.ok else '0' }}">
+  <span>{{ flash.text }}</span>
+  <button type="button" class="flash-x" aria-label="Dismiss"
+          onclick="this.parentNode.remove()">×</button>
 </div>
 {% endif %}
 
@@ -225,7 +245,7 @@
       <form method="post" action="/control/auto-trade-global"
             onsubmit="return confirm('DISABLE global auto-trade? New orders halt engine-wide (open positions are left untouched).');">
         <input type="hidden" name="enabled" value="false">
-        <button type="submit" class="btn btn-plain">Disable global auto-trade</button>
+        {{ switch(true, 'Disable global auto-trade') }}
       </form>
     </div>
     {% else %}
@@ -235,7 +255,7 @@
       <form method="post" action="/control/auto-trade-global"
             onsubmit="return confirm('ENABLE global auto-trade engine-wide?');">
         <input type="hidden" name="enabled" value="true">
-        <button type="submit" class="btn btn-plain">Enable global auto-trade</button>
+        {{ switch(false, 'Enable global auto-trade') }}
       </form>
     </div>
     {% endif %}
@@ -316,7 +336,7 @@
       <form method="post" action="/control/signal-expiry"
             onsubmit="return confirm('DISABLE signal expiry? Signals will run to TP or SL only and never expire mid-move.');">
         <input type="hidden" name="enabled" value="false">
-        <button type="submit" class="btn btn-plain">Disable expiry</button>
+        {{ switch(true, 'Disable signal expiry') }}
       </form>
     </div>
     {% else %}
@@ -326,7 +346,7 @@
       <form method="post" action="/control/signal-expiry"
             onsubmit="return confirm('ENABLE signal expiry? Signals will force-close at the max-hold time instead of running to TP/SL.');">
         <input type="hidden" name="enabled" value="true">
-        <button type="submit" class="btn btn-plain">Enable expiry</button>
+        {{ switch(false, 'Enable signal expiry') }}
       </form>
     </div>
     {% endif %}
@@ -371,7 +391,7 @@
       <form method="post" action="/control/billing"
             onsubmit="return confirm('DISABLE Play billing? New purchases and RTDN processing stop. Existing subscribers keep their tier until it expires.');">
         <input type="hidden" name="enabled" value="false">
-        <button type="submit" class="btn btn-plain">Disable billing</button>
+        {{ switch(true, 'Disable Play billing') }}
       </form>
     </div>
     {% else %}
@@ -381,7 +401,7 @@
       <form method="post" action="/control/billing"
             onsubmit="return confirm('ENABLE Play billing? Subscription purchases will be verified and granted live.');">
         <input type="hidden" name="enabled" value="true">
-        <button type="submit" class="btn btn-plain">Enable billing</button>
+        {{ switch(false, 'Enable Play billing') }}
       </form>
     </div>
     {% endif %}
@@ -457,19 +477,24 @@
       {{ tunable_groups.values()|map('length')|sum }} are off their boot
       default — those rows are marked changed.{% else %}Every tunable is
       currently at its boot default.{% endif %}</p>
-    <p><strong>Filtering hides rows, it does not exclude them from a save</strong>
-      — a hidden field still posts its current value, so applying a category
-      always writes that whole category exactly as it stands.</p>
-    <p>An edit you have not applied is marked blue and counted on the Apply
-      bar, which follows you down an open category. Each knob's ⓘ has its
-      description and key.</p>
+    <p><strong>A switch saves on the tap that flips it</strong> — it asks
+      first, writes that one knob and nothing else, and brings you back to
+      it. What it shows after the save is what the engine reports, not what
+      was clicked.</p>
+    <p>Typed values sit under <em>Fine-tune values</em> in each category and
+      are applied together from that category's Apply bar. An edit you have
+      not applied is marked blue and counted on the bar.
+      <strong>Filtering hides rows, it does not exclude them from a save</strong>
+      — a hidden field still posts its current value, so applying a category's
+      values always writes them exactly as they stand.</p>
+    <p>Each knob's ⓘ has its description, default and key.</p>
   {% endcall %}
 </div>
 <section class="card">
   {% if tunable_groups %}
   <div class="tun-toolbar">
     <input type="search" id="tun-filter" class="tun-filter"
-           placeholder="Filter {{ tunable_groups.values()|map('length')|sum }} tunables…"
+           placeholder="Search {{ tunable_groups.values()|map('length')|sum }} settings…"
            autocomplete="off" aria-label="Filter tunables">
     <label class="tg tun-only-changed">
       <input type="checkbox" class="toggle" id="tun-changed-only"> Only changed
@@ -487,51 +512,100 @@
         store uninitialised — values below are the env boot defaults and
         writes will fail until Firestore is wired.</p>
     {% endif %}
-    {% for category, entries in tunable_groups.items() %}
-    {% set meta = (groups_meta | selectattr('category', 'equalto', category) | first) %}
+    {% for meta in groups_meta %}
+    {% set category = meta.category %}
+    {% set n_sw = meta.switches|length %}
+    {% set n_val = meta.value_knobs|length %}
     <details class="tun-cat" id="{{ meta.anchor }}" data-cat="{{ category }}">
       <summary>
         <span class="tun-cat-name">{{ category }}</span>
-        <span class="muted small">{{ meta.count }} knob{{ '' if meta.count == 1 else 's' }}</span>
+        <span class="muted small">{% if n_sw %}{{ n_sw }} switch{{ 'es' if n_sw != 1 }}{% endif %}{% if n_sw and n_val %} · {% endif %}{% if n_val %}{{ n_val }} value{{ 's' if n_val != 1 }}{% endif %}</span>
         {% if meta.changed %}<span class="pill-chg">{{ meta.changed }} changed</span>{% endif %}
         <span class="pill-dirty" hidden></span>
       </summary>
-    <form method="post" action="/control/tunables" class="tunable-group"
-          onsubmit="return confirm('Apply these {{ category|lower }} changes to the LIVE engine? They take effect within 5 seconds.');">
-      <input type="hidden" name="_bool_keys"
-             value="{{ entries | selectattr('type', 'equalto', 'bool') | map(attribute='key') | join(',') }}">
-      {# Companion for text tunables, for the same reason _bool_keys exists.
-         The handler skips empty form values so an untouched number field does
-         not post garbage — but for a string knob, empty is a REAL value
-         ("no paths selected"). Without this an allow-list could be added to
-         and never cleared. #}
-      <input type="hidden" name="_str_keys"
-             value="{{ entries | selectattr('type', 'equalto', 'str') | map(attribute='key') | join(',') }}">
-      <table class="tunables">
-        <tbody>
-          {% for t in entries %}
-          <tr class="tun-row{% if t.changed %} tun-row-chg{% endif %}"
+      <div class="tun-body">
+
+      {# On/off knobs. Each is its own form, so a tap saves exactly that one
+         knob and nothing else in its category. The checkbox is the knob's
+         state as the engine reported it; flipping it asks, then posts. With
+         JavaScript off the Save button does the same thing without the ask. #}
+      {% if n_sw %}
+      <div class="tg-grid">
+        {% for t in meta.switches %}
+        <form method="post" action="/control/tunables"
+              class="tg-tile tun-row{% if t.changed %} tun-row-chg{% endif %}"
+              id="tun-row-{{ t.key }}" data-label="{{ t.label }}"
               data-hay="{{ (t.label ~ ' ' ~ t.key ~ ' ' ~ t.description)|lower }}"
               data-changed="{{ '1' if t.changed else '0' }}">
-            <td class="tunable-label">
-              <div class="tun-head">
-                <label for="tun-{{ t.key }}"><strong>{{ t.label }}</strong></label>
+          <input type="hidden" name="_bool_keys" value="{{ t.key }}">
+          <input type="hidden" name="_label" value="{{ t.label }}">
+          <input type="hidden" name="_return" value="tun-row-{{ t.key }}">
+          <div class="tg-tile-name">
+            <label for="tun-{{ t.key }}">{{ t.label }}</label>
+            {% call info(t.label) %}
+              <p>{{ t.description }}</p>
+              <p>Default <strong>{{ 'on' if t.default else 'off' }}</strong>
+                · key <code>{{ t.key }}</code></p>
+            {% endcall %}
+            {% if t.changed %}<span class="tg-tile-def">default {{ 'on' if t.default else 'off' }}</span>{% endif %}
+          </div>
+          <label class="tg">
+            <input type="checkbox" class="toggle tg-auto" id="tun-{{ t.key }}" name="{{ t.key }}"
+                   {% if t.value %}checked{% endif %}{% if not tunables_initialised %} disabled{% endif %}>
+            <span class="tg-on">On</span><span class="tg-off">Off</span>
+          </label>
+          <button type="submit" class="btn btn-plain btn-sm tg-save"{% if not tunables_initialised %} disabled{% endif %}>Save</button>
+        </form>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {# Typed values — numbers, choices, text. Still applied as a group, from
+         a form, because a number is typed and a half-typed number must not
+         reach the engine. Behind their own drawer when the category also has
+         switches, so opening a category shows its switches first. #}
+      {% if n_val %}
+        {% if n_sw %}
+        <details class="tun-vals" id="vals-{{ meta.anchor }}">
+          <summary>Fine-tune values <span class="muted small">{{ n_val }}</span>
+            {% if meta.value_knobs_changed %}<span class="pill-chg">{{ meta.value_knobs_changed }} changed</span>{% endif %}</summary>
+        {% endif %}
+        <form method="post" action="/control/tunables" class="tunable-group"
+              onsubmit="return confirm('Apply these {{ category|lower }} changes to the LIVE engine? They take effect within 5 seconds.');">
+          <input type="hidden" name="_bool_keys" value="">
+          {# Companion for text tunables, for the same reason _bool_keys exists.
+             The handler skips empty form values so an untouched number field
+             does not post garbage — but for a string knob, empty is a REAL
+             value ("no paths selected"). Without this an allow-list could be
+             added to and never cleared. A key owned by the Routing page is
+             left out: it is not in this form, so it must not be written. #}
+          <input type="hidden" name="_str_keys"
+                 value="{{ meta.value_knobs | selectattr('type', 'equalto', 'str') | rejectattr('key', 'in', routing_owned) | map(attribute='key') | join(',') }}">
+          <input type="hidden" name="_return" value="{{ ('vals-' ~ meta.anchor) if n_sw else meta.anchor }}">
+          <div class="tv-list">
+          {% for t in meta.value_knobs %}
+            <div class="tv-row tun-row{% if t.changed %} tun-row-chg{% endif %}"
+                 data-hay="{{ (t.label ~ ' ' ~ t.key ~ ' ' ~ t.description)|lower }}"
+                 data-changed="{{ '1' if t.changed else '0' }}">
+              <div class="tv-name">
+                {% if t.key in routing_owned %}<span class="tv-label">{{ t.label }}</span>
+                {% else %}<label for="tun-{{ t.key }}">{{ t.label }}</label>{% endif %}
                 {% if t.unit %}<span class="muted small">{{ t.unit }}</span>{% endif %}
                 {% if t.changed %}<span class="pill-chg">changed</span>{% endif %}
                 {% call info(t.label) %}
                   <p>{{ t.description }}</p>
-                  <p>Key <code>{{ t.key }}</code></p>
+                  <p>Default {% if t.default not in (none, '') %}<code>{{ t.default }}</code>{% else %}empty{% endif %}{% if t.min is not none %}
+                    · allowed {{ t.min }}–{{ t.max }}{% endif %} · key <code>{{ t.key }}</code></p>
                 {% endcall %}
               </div>
-            </td>
-            <td class="tunable-input">
-              {% if t.type == 'bool' %}
-                <label class="tg">
-                  <input type="checkbox" class="toggle" id="tun-{{ t.key }}" name="{{ t.key }}"
-                         {% if t.value %}checked{% endif %}>
-                  <span class="tg-on">On</span><span class="tg-off">Off</span>
-                </label>
-                <div class="tun-meta">default {{ 'on' if t.default else 'off' }}</div>
+              <div class="tv-input">
+              {% if t.key in routing_owned %}
+                {% set items = (t.value or '')|string|replace(' ', '') %}
+                {% set items = items.split(',') | reject('equalto', '') | list %}
+                <div class="chips tv-chips">
+                  {% for i in items %}<span class="chip">{{ i }}</span>{% else %}<span class="muted small">none</span>{% endfor %}
+                </div>
+                <a class="btn btn-plain btn-sm" href="/control/routing">Edit on Routing →</a>
               {% elif t.choices %}
                 {# A closed set of values must not be typeable. Shipping the
                    governing timeframe as free text is how it got stored as
@@ -539,45 +613,44 @@
                    permanently inert while reporting a candle-feed fault. #}
                 <select id="tun-{{ t.key }}" name="{{ t.key }}">
                   {% for c in t.choices %}
-                  <option value="{{ c }}" {% if t.value|string == c %}selected{% endif %}>{{ c }}</option>
+                  <option value="{{ c }}" {% if t.value|string == c %}selected{% endif %}>{{ c if c != '' else '(none)' }}</option>
                   {% endfor %}
                 </select>
-                <div class="tun-meta">default <code>{{ t.default }}</code>
                 {% if t.value is not none and t.value|string not in t.choices %}
-                  <span class="pill-chg">stored {{ t.value }} — not a valid option</span>
-                {% endif %}</div>
+                  <div class="tun-meta"><span class="pill-chg">stored {{ t.value }} — not a valid option</span></div>
+                {% elif t.changed %}
+                  <div class="tun-meta">default <code>{{ t.default }}</code></div>
+                {% endif %}
               {% elif t.type == 'str' %}
-                {# Free text — e.g. the structural-snap per-path allow-list.
-                   Rendering this through the number input below would make the
-                   value untypeable, which is an allow-list that can only be
-                   changed by a redeploy: exactly what runtime tunables exist to
-                   avoid. An empty value is legitimate ("no paths selected"). #}
+                {# Free text — e.g. the structural-snap per-path allow-list. An
+                   empty value is legitimate ("no paths selected"). #}
                 <input type="text" id="tun-{{ t.key }}" name="{{ t.key }}"
                        value="{{ t.value if t.value is not none else '' }}"
-                       size="40" autocomplete="off">
-                <div class="tun-meta">default
-                  {% if t.default %}<code>{{ t.default }}</code>{% else %}empty{% endif %}</div>
+                       placeholder="empty" autocomplete="off">
+                {% if t.changed %}<div class="tun-meta">default
+                  {% if t.default %}<code>{{ t.default }}</code>{% else %}empty{% endif %}</div>{% endif %}
               {% else %}
                 <input type="number" id="tun-{{ t.key }}" name="{{ t.key }}"
-                       value="{{ t.value }}" step="{{ '1' if t.type == 'int' else '0.05' }}"
+                       value="{{ t.value }}" step="{{ '1' if t.type == 'int' else 'any' }}"
                        {% if t.min is not none %}min="{{ t.min }}"{% endif %}
                        {% if t.max is not none %}max="{{ t.max }}"{% endif %}>
-                <div class="tun-meta">default {{ t.default }}{% if t.min is not none %}
-                  · range {{ t.min }}–{{ t.max }}{% endif %}</div>
+                {% if t.changed %}<div class="tun-meta">default {{ t.default }}</div>{% endif %}
               {% endif %}
-            </td>
-          </tr>
+              </div>
+            </div>
           {% endfor %}
-        </tbody>
-      </table>
-      <div class="tun-apply">
-        <span class="tun-dirty-note">No unsaved edits in {{ category|lower }}.</span>
-        <button type="submit" class="btn btn-plain"
-                {% if not tunables_initialised %}disabled{% endif %}>
-          Apply {{ category|lower }} changes
-        </button>
+          </div>
+          <div class="tun-apply">
+            <span class="tun-dirty-note">No unsaved edits.</span>
+            <button type="submit" class="btn btn-plain"
+                    {% if not tunables_initialised %}disabled{% endif %}>
+              Apply {{ category|lower }} values
+            </button>
+          </div>
+        </form>
+        {% if n_sw %}</details>{% endif %}
+      {% endif %}
       </div>
-    </form>
     </details>
     {% endfor %}
   {% endif %}
@@ -682,6 +755,11 @@
          collapsed summary — a search that finds something and shows nothing
          reads as a search that found nothing. */
       if (q || wantChanged) { c.open = vis > 0; }
+      Array.prototype.forEach.call(c.querySelectorAll('details.tun-vals'), function (v) {
+        if (q || wantChanged) {
+          v.open = v.querySelectorAll('.tun-row:not([style*="none"])').length > 0;
+        }
+      });
     });
     count.textContent = (q || wantChanged)
       ? shown + ' of ' + rows.length + ' shown'
@@ -712,7 +790,8 @@
     inputs.forEach(function (el) { el.dataset.initial = read(el); });
     var bar = form.querySelector('.tun-apply');
     var note = bar && bar.querySelector('.tun-dirty-note');
-    var pill = form.closest('details') && form.closest('details').querySelector('.pill-dirty');
+    var cat = form.closest('details.tun-cat');
+    var pill = cat && cat.querySelector('summary .pill-dirty');
     var idle = note ? note.textContent : '';
     function update() {
       var n = 0;
@@ -740,6 +819,65 @@
 })();
 </script>
 
+
+<script>
+/* One-tap switches. Flipping a knob asks, then posts that knob alone; a
+   cancelled ask puts the switch back. The Save button is the no-JavaScript
+   path and is hidden once this runs. The checkbox is never disabled before
+   the submit — a disabled input is not posted, which would turn "switch on"
+   into "switch off". */
+(function () {
+  document.documentElement.classList.add('js-tg');
+  var boxes = document.querySelectorAll('form.tg-tile input.tg-auto');
+  Array.prototype.forEach.call(boxes, function (cb) {
+    cb.addEventListener('change', function () {
+      var form = cb.form;
+      var label = form.getAttribute('data-label') || cb.name;
+      var ask = 'Turn ' + (cb.checked ? 'ON' : 'OFF') + ' “' + label +
+                '”?\n\nIt takes effect on the live engine within 5 seconds.';
+      if (!window.confirm(ask)) { cb.checked = !cb.checked; return; }
+      form.classList.add('is-saving');
+      form.submit();
+    });
+  });
+})();
+
+/* Back where you were. A save redirects to /control#<the knob>; the knob sits
+   inside a collapsed category, which a fragment jump alone does not open, so
+   every save used to land on a page with nothing visible where you had been. */
+(function () {
+  function chrome() {
+    var h = 0;
+    ['header', '.subnav'].forEach(function (sel) {
+      var el = document.querySelector(sel);
+      if (!el) return;
+      var pos = window.getComputedStyle(el).position;
+      if (pos === 'sticky' || pos === 'fixed') h += el.getBoundingClientRect().height;
+    });
+    return h;
+  }
+  function reveal() {
+    var id = decodeURIComponent((location.hash || '').slice(1));
+    if (!id || (id.indexOf('tun-') !== 0 && id.indexOf('vals-') !== 0)) return;
+    var el = document.getElementById(id);
+    if (!el) return;
+    for (var d = el; d; d = d.parentElement) {
+      if (d.tagName === 'DETAILS' && !d.classList.contains('info')) d.open = true;
+    }
+    var y = el.getBoundingClientRect().top + window.pageYOffset - chrome() - 16;
+    window.scrollTo(0, Math.max(0, y));
+    el.classList.add('just-saved');
+  }
+  reveal();
+  window.addEventListener('load', reveal);
+})();
+
+/* A success toast fades on its own; a failure stays until it is closed. */
+(function () {
+  var t = document.querySelector('.flash-toast[data-autohide="1"]');
+  if (t) setTimeout(function () { t.classList.add('is-gone'); }, 6000);
+})();
+</script>
 
 {# The one irreversible action on the page rendered in a card identical to the
    five reversible ones above it. Given its own section head and frame so the
@@ -775,15 +913,16 @@
   {% if audit %}
   <div class="table-scroll">
   <table class="data-table audit">
-    <thead><tr><th>When (UTC)</th><th>Action</th><th>Result</th><th>Params</th></tr></thead>
+    <thead><tr><th>When (UTC)</th><th>What changed</th><th>Result</th></tr></thead>
     <tbody>
       {% for e in audit %}
-      {% set params = e.get('params', {})|tojson %}
-      <tr class="{% if e.get('ok') %}row-ok{% else %}row-err{% endif %}">
-        <td class="nowrap">{{ e.get('ts')|when }}</td>
-        <td><code>{{ e.get('action', '') }}</code></td>
-        <td class="nowrap">{% if e.get('ok') %}<span class="badge badge-ok">ok</span>{% else %}<span class="badge badge-bad" title="{{ e.get('result') }}">failed</span>{% endif %}</td>
-        <td class="params" title="{{ params }}">{{ params }}</td>
+      <tr class="{% if e.ok %}row-ok{% else %}row-err{% endif %}">
+        <td class="nowrap">{{ e.ts|when }}</td>
+        <td class="audit-what" title="{{ e.raw }}">
+          <strong>{{ e.title }}</strong>
+          {% for line in e.lines %}<div class="audit-line">{{ line }}</div>{% endfor %}
+        </td>
+        <td class="nowrap">{% if e.ok %}<span class="badge badge-ok">ok</span>{% else %}<span class="badge badge-bad" title="{{ e.result }}">failed</span>{% endif %}</td>
       </tr>
       {% endfor %}
     </tbody>
