@@ -30,10 +30,20 @@ from app import audit, guest_scope
 PUBLIC_PATHS = guest_scope.PUBLIC_PATHS
 
 
+def _under(path: str, prefix: str) -> bool:
+    """``path`` is ``prefix`` itself or inside it — a SEGMENT match.
+
+    These two exemptions were bare ``startswith`` (2026-09-26 audit): no route
+    exploited it, but ``/statistics`` or ``/api/v1-admin`` would have been
+    served to an unauthenticated caller the day either was added.
+    """
+    return path == prefix or path.startswith(prefix + "/")
+
+
 class AuthRedirectMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         path = request.url.path
-        if path in PUBLIC_PATHS or path.startswith("/static"):
+        if path in PUBLIC_PATHS or _under(path, "/static"):
             return await call_next(request)
         # A guest goes through one path for every request it makes, including
         # /api/v1. Letting the /api/v1 exemption below short-circuit it would
@@ -46,7 +56,7 @@ class AuthRedirectMiddleware(BaseHTTPMiddleware):
         # /api/v1 is the native app's surface — it authenticates with a Bearer
         # app-token and returns 401 JSON, so it must bypass the session-cookie
         # redirect (a 302→/login would break a non-browser client).
-        if path.startswith("/api/v1"):
+        if _under(path, "/api/v1"):
             return await call_next(request)
         if not request.session.get("authenticated"):
             return RedirectResponse("/login", status_code=302)

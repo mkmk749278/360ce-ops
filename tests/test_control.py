@@ -133,7 +133,7 @@ def test_auto_mode_flip_calls_engine_and_audits(monkeypatch):
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
     monkeypatch.setattr(
         control_route.audit, "record",
-        lambda *a, **k: recorded.append(k),
+        lambda *a, **k: None if k.get("action") == "login" else recorded.append(k),
     )
 
     with TestClient(app) as client:
@@ -195,7 +195,7 @@ def test_kill_switch_engage_calls_engine_and_audits(monkeypatch):
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
     monkeypatch.setattr(
         control_route.audit, "record",
-        lambda *a, **k: recorded.append(k),
+        lambda *a, **k: None if k.get("action") == "login" else recorded.append(k),
     )
 
     with TestClient(app) as client:
@@ -269,7 +269,7 @@ def test_auto_trade_global_flip_calls_engine_and_audits(monkeypatch):
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
     monkeypatch.setattr(
         control_route.audit, "record",
-        lambda *a, **k: recorded.append(k),
+        lambda *a, **k: None if k.get("action") == "login" else recorded.append(k),
     )
 
     with TestClient(app) as client:
@@ -310,7 +310,7 @@ def test_billing_flip_calls_engine_and_audits(monkeypatch):
     monkeypatch.setattr(control_route.audit, "tail", lambda *a, **k: [])
     monkeypatch.setattr(
         control_route.audit, "record",
-        lambda *a, **k: recorded.append(k),
+        lambda *a, **k: None if k.get("action") == "login" else recorded.append(k),
     )
 
     with TestClient(app) as client:
@@ -942,3 +942,8 @@ def test_an_old_engine_without_availability_still_prints_its_verdict(monkeypatch
     )
     assert "Disengaged — auto-trade allowed" in body
     assert "No state is shown because none was read" not in body
+
+
+# The audit captures above ignore ``action="login"``: since 2026-09-26 a
+# successful owner sign-in is itself audited (app/routes/auth.py), and these
+# tests log in before exercising the control action they are about.

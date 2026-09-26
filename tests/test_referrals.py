@@ -100,7 +100,7 @@ def test_mark_paid_calls_engine_and_audits(monkeypatch):
         EngineApiClient, "mark_referral_commissions_paid", fake_mark
     )
     monkeypatch.setattr(
-        referrals_route.audit, "record", lambda *a, **k: recorded.append(k)
+        referrals_route.audit, "record", lambda *a, **k: None if k.get("action") == "login" else recorded.append(k)
     )
     with TestClient(app) as client:
         _login(client)

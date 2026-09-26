@@ -83,7 +83,10 @@ def match_step(
 ) -> Optional[int]:
     """Return the matched time-step for ``code`` within ±drift, else None."""
     candidate = (code or "").strip().replace(" ", "")
-    if len(candidate) != TOTP_DIGITS or not candidate.isdigit():
+    # isascii() as well: str.isdigit() accepts full-width and Arabic-Indic
+    # digits, which then made compare_digest raise — a 500 on the login page
+    # instead of a refused code (2026-09-26 audit).
+    if len(candidate) != TOTP_DIGITS or not (candidate.isascii() and candidate.isdigit()):
         return None
     ts = time.time() if at_time is None else at_time
     step_now = int(ts) // TOTP_STEP_SEC

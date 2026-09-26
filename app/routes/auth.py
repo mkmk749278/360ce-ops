@@ -16,6 +16,8 @@ import hmac
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from app import audit
+
 router = APIRouter()
 
 
@@ -40,7 +42,11 @@ async def login_post(
 ):
     settings = request.app.state.settings
     gate = request.app.state.totp_gate
-    password_ok = hmac.compare_digest(password, settings.auth_token)
+    # Bytes, not str: compare_digest raises TypeError on a non-ASCII str, which
+    # answered "pässwörd" with a 500 instead of a refusal (2026-09-26 audit).
+    password_ok = hmac.compare_digest(
+        password.encode("utf-8"), settings.auth_token.encode("utf-8"),
+    )
     totp_ok = gate.verify(totp)
     if not (password_ok and totp_ok):
         templates = request.app.state.templates
@@ -54,6 +60,14 @@ async def login_post(
             status_code=401,
         )
     request.session["authenticated"] = True
+    # A successful owner sign-in is a security event on a control plane.
+    # FAILED attempts are deliberately NOT written here: this route is
+    # unauthenticated and the log is an unbounded append, so auditing
+    # failures would hand anyone a way to fill the disk.
+    audit.record(
+        settings.audit_log_path, action="login", params={"channel": "web"},
+        result={}, ok=True,
+    )
     return RedirectResponse("/", status_code=302)
 
 
