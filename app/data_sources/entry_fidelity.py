@@ -3,8 +3,10 @@
 A **labelled port** of ``360-v2/src/entry_fidelity.py``. Ops carries the
 arithmetic locally because it must run over the whole ledger — including rows
 the engine process has long since forgotten — and it is pinned against the real
-engine module by ``tests/test_entry_fidelity_contract.py``, which drives
+engine module by ``tests/test_entry_fidelity_page.py``, which drives
 ``entry_fidelity.rebase`` itself rather than a fixture of what it might return.
+(This line named ``tests/test_entry_fidelity_contract.py`` until 2026-09-26, a
+file that never existed; a pointer to the guard is part of the guard.)
 That is the standing rule here: ops ports the engine's math, it does not invent
 it, and where a port exists a test drives the original.
 
@@ -124,25 +126,60 @@ def rebase_record(rec: dict) -> dict:
     observed = rec.get("first_observed_price")
     direction = rec.get("direction") or ""
     if not entry or float(entry) <= 0:
-        return {"drift_pct": None, "rebased_pnl_pct": None, "refusal": REFUSAL_NO_ENTRY}
+        return {"drift_pct": None, "rebased_pnl_pct": None,
+                "rebased_be_at_fill_pct": None, "refusal": REFUSAL_NO_ENTRY}
     if not observed or float(observed) <= 0:
         return {
             "drift_pct": None,
             "rebased_pnl_pct": None,
+            "rebased_be_at_fill_pct": None,
             "refusal": REFUSAL_NO_OBSERVATION,
         }
     if bool(rec.get("first_observed_stale")):
         return {
             "drift_pct": None,
             "rebased_pnl_pct": None,
+            "rebased_be_at_fill_pct": None,
             "refusal": REFUSAL_STALE_OBSERVATION,
         }
     exit_price = implied_exit_price(float(entry), None if pnl is None else float(pnl), direction)
+    rebased = rebased_pnl_pct(float(observed), exit_price, direction)
     return {
         "drift_pct": signed_drift_pct(float(entry), float(observed), direction),
-        "rebased_pnl_pct": rebased_pnl_pct(float(observed), exit_price, direction),
+        "rebased_pnl_pct": rebased,
+        "rebased_be_at_fill_pct": be_at_fill_pnl_pct(
+            rec.get("outcome_label"), None if pnl is None else float(pnl), rebased
+        ),
         "refusal": None,
     }
+
+
+#: The one outcome whose exit rests RELATIVE to its anchor instead of at an
+#: absolute price. Mirrors the engine's ``entry_fidelity.BREAKEVEN_EXIT``.
+BREAKEVEN_EXIT = "BREAKEVEN_EXIT"
+
+
+def be_at_fill_pnl_pct(
+    outcome_label: Optional[str],
+    book_pnl_pct: Optional[float],
+    rebased: Optional[float],
+) -> Optional[float]:
+    """Port of the engine's ``be_at_fill_pnl_pct``.
+
+    The rebased book keeps every exit LEVEL and moves only the entry — right for
+    a stop or a target, wrong for a break-even exit. The book parks break-even
+    at the stamped entry; a live position parks it at its own fill
+    (``pretp_dispatcher``: ``entry_price_filled``). So ``rebased_pnl_pct`` books
+    a drifted scratch as a loss of the whole drift, which no user takes. This
+    prices that one row class at the book's own offset from its anchor, and
+    every other row exactly as rebased. ``None`` when the label is unknown —
+    an unknown label is not "not a break-even".
+    """
+    if outcome_label is None or rebased is None or book_pnl_pct is None:
+        return None
+    if str(outcome_label).upper() == BREAKEVEN_EXIT:
+        return float(book_pnl_pct)
+    return rebased
 
 
 def _median(values: list) -> Optional[float]:
@@ -210,6 +247,23 @@ def summarise(rows: Iterable[dict]) -> dict:
     if real:
         out["rebased_avg_pct"] = sum(real) / len(real)
         out["rebased_total_pct"] = sum(real)
+    # Beside the rebased figure, never instead of it — see
+    # ``be_at_fill_pnl_pct``. Its own n, because a row with no outcome label is
+    # not priced here, and the break-even count beside it, because that count
+    # is the whole difference between the two figures.
+    at_fill = [
+        r["rebased_be_at_fill_pct"]
+        for r in priced
+        if r.get("rebased_be_at_fill_pct") is not None
+    ]
+    out["breakeven_exits"] = sum(
+        1 for r in priced if str(r.get("outcome") or "").upper() == BREAKEVEN_EXIT
+    )
+    if at_fill:
+        out["be_at_fill_priced"] = len(at_fill)
+        out["be_at_fill_avg_pct"] = sum(at_fill) / len(at_fill)
+        out["be_at_fill_total_pct"] = sum(at_fill)
+        out["be_at_fill_win_pct"] = 100.0 * sum(1 for p in at_fill if p > 0) / len(at_fill)
     # Win rates are stated on both books because the drift can carry a row
     # across zero — the count that changes is the thing worth seeing, and a
     # single blended rate would hide exactly that.
@@ -252,3 +306,23 @@ def mfe_floor(rows: Iterable[dict]) -> dict:
         "floor_rows": floor,
         "floor_pct": round(100.0 * floor / stamped, 1) if stamped else None,
     }
+
+
+def split_by(rows: Iterable[dict], key: str) -> list[dict]:
+    """The census per value of ``key``, over the rows the page is showing.
+
+    Iterates the DATA, never a list of values ops expects: a value this page
+    has never heard of renders under its own name rather than vanishing
+    (``MEASUREMENT_SUFFIXES`` wearing yet another hat). Sorted by row count,
+    never by result — the top line of a table sorted by edge is the best of N
+    by construction.
+    """
+    groups: dict[str, list[dict]] = {}
+    for row in rows:
+        groups.setdefault(str(row.get(key) or ""), []).append(row)
+    out = []
+    for value, members in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        census = summarise(members)
+        census["value"] = value
+        out.append(census)
+    return out

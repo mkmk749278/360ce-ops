@@ -66,6 +66,14 @@
       <option value="SHORT" {% if filter_direction == 'SHORT' %}selected{% endif %}>SHORT</option>
     </select>
   </label>
+  <label>Pair admission
+    <select name="admission">
+      <option value="">All pairs</option>
+      {% for a in admissions %}
+      <option value="{{ a }}" {% if a == filter_admission %}selected{% endif %}>{{ a }} ({{ admission_counts.get(a, 0) }})</option>
+      {% endfor %}
+    </select>
+  </label>
   <label>Amount per signal (USDT)
     <input type="text" inputmode="decimal" name="amount" value="{{ "%g"|format(amount) }}" size="7">
   </label>
@@ -87,7 +95,7 @@
   0.05% out. Set it to <code>0</code> to read the gross book.
 </p>
 
-{% set qs %}window={{ filter_window | urlencode }}&date_from={{ filter_from | urlencode }}&date_to={{ filter_to | urlencode }}&regime={{ filter_regime | urlencode }}&setup={{ filter_setup | urlencode }}&symbol={{ filter_symbol | urlencode }}&direction={{ filter_direction | urlencode }}&amount={{ "%g"|format(amount) | urlencode }}&fee_pct={{ "%g"|format(fee_pct) | urlencode }}{% if balance is not none %}&balance={{ "%g"|format(balance) | urlencode }}{% endif %}{% endset %}
+{% set qs %}window={{ filter_window | urlencode }}&date_from={{ filter_from | urlencode }}&date_to={{ filter_to | urlencode }}&regime={{ filter_regime | urlencode }}&setup={{ filter_setup | urlencode }}&symbol={{ filter_symbol | urlencode }}&direction={{ filter_direction | urlencode }}&admission={{ filter_admission | urlencode }}&amount={{ "%g"|format(amount) | urlencode }}&fee_pct={{ "%g"|format(fee_pct) | urlencode }}{% if balance is not none %}&balance={{ "%g"|format(balance) | urlencode }}{% endif %}{% endset %}
 
 <div class="actions">
   <a class="btn" href="/track-record/export.csv?{{ qs }}&granularity={{ granularity | urlencode }}">Download CSV (by {{ granularity }})</a>
@@ -189,14 +197,67 @@
         <td>{{ "%+.2f"|format(fidelity.rebased_total_pct) }}%</td>
         <td>{{ "%.0f"|format(fidelity.rebased_win_pct) }}%</td>
       </tr>
+      {% if fidelity.get('be_at_fill_avg_pct') is not none %}
+      <tr>
+        <td>Rebased, break-even at the fill</td>
+        <td class="{% if fidelity.be_at_fill_avg_pct > 0 %}pos{% elif fidelity.be_at_fill_avg_pct < 0 %}neg{% endif %}">{{ "%+.3f"|format(fidelity.be_at_fill_avg_pct) }}%</td>
+        <td>{{ "%+.2f"|format(fidelity.be_at_fill_total_pct) }}%</td>
+        <td>{{ "%.0f"|format(fidelity.be_at_fill_win_pct) }}%</td>
+      </tr>
+      {% endif %}
     </tbody>
   </table>
   <p class="muted small">
-    Both rows are measured on the <strong>same {{ fidelity.priced }} trades</strong> &mdash;
-    the ones carrying an observation &mdash; so the two are comparable to each other and
-    neither is comparable to the whole-book figures above it. Fees are not charged in
+    <strong>Two rebased rows, and neither is &ldquo;the&rdquo; real result.</strong> The first
+    keeps every exit <em>level</em> and moves only the entry &mdash; right for a stop or a target,
+    which rest at absolute prices. A break-even stop does not: the book parks it at the
+    stamped entry, while a live position parks it at <em>its own fill</em>. So the first row books
+    each of the <strong>{{ fidelity.breakeven_exits }}</strong> break-even exits here as a loss of
+    the whole drift, which no user takes. The second prices those exits at the fill and every
+    other row exactly as the first. It is still an approximation: a live position&#39;s break-even
+    also <em>arms</em> from its fill, so on a drifted trade it arms later and some scratches would
+    have ended elsewhere &mdash; a 1m-tape replay with live semantics landed within a few hundredths
+    of the second row (docs/LONGS_RESEARCH_2026_09_26.md &sect;11 in 360-v2).
+  </p>
+  <p class="muted small">
+    Every row is measured on the <strong>same {{ fidelity.priced }} trades</strong> &mdash;
+    the ones carrying an observation &mdash; so they are comparable to each other and
+    none is comparable to the whole-book figures above it. Fees are not charged in
     this panel; the recorded card above states the net.
   </p>
+
+  {% if fidelity_by_admission %}
+  <h3 class="small">By how the pair was admitted</h3>
+  <div class="table-scroll">
+  <table class="tight">
+    <thead><tr><th>Admission</th><th>trades</th><th>priced</th><th>recorded %</th><th>rebased %</th><th>break-even at fill %</th></tr></thead>
+    <tbody>
+      {% for g in fidelity_by_admission %}
+      <tr>
+        <td><code>{{ g.value }}</code></td>
+        <td>{{ g.rows }}</td>
+        <td>{{ g.priced }}</td>
+        {% if g.priced %}
+        <td>{{ g.book_avg_pct|pct(3) }}</td>
+        <td>{{ g.rebased_avg_pct|pct(3) }}</td>
+        <td>{{ g.get('be_at_fill_avg_pct')|pct(3) }}</td>
+        {% else %}
+        <td>&mdash;</td><td>&mdash;</td><td>&mdash;</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">
+    Averages per trade, gross, over each group&#39;s <em>priced</em> rows only &mdash; the same
+    population in all three columns, so they compare across a row. Rows are sorted by count,
+    never by result. <code>CORE</code> is the fixed scan universe; <code>MOVER_*</code> pairs
+    were promoted into it for a few hours; <code>UNSTAMPED</code> closed before the engine
+    recorded admission (2026-07-30) and is never folded into another group. Read <em>n</em>
+    before the average: a small group is one mover away from a different sign.
+  </p>
+  {% endif %}
   {% else %}
   <p class="muted small">
     <strong>No row in this selection carries a first-observation stamp yet.</strong> That is
