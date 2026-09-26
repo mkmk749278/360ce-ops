@@ -1183,3 +1183,153 @@ def test_audit_rows_read_as_sentences():
     gone = control_route.describe_audit(
         {"action": "tunables_update", "params": {"values": {"old_knob": "3"}}}, {})
     assert gone["lines"] == ["old_knob → 3"]
+
+
+# ---- the auto-execution mode is queued, so say what the engine did (2026-09-26)
+#
+# Owner: "There is some problem with auto execution mode toggle, not showing
+# correctly." In production a click only QUEUES the change; the engine applies
+# it at the end of its next writer cycle — or refuses it (open positions, no
+# exchange keys for LIVE), an answer that lived only in the engine log. The
+# page said "Auto-mode set to PAPER" beside a toggle still reading LIVE either
+# way, and printed "Already in LIVE — no change" over every 409, refusals
+# included.
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+_NOW = datetime(2026, 9, 26, 17, 0, tzinfo=timezone.utc)
+
+
+def _ago(seconds: float) -> str:
+    return (_NOW - timedelta(seconds=seconds)).isoformat()
+
+
+def _mv(auto=None, cmd=None, req=None):
+    return control_route.mode_view(auto or {}, cmd or {}, req, _NOW)
+
+
+def test_a_queued_change_reads_as_pending_not_applied():
+    v = _mv({"mode": "live"}, {"mode_queue": "queued", "mode": "live",
+                               "pending_mode": "paper"})
+    assert (v["state"], v["mode"], v["target"], v["refresh"]) == (
+        "pending", "live", "paper", True)
+
+
+def test_the_engines_fresh_reading_beats_the_ten_second_copy():
+    v = _mv({"mode": "live"}, {"mode_queue": "queued", "mode": "paper"},
+            {"mode": "paper", "at": _ago(5)})
+    assert (v["state"], v["mode"]) == ("ok", "paper")
+
+
+def test_a_refusal_is_shown_in_the_engines_words():
+    v = _mv({"mode": "live"},
+            {"mode_queue": "queued", "mode": "live", "last_mode_command": {
+                "requested": "paper", "outcome": "refused", "at": _ago(20),
+                "message": "refused: 2 open position(s) — close them first"}},
+            {"mode": "paper", "at": _ago(30)})
+    assert (v["state"], v["target"]) == ("refused", "paper")
+    assert "2 open position" in v["message"]
+
+
+def test_an_old_refusal_is_not_the_answer_to_a_new_request():
+    """A refusal from before this request describes a different click."""
+    v = _mv({"mode": "live"},
+            {"mode_queue": "queued", "mode": "live", "last_mode_command": {
+                "requested": "off", "outcome": "refused", "at": _ago(100),
+                "message": "refused: 1 open position(s)"}},
+            {"mode": "paper", "at": _ago(10)})
+    assert v["state"] == "not_applied"  # queue empty, no answer for THIS request
+
+
+def test_a_refusal_ages_off_the_page():
+    v = _mv({"mode": "live"}, {"mode_queue": "queued", "mode": "live",
+            "last_mode_command": {"requested": "paper", "outcome": "refused",
+                                  "at": _ago(3600), "message": "x"}})
+    assert v["state"] == "ok"
+
+
+def test_an_engine_without_the_endpoint_still_gets_an_honest_window():
+    """404 = an engine predating the command endpoint: not reported, which is
+    not 'nothing pending'. The browser's own request carries the window."""
+    old = {"error": "Not Found", "status_code": 404, "endpoint": "/api/auto-mode/command"}
+    assert _mv({"mode": "live"}, old, {"mode": "paper", "at": _ago(20)})["state"] == "applying"
+    late = _mv({"mode": "live"}, old, {"mode": "paper", "at": _ago(80)})
+    assert late["state"] == "not_applied" and late["queue"] == "not_reported"
+    assert _mv({"mode": "live"}, old)["state"] == "ok"
+
+
+def test_a_blank_transport_error_is_unreadable_not_a_quiet_queue():
+    """`str(httpx.ReadTimeout())` is ''. Graded by key presence, never by
+    whether `error` is truthy (the 2026-09-03 rule)."""
+    v = _mv({"mode": "live"}, {"error": "", "endpoint": "/api/auto-mode/command"})
+    assert (v["queue"], v["mode"], v["state"]) == ("unreadable", "live", "ok")
+
+
+def test_a_mode_that_differs_from_boot_says_it_will_not_survive_a_restart():
+    v = _mv({}, {"mode_queue": "queued", "mode": "live", "boot_mode": "paper"})
+    assert v["resets_to"] == "paper"
+    assert "resets_to" not in _mv({}, {"mode_queue": "queued", "mode": "paper",
+                                       "boot_mode": "paper"})
+
+
+def _post_mode(monkeypatch, answer, cmd=None, mode="paper"):
+    async def fake_set(self, m):
+        return answer
+
+    async def fake_cmd(self):
+        return cmd or {"mode_queue": "queued", "mode": "live"}
+
+    _patch_reads(monkeypatch, mode="live")
+    monkeypatch.setattr(EngineApiClient, "set_auto_mode", fake_set)
+    monkeypatch.setattr(EngineApiClient, "auto_mode_command", fake_cmd)
+    monkeypatch.setattr(control_route.audit, "record", lambda *a, **k: None)
+    with TestClient(app) as client:
+        _login(client)
+        r = client.post("/control/auto-mode", data={"mode": mode}, follow_redirects=False)
+        assert r.headers["location"] == "/control#sec-mode"
+        return client.get("/control").text
+
+
+def test_a_queued_post_says_requested_not_set_and_shows_the_wait(monkeypatch):
+    page = _post_mode(
+        monkeypatch, {"success": True, "mode": "paper", "queued": True},
+        {"mode_queue": "queued", "mode": "live", "pending_mode": "paper"},
+    )
+    flat = _flat(page)
+    assert "PAPER requested — queued" in flat
+    assert "Auto-mode set to PAPER" not in flat
+    assert "Switching to <strong>PAPER</strong>" in flat
+    assert 'class="seg-wait"' in page and "Paper …" in flat
+    assert "location.reload()" in page
+
+
+def test_a_409_refusal_is_not_reported_as_already_there(monkeypatch):
+    page = _flat(_post_mode(
+        monkeypatch,
+        {"error": "refused: 2 open position(s) — close them first", "status_code": 409},
+    ))
+    assert "The engine refused PAPER: refused: 2 open position(s)" in page
+    assert "Already in" not in page
+
+
+def test_a_409_no_op_keeps_the_engines_words(monkeypatch):
+    page = _flat(_post_mode(
+        monkeypatch,
+        {"error": "a change to PAPER is already queued — the engine applies it "
+                  "on its next cycle", "status_code": 409},
+    ))
+    assert "No change — a change to PAPER is already queued" in page
+
+
+def test_the_page_never_reloads_itself_when_nothing_is_on_its_way(monkeypatch):
+    _patch_reads(monkeypatch, mode="live")
+
+    async def fake_cmd(self):
+        return {"mode_queue": "queued", "mode": "live", "boot_mode": "live"}
+
+    monkeypatch.setattr(EngineApiClient, "auto_mode_command", fake_cmd)
+    with TestClient(app) as client:
+        _login(client)
+        page = client.get("/control").text
+    assert "location.reload()" not in page
+    assert "seg-wait" not in page.split('id="sec-mode"')[1].split("sw-expiry")[0]

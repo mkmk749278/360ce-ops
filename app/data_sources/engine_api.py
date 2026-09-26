@@ -158,6 +158,17 @@ class EngineApiClient:
     async def auto_mode(self) -> Any:
         return await self._get("/api/auto-mode")
 
+    async def auto_mode_command(self) -> Any:
+        """Owner-only: the mode as the engine holds it NOW, what is queued, the
+        engine's answer to the last queued change, and the boot default.
+
+        In isolated mode ``POST /api/auto-mode`` only QUEUES a change; the
+        engine applies (or refuses) it on its next writer cycle. Without this
+        read the page cannot tell pending from refused from applied. An engine
+        predating the endpoint answers 404, which the caller treats as "not
+        reported", never as "nothing pending"."""
+        return await self._get("/api/auto-mode/command")
+
     async def signals(
         self,
         status: str | None = None,

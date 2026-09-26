@@ -2499,6 +2499,41 @@ payload key has collided with a dict method here (`keys`, `copy`, now
 `values`). The key is `value_knobs`, and a test asserts no category key
 shadows a dict method, derived from the helper's real output.
 
+## The mode toggle is a request, not a switch (2026-09-26)
+
+Owner: *"There is some problem with auto execution mode toggle, not showing
+correctly."* Nothing on the page was broken. It was reporting the wrong fact.
+In production (isolated mode) `POST /api/auto-mode` only **queues** the change
+in Redis. The engine applies it at the end of its next ~15s writer cycle, and
+the api re-reads engine state every 10s. So:
+
+- ops flashed **"Auto-mode set to PAPER"** beside a toggle still reading LIVE,
+  for up to ~40s;
+- when the engine **refused** the change (it will not switch while it holds
+  open positions, nor go LIVE without exchange keys), the refusal was written
+  only to the engine's log. The toggle never moved, and the page had already
+  said "set";
+- every 409 printed "Already in LIVE — no change", refusals included;
+- a runtime change does not survive a restart, so every deploy put the engine
+  back to `AUTO_EXECUTION_MODE` without a word.
+
+Engine #1073 publishes the engine's answer and makes the queue
+readable through `GET /api/auto-mode/command`. `mode_view()` grades the row
+into five states — `ok` / `pending` / `applying` / `not_applied` / `refused` —
+and the POST flash uses the engine's own words.
+
+- **The mode shown is always the engine's.** This browser's request, held in
+  the session, is a note about a click. It can hold a "switching" window open
+  and never supplies the reading.
+- **404 is `not_reported`, never "nothing pending"**, and a blank transport
+  error is `unreadable`. Both are graded by key presence (`mode_queue`), per
+  the 2026-09-03 rule.
+- **The page reloads itself only while a change is on its way**, bounded
+  server-side by `MODE_REQUEST_WINDOW_SEC`. It never reloads over a half-typed
+  tunable.
+- **A mode that differs from the boot mode says so.** A choice that silently
+  reverts on the next deploy is the one this page must not leave unsaid.
+
 ## The mover lifecycle panels (2026-08-13, #173–#175)
 
 Three surfaces for engine #927/#928/#929 — how a promoted pair is kept, how a path

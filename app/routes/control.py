@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
@@ -258,12 +259,130 @@ def describe_audit(entry: object, labels: dict | None = None) -> dict:
     }
 
 
+#: Session key for the mode change THIS browser asked for, so the page can say
+#: "switching" through the window before the engine applies it. It is a note
+#: about a request, never a reading: the mode shown always comes from the
+#: engine.
+_MODE_REQUEST_KEY = "_control_mode_request"
+
+#: How long a request is tracked. The engine applies a queued change within one
+#: writer cycle (~15s) and the queue itself expires after 60s; past this a
+#: request that never showed has not merely been slow.
+MODE_REQUEST_WINDOW_SEC = 120
+
+#: How long an engine answer (a refusal) stays on screen after it was given.
+MODE_RESULT_SHOWN_SEC = 900
+
+
+def _parse_ts(value: object) -> datetime | None:
+    try:
+        ts = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
+
+def mode_view(auto: object, cmd: object, req: object, now: datetime) -> dict:
+    """The auto-execution mode row, graded from the engine's own answers.
+
+    Owner, 2026-09-26: *"There is some problem with auto execution mode
+    toggle, not showing correctly."* In production a click only QUEUES the
+    change; the engine applies it at the end of its next writer cycle, or
+    REFUSES it (open positions, no exchange keys for LIVE) — and the page said
+    "Auto-mode set to PAPER" beside a toggle still reading LIVE either way.
+
+    States, each with a different next move:
+
+    * ``ok`` — the reading is the whole story;
+    * ``pending`` — the engine reports the change queued, not yet applied;
+    * ``applying`` — this browser asked, nothing contradicts it yet, and the
+      engine cannot say more (an engine predating the command endpoint);
+    * ``not_applied`` — asked long enough ago that it should have shown, and
+      it has not; the engine gave no reason we can read;
+    * ``refused`` — the engine answered, and the answer was no.
+
+    ``cmd`` comes from two producers, told apart by KEY PRESENCE (the
+    2026-09-03 rule): the engine's payload carries ``mode_queue``; ops' own
+    transport wrapper carries ``error``. A 404 is an engine that predates the
+    endpoint — not reported, which is not "nothing pending".
+    """
+    auto = auto if isinstance(auto, dict) else {}
+    cmd = cmd if isinstance(cmd, dict) else {}
+    req = req if isinstance(req, dict) else {}
+
+    if "mode_queue" in cmd:
+        queue = cmd.get("mode_queue")
+    elif cmd.get("status_code") == 404:
+        queue = "not_reported"
+    else:
+        queue = "unreadable"
+
+    mode = None
+    if queue in ("queued", "direct") and cmd.get("mode"):
+        mode = str(cmd["mode"]).lower()  # read from Redis now, not 10s ago
+    elif auto.get("mode"):
+        mode = str(auto["mode"]).lower()
+
+    view: dict = {
+        "mode": mode or "unknown",
+        "error": None if mode else (auto.get("error") or "the engine reported no mode"),
+        "queue": queue,
+        "state": "ok",
+        "target": None,
+        "message": None,
+        "age_sec": None,
+        "boot_mode": (str(cmd["boot_mode"]).lower() if cmd.get("boot_mode") else None),
+        "refresh": False,
+    }
+    if view["boot_mode"] and mode and view["boot_mode"] != mode:
+        view["resets_to"] = view["boot_mode"]
+
+    req_mode = str(req.get("mode") or "").lower() or None
+    req_at = _parse_ts(req.get("at"))
+    req_age = (now - req_at).total_seconds() if req_at else None
+    tracking = bool(req_mode and req_age is not None and req_age <= MODE_REQUEST_WINDOW_SEC)
+
+    pending = str(cmd.get("pending_mode") or "").lower() or None
+    last = cmd.get("last_mode_command") if isinstance(cmd.get("last_mode_command"), dict) else None
+    last_at = _parse_ts(last.get("at")) if last else None
+    last_age = (now - last_at).total_seconds() if last_at else None
+
+    if queue == "queued" and pending:
+        view.update(state="pending", target=pending, refresh=True)
+        return view
+    if (
+        last
+        and last.get("outcome") in ("refused", "error", "invalid")
+        and last_age is not None
+        and last_age <= MODE_RESULT_SHOWN_SEC
+        and (not req_at or not last_at or last_at >= req_at)
+    ):
+        view.update(
+            state="refused",
+            target=str(last.get("requested") or "").lower() or None,
+            message=last.get("message"),
+            age_sec=last_age,
+        )
+        return view
+    if tracking and mode and req_mode != mode:
+        if queue == "queued":
+            # The engine's queue is empty and it reports no answer to this
+            # request: the command expired unapplied, or the answer is older.
+            view.update(state="not_applied", target=req_mode, age_sec=req_age)
+        elif req_age <= 60:
+            view.update(state="applying", target=req_mode, age_sec=req_age, refresh=True)
+        else:
+            view.update(state="not_applied", target=req_mode, age_sec=req_age)
+    return view
+
+
 async def _render(request: Request):
     api = request.app.state.engine_api
     settings = request.app.state.settings
     templates = request.app.state.templates
 
     auto = await api.auto_mode()
+    mode_cmd = await api.auto_mode_command()
     ks = await api.kill_switch_state()
     glob = await api.auto_trade_global_state()
     expiry = await api.signal_expiry_state()
@@ -279,6 +398,13 @@ async def _render(request: Request):
     except Exception as exc:  # pragma: no cover - defensive
         governor_raw = {"error": f"{type(exc).__name__}: {exc}"}
     flash = request.session.pop("_control_flash", None)
+    mode = mode_view(
+        auto, mode_cmd, request.session.get(_MODE_REQUEST_KEY),
+        datetime.now(timezone.utc),
+    )
+    if mode["state"] in ("ok", "refused", "not_applied"):
+        # Resolved one way or the other; stop tracking this browser's request.
+        request.session.pop(_MODE_REQUEST_KEY, None)
 
     tunable_groups, tunables_initialised = group_tunables(tunables)
     groups_meta = category_meta(tunable_groups)
@@ -294,6 +420,7 @@ async def _render(request: Request):
             "request": request,
             "active": "control",
             "auto": auto if isinstance(auto, dict) else {},
+            "mode_row": mode,
             "ks": ks if isinstance(ks, dict) else {},
             "glob": glob if isinstance(glob, dict) else {},
             "expiry": expiry if isinstance(expiry, dict) else {},
@@ -381,19 +508,37 @@ async def control_auto_mode(request: Request, mode: str = Form(...)):
         ok=ok,
     )
     code = result.get("status_code") if isinstance(result, dict) else None
-    if ok:
+    detail = result.get("error") if isinstance(result, dict) else result
+    if ok and isinstance(result, dict) and result.get("queued"):
+        # Accepted, not applied: the engine picks it up on its next cycle and
+        # may still refuse it. The page reads back what it actually did.
+        text = (
+            f"{mode.upper()} requested — queued for the engine, which applies "
+            f"it on its next cycle (about 15 seconds)."
+        )
+        flash_ok = True
+        request.session[_MODE_REQUEST_KEY] = {
+            "mode": mode, "at": datetime.now(timezone.utc).isoformat(),
+        }
+    elif ok:
         text = f"Auto-mode set to {mode.upper()}."
         flash_ok = True
-    elif code == 409:
-        # Engine was already in that mode — a no-op, not a real failure.
-        text = f"Already in {mode.upper()} — no change."
+    elif code == 409 and "already" in str(detail).lower():
+        # A no-op — already there, or already queued. The engine's own words,
+        # because "already queued" and "already in" are different facts.
+        text = f"No change — {detail}"
         flash_ok = True
+    elif code == 409:
+        # Anything else the engine answers 409 with is a refusal (open
+        # positions, no exchange keys for LIVE). This branch used to print
+        # "Already in LIVE — no change" over every 409, refusals included.
+        text = f"The engine refused {mode.upper()}: {detail}"
+        flash_ok = False
     else:
-        detail = result.get("error") if isinstance(result, dict) else result
         text = f"Auto-mode change failed: {detail}"
         flash_ok = False
     request.session["_control_flash"] = {"ok": flash_ok, "text": text}
-    return RedirectResponse("/control", status_code=303)
+    return RedirectResponse("/control#sec-mode", status_code=303)
 
 
 @router.post("/control/kill-switch")

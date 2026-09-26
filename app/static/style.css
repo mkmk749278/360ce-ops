@@ -1124,3 +1124,16 @@ details.tun-vals .tun-apply { margin: 0.6rem -0.75rem -0.75rem; }
   .sw:has(.swt), .sw#sw-governor { grid-template-columns: minmax(0, 1fr) auto; }
   .sw:has(.swt) .sw-act, .sw#sw-governor .sw-act { justify-content: flex-end; }
 }
+
+/* ---- Auto-execution mode: a change on its way, or refused (2026-09-26) ----
+   A click only queues the change; these say so until the engine's reading
+   agrees, or the engine says no. */
+.seg button.seg-wait {
+  color: var(--warn); background: rgba(227,179,65,0.10);
+  box-shadow: inset 0 0 0 1px rgba(227,179,65,0.45);
+  animation: seg-wait 1.6s ease-in-out infinite;
+}
+@keyframes seg-wait { 50% { background: rgba(227,179,65,0.22); } }
+.mode-note { margin: 0.35rem 0 0; font-size: 0.84rem; line-height: 1.45; }
+.mode-note-wait { color: var(--warn); }
+.mode-note-bad { color: var(--neg); font-weight: 600; }

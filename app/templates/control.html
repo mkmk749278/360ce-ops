@@ -262,9 +262,17 @@
     {% endif %}
   </div>
 
-  {# Auto-execution mode — a three-way choice, so one segmented control. #}
-  {% set mode = (auto.get('mode') or 'unknown') %}
-  {% if auto.get('error') %}{% set m_tone = 'warn' %}
+  {# Auto-execution mode — a three-way choice, so one segmented control.
+
+     Graded by `mode_view` (app/routes/control.py), never off the raw reading
+     alone: in production a click only QUEUES the change and the engine
+     applies — or refuses — it on its next cycle, so "what the engine reports"
+     and "what was just asked for" are different facts for a while, and
+     sometimes for good. #}
+  {% set mv = mode_row %}
+  {% set mode = mv.mode %}
+  {% if mv.error or mv.state in ('refused', 'not_applied') %}{% set m_tone = 'warn' %}
+  {% elif mv.state in ('pending', 'applying') %}{% set m_tone = 'warn' %}
   {% elif mode == 'live' %}{% set m_tone = 'ok' %}
   {% elif mode == 'paper' %}{% set m_tone = 'warn' %}
   {% elif mode == 'off' %}{% set m_tone = 'bad' %}
@@ -276,13 +284,47 @@
           <p><strong>Off</strong> halts new entries. <strong>Paper</strong>
             simulates. <strong>Live</strong> fires real Binance orders, and
             switching to it asks you to confirm.</p>
+          <p>A change is queued for the engine, which applies it on its next
+            cycle (about 15 seconds) — or refuses it: it will not switch while
+            it holds open positions, and will not go Live without exchange
+            keys. This row shows what the engine reports, and says so while a
+            change is on its way.</p>
+          <p>A change made here lasts until the engine restarts. Every deploy
+            restarts it into its boot mode
+            (<code>AUTO_EXECUTION_MODE</code>{% if mv.boot_mode %}, currently
+            <strong>{{ mv.boot_mode|upper }}</strong>{% endif %}).</p>
         {% endcall %}
       </div>
-      {% if auto.get('error') %}
-        <p class="sw-state ks-state ks-warn"><span class="dot"></span>Could not read current mode: {{ auto.error }}</p>
+      {% if mv.error %}
+        <p class="sw-state ks-state ks-warn"><span class="dot"></span>Could not read current mode: {{ mv.error }}</p>
       {% else %}
         <p class="sw-state"><span class="dot"></span>Current engine-wide mode:
           <strong class="mode-{{ mode }}">{{ mode|upper }}</strong></p>
+      {% endif %}
+      {% if mv.state == 'pending' %}
+        <p class="note mode-note mode-note-wait">
+          {% if mv.target == mode %}⏳ Holding <strong>{{ mv.target|upper }}</strong> —
+            queued to replace an earlier change the engine has not applied yet.
+          {% else %}⏳ Switching to <strong>{{ mv.target|upper }}</strong> — queued; the
+            engine applies it on its next cycle.{% endif %}</p>
+      {% elif mv.state == 'applying' %}
+        <p class="note mode-note mode-note-wait">⏳ <strong>{{ mv.target|upper }}</strong>
+          requested {{ mv.age_sec|duration }} ago — waiting for the engine to apply it.</p>
+      {% elif mv.state == 'refused' %}
+        <p class="note mode-note mode-note-bad">⚠ The engine refused
+          <strong>{{ (mv.target or '?')|upper }}</strong> {{ mv.age_sec|duration }} ago:
+          {{ mv.message or 'no reason given' }}</p>
+      {% elif mv.state == 'not_applied' %}
+        <p class="note mode-note mode-note-bad">⚠ <strong>{{ mv.target|upper }}</strong>
+          was requested {{ mv.age_sec|duration }} ago and the engine still reports
+          <strong>{{ mode|upper }}</strong>{% if mv.queue == 'queued' %} — the queued
+          change expired without an answer; the engine may be stalled{% else %} — it may
+          have refused (open positions, or no exchange keys for Live); the engine
+          log has the reason{% endif %}.</p>
+      {% endif %}
+      {% if mv.resets_to %}
+        <p class="note mode-note">↺ Returns to <strong>{{ mv.resets_to|upper }}</strong>
+          on the next engine restart (every deploy).</p>
       {% endif %}
     </div>
     <div class="sw-act">
@@ -291,19 +333,29 @@
             ('off', 'Off', false),
             ('paper', 'Paper', false),
             ('live', 'Live', true)] %}
+        {% set waiting = mv.state in ('pending', 'applying') and mv.target == m and m != mode %}
         <form method="post" action="/control/auto-mode"
               {% if danger %}onsubmit="return confirm('Switch the engine to LIVE — real Binance orders will fire. Continue?');"{% endif %}>
           <input type="hidden" name="mode" value="{{ m }}">
           <button type="submit"
-                  class="{% if mode == m %}seg-on mode-{{ m }}{% endif %}"
+                  class="{% if mode == m %}seg-on mode-{{ m }}{% elif waiting %}seg-wait{% endif %}"
                   {% if mode == m %}disabled aria-pressed="true"{% else %}aria-pressed="false"{% endif %}>
-            {{ label }}{% if mode == m %} ✓{% endif %}
+            {{ label }}{% if mode == m %} ✓{% elif waiting %} …{% endif %}
           </button>
         </form>
         {% endfor %}
       </div>
     </div>
   </div>
+  {% if mv.refresh %}
+  {# Re-read the engine until the change shows. Server-side bound: `refresh`
+     is only set inside MODE_REQUEST_WINDOW_SEC, so this cannot loop forever. #}
+  <script>setTimeout(function () {
+    /* Never throw away a half-typed value: a pending edit wins over the refresh. */
+    if (document.querySelector('.tun-apply.is-dirty')) return;
+    location.reload();
+  }, 4000);</script>
+  {% endif %}
 
   {# Signal expiry (max-hold). Disabled is the owner-decided default
      (2026-06-26), so it reads green; enabling it is the off-default state. #}
