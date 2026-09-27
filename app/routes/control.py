@@ -59,6 +59,9 @@ def anchor_for(category: str) -> str:
 #: at write time, and a stale form does not.
 ROUTING_OWNED_KEYS = frozenset({"retired_paths"})
 
+#: The tunables category the CoinDCX page owns outright.
+COINDCX_CATEGORY = "CoinDCX"
+
 
 def split_tunables(entries: list) -> tuple[list, list]:
     """Split a category into its on/off switches and its values.
@@ -407,6 +410,11 @@ async def _render(request: Request):
         request.session.pop(_MODE_REQUEST_KEY, None)
 
     tunable_groups, tunables_initialised = group_tunables(tunables)
+    # CoinDCX's switches and allow-list are edited only on /control/coindcx,
+    # which re-reads the list at write time and adds users by phone. A
+    # category form here would re-post the whole list as the page loaded it
+    # (the retired_paths lesson) and flip a money-path switch with no confirm.
+    tunable_groups.pop(COINDCX_CATEGORY, None)
     groups_meta = category_meta(tunable_groups)
     changed_total = sum(g["changed"] for g in groups_meta)
     labels = {

@@ -144,6 +144,7 @@
       },
       "symbols_mapped": 0
     },
+    "open_to_all": false,
     "positions": {
       "by_state": {
         "CLOSED": 1

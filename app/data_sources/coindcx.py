@@ -171,3 +171,36 @@ def grade_self_test(report: Any, *, last_request_at: float | None, now: float) -
         "steps": steps,
         "pending": pending,
     }
+
+
+def grade_access(payload: Any) -> dict[str, Any]:
+    """Who may trade on CoinDCX — five states, never pooled.
+
+    * ``ok`` — the engine answered with its switches and list;
+    * ``unreadable`` — it answered, and its settings store could not be read,
+      so NO switch position is shown (a switch drawn either way would be a
+      verdict nobody observed);
+    * ``not_reported`` — an engine predating the endpoint (404);
+    * ``unreachable`` — ops' own call failed;
+    * ``unknown`` — any other shape, shown raw rather than guessed at.
+
+    Graded by key presence, never by whether a shared key is truthy
+    (``str(httpx.ReadTimeout())`` is ``""``).
+    """
+    if not isinstance(payload, dict):
+        return {"state": "unknown", "raw": payload}
+    if "readable" in payload:
+        if payload.get("readable") is True:
+            return {
+                "state": "ok",
+                "execution_enabled": payload.get("execution_enabled"),
+                "open_to_all": payload.get("open_to_all"),
+                "allowed": [r for r in payload.get("allowed") or [] if isinstance(r, dict)],
+            }
+        return {"state": "unreadable",
+                "store_initialised": payload.get("store_initialised")}
+    if "error" in payload:
+        if payload.get("status_code") == 404:
+            return {"state": "not_reported"}
+        return {"state": "unreachable", "detail": payload.get("error") or "no reason given"}
+    return {"state": "unknown", "raw": payload}

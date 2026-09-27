@@ -119,6 +119,115 @@
   {% endif %}
 </section>
 
+{# ---- who may trade: the owner's controls, read back from the engine ---- #}
+<section class="card" id="access">
+  <div class="card-title"><h2>Who can trade on CoinDCX</h2>
+    {% call info("How access works") %}
+      <p>Two switches and a list, all held by the engine and changed here —
+        nothing is edited on the server.</p>
+      <p><strong>Master switch</strong>: while it is off, no CoinDCX order is
+        placed for anyone. Positions already open keep their stop on CoinDCX
+        either way.</p>
+      <p><strong>Allow-list</strong>: while "open to all" is off, only these
+        users are traded. <strong>An empty list means nobody</strong> — emptying
+        it can never open CoinDCX by accident.</p>
+      <p><strong>Open to all</strong>: every user who chose CoinDCX in the app
+        and connected a key. The public-launch step.</p>
+      <p>Add users by the phone number they signed in with. The engine finds
+        their account; you never handle an ID.</p>
+    {% endcall %}
+  </div>
+
+  {% if access.state == 'unreadable' %}
+    <p><span class="badge badge-bad">UNREADABLE</span>
+      The engine could not read its settings store, so no switch position is shown —
+      we could not ask. Nothing can be changed until it can read it again.</p>
+  {% elif access.state == 'not_reported' %}
+    <p><span class="badge badge-warn">NOT REPORTED</span>
+      This engine has no access endpoint yet — it predates this page, so it is a deploy question.</p>
+  {% elif access.state == 'unreachable' %}
+    <p><span class="badge badge-bad">NO ANSWER</span> Ops could not reach the engine.</p>
+    <p class="small muted">Said: <code>{{ access.detail }}</code></p>
+  {% elif access.state == 'unknown' %}
+    <p><span class="badge badge-warn">UNRECOGNISED REPLY</span> Shown as it came:</p>
+    <pre class="small">{{ access.raw | tojson(indent=2) }}</pre>
+  {% else %}
+    {% set sw = [('execution', 'Master switch', access.execution_enabled,
+                  'Orders are placed on CoinDCX for the users below.',
+                  'No CoinDCX order is placed for anyone.'),
+                 ('open_to_all', 'Open to all users', access.open_to_all,
+                  'EVERY user who chose CoinDCX and connected a key is traded — the allow-list is ignored.',
+                  'Only the users on the allow-list below.')] %}
+    {% for key, label, on, on_text, off_text in sw %}
+    <div class="sw-row">
+      <p class="sw-state">
+        {% if on is sameas true %}<span class="badge badge-live">ON</span>
+        {% elif on is sameas false %}<span class="badge badge-off">OFF</span>
+        {% else %}<span class="badge badge-muted">not reported</span>{% endif %}
+        <strong>{{ label }}</strong> — {{ on_text if on is sameas true else off_text }}
+      </p>
+      <form method="post" action="/control/coindcx/switch" class="inline-form">
+        <input type="hidden" name="switch" value="{{ key }}">
+        {% if on is sameas true %}
+          <input type="hidden" name="enabled" value="0">
+          <button type="submit" class="btn btn-soft-danger btn-sm">Turn off</button>
+        {% else %}
+          <input type="hidden" name="enabled" value="1">
+          <label class="arm-confirm">
+            <input type="checkbox" name="confirm" value="yes" required>
+            {% if key == 'execution' %}I understand this places real orders{% else %}I understand every connected user will be traded{% endif %}
+          </label>
+          <button type="submit" class="btn btn-danger btn-sm">Turn on</button>
+        {% endif %}
+      </form>
+    </div>
+    {% endfor %}
+
+    <h3>Allow-list</h3>
+    {% if access.allowed %}
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>User</th><th>Phone</th><th>CoinDCX key</th><th></th></tr></thead>
+      <tbody>
+      {% for r in access.allowed %}
+        <tr>
+          <td>{% if r.found %}{{ r.display_name or '—' }}{% else %}<span class="badge badge-warn">no such user</span>{% endif %}
+            <div class="small muted mono">{{ r.uid }}</div></td>
+          <td>{{ r.phone or '—' }}</td>
+          <td>
+            {% set k = r.key or {} %}
+            {% if k.get('readable') is not sameas true %}<span class="badge badge-muted">could not check</span>
+            {% elif k.get('connected') and k.get('attested') %}<span class="badge badge-ok">connected</span>
+              <span class="small muted">{{ k.get('key_public_id_first8') or '' }}…</span>
+            {% elif k.get('connected') %}<span class="badge badge-warn">connected, not attested</span>
+            {% else %}<span class="badge badge-muted">not connected</span>{% endif %}
+          </td>
+          <td>
+            <form method="post" action="/control/coindcx/access" class="inline-form">
+              <input type="hidden" name="action" value="remove">
+              <input type="hidden" name="uid" value="{{ r.uid }}">
+              <button type="submit" class="btn btn-plain btn-sm">Remove</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+      <p class="muted">Nobody is on the allow-list{% if access.open_to_all is not sameas true %}, so nobody is traded on CoinDCX{% endif %}.</p>
+    {% endif %}
+    <form method="post" action="/control/coindcx/access" class="inline-form">
+      <input type="hidden" name="action" value="add">
+      <label>Add a user by phone
+        <input type="tel" name="phone" required placeholder="98765 43210" autocomplete="off">
+      </label>
+      <button type="submit" class="btn btn-primary btn-sm">Add</button>
+    </form>
+    <p class="small muted">10 digits are read as an Indian number (+91). Other countries: type the full number with +.</p>
+  {% endif %}
+</section>
+
 {% if grade.state in ("running", "stale") %}
 <section class="card">
   <div class="card-title"><h2>Counters</h2>
@@ -223,10 +332,20 @@
   {% endif %}
 
   <h3>Run it</h3>
+  {% set runnable = (access.allowed or []) | selectattr('key.connected', 'equalto', true) | list if access.state == 'ok' else [] %}
+  {% if access.state != 'ok' %}
+    <p class="muted">The allow-list could not be read above, so there is no account to test on yet.</p>
+  {% elif not access.allowed %}
+    <p class="muted">Add yourself to the allow-list above first — the test runs only on an allow-listed account.</p>
+  {% elif not runnable %}
+    <p class="muted">Nobody on the allow-list has a CoinDCX key connected yet. Connect yours in the app
+      (Settings → Auto Trade → Trading platform), then reload this page.</p>
+  {% else %}
   <form method="post" action="/control/coindcx/self-test" class="inline-form">
-    <label>Your Firebase uid
-      <input type="text" name="uid" required pattern="[A-Za-z0-9_\-]{4,128}"
-             autocomplete="off" spellcheck="false">
+    <label>Account
+      <select name="uid">
+        {% for r in runnable %}<option value="{{ r.uid }}">{{ r.display_name or r.phone or r.uid }}{% if r.phone %} · {{ r.phone }}{% endif %}</option>{% endfor %}
+      </select>
     </label>
     <label>Symbol
       <input type="text" name="symbol" value="{{ default_symbol }}" required
@@ -243,6 +362,7 @@
     </label>
     <button type="submit" class="btn btn-danger">Run self-test</button>
   </form>
+  {% endif %}
 </section>
 
 <section class="card">
