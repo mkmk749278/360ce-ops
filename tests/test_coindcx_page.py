@@ -37,6 +37,9 @@ from app.routes import coindcx as route  # noqa: E402
 
 HERE = pathlib.Path(__file__).resolve().parent
 VECTOR = json.loads((HERE / "fixtures_coindcx.json").read_text())
+#: GET /api/admin/coindcx/access exactly as the engine answers — byte-identical
+#: to 360-v2 tests/venues/fixtures/coindcx/ops_access_contract.json.
+ACCESS = json.loads((HERE / "fixtures_coindcx_access.json").read_text())
 T0 = 1_800_000_000.0
 
 
@@ -134,6 +137,12 @@ def wired(monkeypatch):
     monkeypatch.setattr(DataVolumeReader, "coindcx_status", lambda self: state["status"])
     monkeypatch.setattr(DataVolumeReader, "coindcx_self_test", lambda self: state["report"])
     monkeypatch.setattr(route.audit, "tail", lambda *a, **k: state["tail"])
+    state["access"] = copy.deepcopy(ACCESS)
+
+    async def fake_access(self):
+        return state["access"]
+
+    monkeypatch.setattr(EngineApiClient, "coindcx_access", fake_access)
     monkeypatch.setattr(route.audit, "record",
                         lambda *a, **k: None if k.get("action") == "login" else recorded.append(k))
     state["recorded"] = recorded
@@ -238,3 +247,153 @@ def test_a_newer_request_renders_requested_over_the_old_verdict(wired):
         html = c.get("/control/coindcx").text
     assert "REQUESTED" in html or "NO REPORT" in html
     assert "previous run" in html
+
+
+# ── who can trade: switches + allow-list, read back from the engine ──────
+
+def test_the_engines_access_view_grades_ok():
+    a = dcx.grade_access(copy.deepcopy(ACCESS))
+    assert a["state"] == "ok" and a["execution_enabled"] is True
+    assert [r["uid"] for r in a["allowed"]] == ["owner-uid", "tester-uid"]
+
+
+def test_access_states_are_never_pooled():
+    assert dcx.grade_access({"readable": False, "store_initialised": False})["state"] == "unreadable"
+    assert dcx.grade_access({"error": "not found", "status_code": 404})["state"] == "not_reported"
+    # a blank transport error is still an error (str(httpx.ReadTimeout()) == "")
+    assert dcx.grade_access({"error": "", "endpoint": "/x"})["state"] == "unreachable"
+    assert dcx.grade_access(["?"])["state"] == "unknown"
+
+
+def test_an_unreadable_store_shows_no_switch_position(wired):
+    wired["access"] = {"readable": False, "store_initialised": True}
+    with TestClient(app) as c:
+        _login(c)
+        html = c.get("/control/coindcx").text
+    assert "UNREADABLE" in html
+    assert 'action="/control/coindcx/switch"' not in html
+
+
+def test_the_page_lists_users_by_phone_and_only_offers_connected_ones_for_the_test(wired):
+    with TestClient(app) as c:
+        _login(c)
+        html = c.get("/control/coindcx").text
+    assert "+919999999999" in html and "+918888888888" in html
+    assert 'value="owner-uid"' in html
+    # the tester has no key connected, so the self-test cannot pick them
+    assert '<option value="tester-uid"' not in html
+    assert 'name="uid" required pattern' not in html, "no free-text uid box any more"
+
+
+def test_an_empty_list_says_nobody_is_traded(wired):
+    wired["access"] = {**copy.deepcopy(ACCESS), "allowed": [], "open_to_all": False}
+    with TestClient(app) as c:
+        _login(c)
+        html = c.get("/control/coindcx").text
+    assert "nobody is traded on CoinDCX" in html
+    assert "Add yourself to the allow-list above first" in html
+
+
+@pytest.mark.parametrize("typed,e164", [
+    ("98765 43210", "+919876543210"),
+    ("+91 98765-43210", "+919876543210"),
+    ("919876543210", "+919876543210"),
+    ("+1 415 555 0100", "+14155550100"),
+    ("12345", None),
+    ("", None),
+])
+def test_phone_normalisation(typed, e164):
+    assert route.normalise_phone(typed) == e164
+
+
+def test_add_by_phone_calls_the_engine_with_e164_and_audits(monkeypatch, wired):
+    calls: list = []
+
+    async def fake(self, action, *, phone=None, firebase_uid=None):
+        calls.append((action, phone, firebase_uid))
+        return copy.deepcopy(ACCESS)
+
+    monkeypatch.setattr(EngineApiClient, "coindcx_access_change", fake)
+    with TestClient(app) as c:
+        _login(c)
+        r = c.post("/control/coindcx/access", data={"action": "add", "phone": "98765 43210"},
+                   follow_redirects=False)
+        assert r.status_code == 303
+        html = c.get(r.headers["location"]).text
+    assert calls == [("add", "+919876543210", None)]
+    assert wired["recorded"][-1]["action"] == "coindcx_access" and wired["recorded"][-1]["ok"]
+    assert "Added +919876543210" in html
+
+
+def test_a_bad_phone_never_reaches_the_engine(monkeypatch, wired):
+    calls: list = []
+
+    async def fake(self, *a, **k):
+        calls.append(a)
+        return {}
+
+    monkeypatch.setattr(EngineApiClient, "coindcx_access_change", fake)
+    with TestClient(app) as c:
+        _login(c)
+        c.post("/control/coindcx/access", data={"action": "add", "phone": "123"},
+               follow_redirects=False)
+    assert calls == [] and wired["recorded"][-1]["ok"] is False
+
+
+def test_the_engines_refusal_of_an_add_reaches_the_screen(monkeypatch, wired):
+    async def fake(self, *a, **k):
+        return {"error": "No Lumin user with phone +919000000000.", "status_code": 404}
+
+    monkeypatch.setattr(EngineApiClient, "coindcx_access_change", fake)
+    with TestClient(app) as c:
+        _login(c)
+        html = c.post("/control/coindcx/access",
+                      data={"action": "add", "phone": "9000000000"}).text
+    assert "No Lumin user with phone" in html and "HTTP 404" in html
+
+
+def test_turning_a_switch_on_needs_confirm_but_off_does_not(monkeypatch, wired):
+    calls: list = []
+
+    async def fake(self, switch, enabled):
+        calls.append((switch, enabled))
+        return {**copy.deepcopy(ACCESS), "execution_enabled": enabled}
+
+    monkeypatch.setattr(EngineApiClient, "coindcx_switch", fake)
+    with TestClient(app) as c:
+        _login(c)
+        c.post("/control/coindcx/switch", data={"switch": "execution", "enabled": "1"},
+               follow_redirects=False)
+        assert calls == [] and wired["recorded"][-1]["ok"] is False
+        c.post("/control/coindcx/switch",
+               data={"switch": "execution", "enabled": "1", "confirm": "yes"},
+               follow_redirects=False)
+        html = c.post("/control/coindcx/switch",
+                      data={"switch": "execution", "enabled": "0"}).text
+    assert calls == [("execution", True), ("execution", False)]
+    assert "the engine now reads OFF" in html
+
+
+def test_the_control_page_does_not_offer_the_coindcx_switches(monkeypatch, wired):
+    """/control would render a one-tap switch with no confirm and a form that
+    re-posts the whole allow-list as loaded. Only /control/coindcx edits them."""
+    async def fake_tunables(self):
+        return {"initialised": True, "tunables": [
+            {"key": "coindcx_execution_enabled", "label": "CoinDCX auto-trade — master switch",
+             "description": "", "type": "bool", "default": False, "value": False,
+             "category": "CoinDCX"},
+            {"key": "coindcx_execution_allowed_uids", "label": "CoinDCX allowed users",
+             "description": "", "type": "str", "default": "", "value": "owner-uid",
+             "category": "CoinDCX"},
+            {"key": "dispatch_cooldown_enabled", "label": "Dispatch cooldown",
+             "description": "", "type": "bool", "default": True, "value": True,
+             "category": "Safety"},
+        ]}
+
+    monkeypatch.setattr(EngineApiClient, "tunables_state", fake_tunables)
+    with TestClient(app) as c:
+        _login(c)
+        html = c.get("/control").text
+    assert "dispatch_cooldown_enabled" in html, "the fake reached the page"
+    assert "coindcx_execution_enabled" not in html
+    assert "coindcx_execution_allowed_uids" not in html

@@ -72,6 +72,11 @@ async def coindcx_page(request: Request):
         e for e in audit.tail(settings.audit_log_path, limit=400)
         if str(e.get("action", "")).startswith("coindcx_")
     ][:15]
+    try:
+        access_raw = await request.app.state.engine_api.coindcx_access()
+    except Exception as exc:  # noqa: BLE001 — named, never blank
+        access_raw = {"error": f"{type(exc).__name__}: {exc}"}
+    access = dcx.grade_access(access_raw)
     grade = dcx.grade_status(status, now=now)
     ok_status = status if grade["state"] in ("running", "stale") else {}
     return request.app.state.templates.TemplateResponse(
@@ -92,6 +97,7 @@ async def coindcx_page(request: Request):
             "self_test": dcx.grade_self_test(
                 report, last_request_at=_last_request_at(rows), now=now),
             "stale_cycles": dcx.STALE_CYCLES,
+            "access": access,
             "margin_choices": MARGIN_CHOICES,
             "default_symbol": DEFAULT_SYMBOL,
             "audit": rows,
@@ -144,3 +150,126 @@ async def coindcx_self_test(
         text = f"The engine refused the self-test{f' (HTTP {code})' if code else ''}: {err}"
     request.session["_coindcx_flash"] = {"ok": ok, "text": text}
     return RedirectResponse("/control/coindcx", status_code=303)
+
+
+#: What an owner types for a phone: "98765 43210", "+91 98765-43210",
+#: "919876543210". The engine looks users up by E.164.
+_PHONE_DIGITS = re.compile(r"\D+")
+ACCESS_ACTION = "coindcx_access"
+SWITCH_ACTION = "coindcx_switch"
+SWITCHES = {
+    "execution": "CoinDCX auto-trade (master switch)",
+    "open_to_all": "Open to every connected user",
+}
+
+
+def normalise_phone(raw: str) -> str | None:
+    """E.164, or ``None`` when the input cannot be a phone number.
+
+    A bare 10-digit number is Indian (+91) — the only market this venue is
+    for. Anything else must carry its country code."""
+    text = (raw or "").strip()
+    digits = _PHONE_DIGITS.sub("", text)
+    if not digits:
+        return None
+    if text.startswith("+"):
+        e164 = "+" + digits
+    elif len(digits) == 10:
+        e164 = "+91" + digits
+    elif len(digits) == 12 and digits.startswith("91"):
+        e164 = "+" + digits
+    else:
+        return None
+    return e164 if 9 <= len(e164) <= 16 else None
+
+
+def _flash(request: Request, ok: bool, text: str) -> RedirectResponse:
+    request.session["_coindcx_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse("/control/coindcx", status_code=303)
+
+
+def _engine_said(result) -> str:
+    if isinstance(result, dict):
+        code = result.get("status_code")
+        err = result.get("error") or "no reason given"
+        return f"{err}{f' (HTTP {code})' if code else ''}"
+    return str(result)
+
+
+@router.post("/control/coindcx/access")
+async def coindcx_access_change(
+    request: Request,
+    action: str = Form(""),
+    phone: str = Form(""),
+    uid: str = Form(""),
+):
+    """Add a user by phone, or remove one by uid.
+
+    The engine edits the list it reads at WRITE time — never the list this
+    page loaded — and refuses to write over a list it could not read. Adding
+    grants nothing by itself: orders flow only while the master switch is on.
+    """
+    settings = request.app.state.settings
+    api = request.app.state.engine_api
+    action = (action or "").strip()
+    if action == "add":
+        e164 = normalise_phone(phone)
+        params = {"action": "add", "phone": e164 or phone}
+        if e164 is None:
+            refusal = ("Type the user's phone number — 10 digits for India, or "
+                       "the full number with its + country code.")
+            audit.record(settings.audit_log_path, action=ACCESS_ACTION, params=params,
+                         result={"error": refusal}, ok=False)
+            return _flash(request, False, refusal)
+        result = await api.coindcx_access_change("add", phone=e164)
+    elif action == "remove":
+        uid = (uid or "").strip()
+        params = {"action": "remove", "uid": uid}
+        if not _UID_RE.match(uid):
+            audit.record(settings.audit_log_path, action=ACCESS_ACTION, params=params,
+                         result={"error": "bad uid"}, ok=False)
+            return _flash(request, False, "That row could not be removed — reload and try again.")
+        result = await api.coindcx_access_change("remove", firebase_uid=uid)
+    else:
+        return _flash(request, False, "Unknown action.")
+
+    ok = isinstance(result, dict) and result.get("readable") is True
+    audit.record(settings.audit_log_path, action=ACCESS_ACTION, params=params,
+                 result=result if isinstance(result, dict) else {"error": str(result)}, ok=ok)
+    if not ok:
+        return _flash(request, False, f"The engine refused: {_engine_said(result)}")
+    who = params.get("phone") or params.get("uid")
+    return _flash(request, True, f"{'Added' if action == 'add' else 'Removed'} {who}. "
+                  "The list below is what the engine now holds.")
+
+
+@router.post("/control/coindcx/switch")
+async def coindcx_switch(
+    request: Request,
+    switch: str = Form(""),
+    enabled: str = Form(""),
+    confirm: str = Form(""),
+):
+    """Flip the master switch or open-to-all. Turning either ON can place
+    real orders, so it needs the confirm box; turning OFF never does."""
+    settings = request.app.state.settings
+    switch = (switch or "").strip()
+    on = enabled == "1"
+    params = {"switch": switch, "enabled": on}
+    if switch not in SWITCHES:
+        return _flash(request, False, "Unknown switch.")
+    if on and confirm != "yes":
+        refusal = f"Tick the confirmation to turn on: {SWITCHES[switch]}."
+        audit.record(settings.audit_log_path, action=SWITCH_ACTION, params=params,
+                     result={"error": refusal}, ok=False)
+        return _flash(request, False, refusal)
+    result = await request.app.state.engine_api.coindcx_switch(switch, on)
+    ok = isinstance(result, dict) and result.get("readable") is True
+    audit.record(settings.audit_log_path, action=SWITCH_ACTION, params=params,
+                 result=result if isinstance(result, dict) else {"error": str(result)}, ok=ok)
+    if not ok:
+        return _flash(request, False, f"The engine refused: {_engine_said(result)}")
+    key = "execution_enabled" if switch == "execution" else "open_to_all"
+    now_on = result.get(key)
+    state = "ON" if now_on is True else "OFF" if now_on is False else "not reported"
+    return _flash(request, True, f"{SWITCHES[switch]}: the engine now reads {state}.")

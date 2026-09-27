@@ -243,6 +243,8 @@ OWNER_ONLY: dict[str, str] = {
         "balance, and hosts a control that places a real order"
     ),
     "/control/coindcx/self-test": "write — places a real order on the owner's CoinDCX account",
+    "/control/coindcx/access": "write — money path: adds or removes a user who may be traded on CoinDCX",
+    "/control/coindcx/switch": "write — money path: turns CoinDCX order placement on or off",
     "/trials": "subscriber trial grants — PII",
     "/diag/geometry": "runs `docker exec` against the engine container",
     "/diag/paper": "runs `docker exec` against the engine container",

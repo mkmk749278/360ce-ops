@@ -1,0 +1,32 @@
+{
+  "allowed": [
+    {
+      "display_name": "Owner",
+      "found": true,
+      "key": {
+        "attested": true,
+        "connected": true,
+        "key_public_id_first8": "PUBKEY12",
+        "readable": true
+      },
+      "phone": "+919999999999",
+      "uid": "owner-uid"
+    },
+    {
+      "display_name": "Tester",
+      "found": true,
+      "key": {
+        "attested": false,
+        "connected": false,
+        "key_public_id_first8": null,
+        "readable": true
+      },
+      "phone": "+918888888888",
+      "uid": "tester-uid"
+    }
+  ],
+  "execution_enabled": true,
+  "open_to_all": false,
+  "readable": true,
+  "store_initialised": true
+}

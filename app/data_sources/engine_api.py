@@ -334,6 +334,30 @@ class EngineApiClient:
             {"uid": uid, "symbol": symbol, "margin_currency": margin_currency},
         )
 
+    async def coindcx_access(self) -> Any:
+        """Who may trade on CoinDCX: the master switch, open-to-all, and the
+        allow-list with each user's phone and key state. ``readable: false``
+        means the engine could not read its settings store."""
+        return await self._get("/api/admin/coindcx/access")
+
+    async def coindcx_access_change(
+        self, action: str, *, phone: str | None = None, firebase_uid: str | None = None
+    ) -> Any:
+        """Add (by phone) or remove (by uid) one allow-listed user. The engine
+        edits the list it reads at write time and answers with the new view."""
+        body: dict[str, Any] = {"action": action}
+        if phone is not None:
+            body["phone"] = phone
+        if firebase_uid is not None:
+            body["firebase_uid"] = firebase_uid
+        return await self._post("/api/admin/coindcx/access", body)
+
+    async def coindcx_switch(self, switch: str, enabled: bool) -> Any:
+        """Flip ``execution`` or ``open_to_all``; answers with the new view."""
+        return await self._post(
+            "/api/admin/coindcx/switch", {"switch": switch, "enabled": bool(enabled)}
+        )
+
     async def kill_switch_state(self) -> Any:
         """Current global kill-switch state ``{engaged, reason,
         initialised}``."""
