@@ -10,7 +10,13 @@
         "readable": true
       },
       "phone": "+919999999999",
-      "uid": "owner-uid"
+      "uid": "owner-uid",
+      "venue": {
+        "leverage": 5.0,
+        "margin_currency": "INR",
+        "reason": "ok",
+        "venue": "coindcx"
+      }
     },
     {
       "display_name": "Tester",
@@ -22,7 +28,13 @@
         "readable": true
       },
       "phone": "+918888888888",
-      "uid": "tester-uid"
+      "uid": "tester-uid",
+      "venue": {
+        "leverage": 5.0,
+        "margin_currency": "INR",
+        "reason": "ok",
+        "venue": "binance"
+      }
     }
   ],
   "execution_enabled": true,

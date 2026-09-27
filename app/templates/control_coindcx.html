@@ -187,7 +187,7 @@
     {% if access.allowed %}
     <div class="table-scroll">
     <table class="data-table">
-      <thead><tr><th>User</th><th>Phone</th><th>CoinDCX key</th><th></th></tr></thead>
+      <thead><tr><th>User</th><th>Phone</th><th>CoinDCX key</th><th>Platform (as the engine reads it)</th><th></th></tr></thead>
       <tbody>
       {% for r in access.allowed %}
         <tr>
@@ -201,6 +201,16 @@
               <span class="small muted">{{ k.get('key_public_id_first8') or '' }}…</span>
             {% elif k.get('connected') %}<span class="badge badge-warn">connected, not attested</span>
             {% else %}<span class="badge badge-muted">not connected</span>{% endif %}
+          </td>
+          <td>
+            {% set v = r.get('venue') %}
+            {% if v is not mapping %}<span class="badge badge-muted">not reported</span>
+            {% elif v.get('reason') != 'ok' %}<span class="badge badge-warn">Binance — fallback</span>
+              <div class="small muted">could not read the stored choice ({{ v.get('reason') or 'no reason given' }}), so orders go to Binance</div>
+            {% elif v.get('venue') == 'coindcx' %}<span class="badge badge-ok">CoinDCX</span>
+              <span class="small muted">{{ v.get('margin_currency') or '—' }} margin · {{ v.get('leverage') if v.get('leverage') is not none else '—' }}x</span>
+            {% else %}<span class="badge badge-muted">{{ (v.get('venue') or '—')|capitalize }}</span>
+              <div class="small muted">the user has not chosen CoinDCX</div>{% endif %}
           </td>
           <td>
             <form method="post" action="/control/coindcx/access" class="inline-form">
