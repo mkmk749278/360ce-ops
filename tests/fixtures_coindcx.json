@@ -9,7 +9,7 @@
         "step": "key_reads_wallet",
         "wallets": [
           {
-            "balance": "50",
+            "balance": "100",
             "ccy": "USDT"
           }
         ]
@@ -21,6 +21,14 @@
         "price": 100000.0,
         "refusal": null,
         "step": "instrument_tradable"
+      },
+      {
+        "balance": 100.0,
+        "detail": null,
+        "margin_currency": "USDT",
+        "ok": true,
+        "required": 86.25,
+        "step": "funds_available"
       },
       {
         "ok": true,

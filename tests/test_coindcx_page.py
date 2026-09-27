@@ -397,3 +397,31 @@ def test_the_control_page_does_not_offer_the_coindcx_switches(monkeypatch, wired
     assert "dispatch_cooldown_enabled" in html, "the fake reached the page"
     assert "coindcx_execution_enabled" not in html
     assert "coindcx_execution_allowed_uids" not in html
+
+
+def _platform_cells(html: str) -> str:
+    return html.split("Platform (as the engine reads it)", 1)[1].split("</table>", 1)[0]
+
+
+def test_the_allow_list_shows_the_platform_the_engine_reads(wired):
+    """The owner chose CoinDCX, the app said "no reply arrived in time", and
+    nothing showed whether the choice landed. The row renders the engine's
+    own read of the stored platform (engine vector, not a hand-written row)."""
+    with TestClient(app) as c:
+        _login(c)
+        cells = _platform_cells(c.get("/control/coindcx").text)
+    assert 'badge-ok">CoinDCX' in cells and "INR margin" in cells
+    assert "has not chosen CoinDCX" in cells
+
+
+def test_a_fallback_never_reads_as_a_choice_and_an_old_engine_says_so(wired):
+    rows = wired["access"]["allowed"]
+    rows[0]["venue"] = {"venue": "binance", "margin_currency": "INR",
+                        "leverage": 2.0, "reason": "read_failed"}
+    rows[1].pop("venue")
+    with TestClient(app) as c:
+        _login(c)
+        cells = _platform_cells(c.get("/control/coindcx").text)
+    assert "Binance — fallback" in cells and "read_failed" in cells
+    assert "not reported" in cells
+    assert "has not chosen CoinDCX" not in cells
