@@ -1897,6 +1897,7 @@ refusal.**
 | Engine diagnostic catalog — `GET /internal/diag/catalog`, `POST /internal/diag/catalog/run` (`/diagnostics/console`) | `app/data_sources/engine_api.py` (`diag_catalog` / `diag_run`) |
 | Engine CPU-against-quota + running config — `/internal/diag/host-resources` (`/system`) | `app/data_sources/engine_api.py` (`host_resources`) |
 | Firestore read census + cost-at-N-members projection + invalidation-channel counters — via the diag catalog (`/system/firestore`) | `app/routes/firestore_cost.py` |
+| CoinDCX venue status (`coindcx_status.json`, rewritten every reconcile cycle, carries its own cadence) + the owner's real-account self-test report (`coindcx_self_test.json`) — `/control/coindcx`; fixture is the engine's own output (`tests/fixtures_coindcx.json`) | `app/data_sources/coindcx.py` |
 
 ## Conventions
 

@@ -36,6 +36,7 @@ from app.data_sources.free_run import FreeRunTracker
 from app.data_sources.monitor_logs import MonitorLogsReader
 from app.routes import (
     access,
+    coindcx,
     promotions,
     routing,
     alerts,
@@ -198,6 +199,7 @@ app.include_router(dark_signals.router)
 app.include_router(exit_backtest.router)
 app.include_router(control.router)
 app.include_router(access.router)
+app.include_router(coindcx.router)
 app.include_router(promotions.router)
 app.include_router(routing.router)
 app.include_router(users.router)

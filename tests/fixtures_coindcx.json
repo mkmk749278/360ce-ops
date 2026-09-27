@@ -1,0 +1,168 @@
+{
+  "self_test_pass": {
+    "finished_at": "<clock>",
+    "margin_currency": "USDT",
+    "started_at": "<clock>",
+    "steps": [
+      {
+        "ok": true,
+        "step": "key_reads_wallet",
+        "wallets": [
+          {
+            "balance": "50",
+            "ccy": "USDT"
+          }
+        ]
+      },
+      {
+        "min_notional": 60.0,
+        "ok": true,
+        "pair": "B-BTC_USDT",
+        "price": 100000.0,
+        "refusal": null,
+        "step": "instrument_tradable"
+      },
+      {
+        "ok": true,
+        "row": null,
+        "step": "pair_flat"
+      },
+      {
+        "leverage": 2,
+        "ok": true,
+        "step": "set_leverage"
+      },
+      {
+        "ok": true,
+        "order_id": "ord0",
+        "qty": 0.002,
+        "status": "initial",
+        "step": "entry_accepted"
+      },
+      {
+        "ok": true,
+        "position": {
+          "active_pos": 0.002,
+          "avg_price": 100000.0,
+          "id": "pos-B-BTC_USDT-USDT",
+          "inactive_pos_buy": 0.0,
+          "inactive_pos_sell": 0.0,
+          "liquidation_price": 0.0,
+          "margin_currency_short_name": "USDT",
+          "pair": "B-BTC_USDT",
+          "settlement_currency_avg_price": 102.0,
+          "stop_loss_trigger": null,
+          "take_profit_trigger": null
+        },
+        "step": "entry_filled"
+      },
+      {
+        "ok": true,
+        "raw": {
+          "stop_loss": {
+            "id": "sl1",
+            "stage": "tpsl_exit",
+            "status": "untriggered"
+          },
+          "take_profit": {
+            "id": "tp1",
+            "stage": "tpsl_exit",
+            "status": "untriggered"
+          }
+        },
+        "step": "stop_and_target_rest_together",
+        "stop": [
+          true,
+          "sl1",
+          ""
+        ],
+        "target": [
+          true,
+          "tp1",
+          ""
+        ]
+      },
+      {
+        "liquidation_price": 0.0,
+        "ok": true,
+        "step": "triggers_reported_on_position",
+        "stop_loss_trigger": 97000.0,
+        "take_profit_trigger": 103000.0
+      },
+      {
+        "ok": true,
+        "orders": [],
+        "step": "resting_orders_before_exit"
+      },
+      {
+        "ok": true,
+        "step": "exit_flattens"
+      },
+      {
+        "auto_cancelled": true,
+        "leftover": [],
+        "ok": true,
+        "step": "exchange_auto_cancels_on_exit"
+      },
+      {
+        "ok": true,
+        "step": "cleanup"
+      },
+      {
+        "leftover": [],
+        "ok": true,
+        "step": "no_order_left_after_cleanup"
+      }
+    ],
+    "symbol": "BTCUSDT",
+    "uid": "owner",
+    "verdict": "pass"
+  },
+  "status": {
+    "allow_list": {
+      "active": true,
+      "size": 1
+    },
+    "dispatch": {},
+    "execution_enabled": false,
+    "executor": {},
+    "instruments": {
+      "details_cached": 0,
+      "inr_per_usdt": null,
+      "pairs": {},
+      "pairs_age_s": null,
+      "prices_age_s": null,
+      "stats": {
+        "conversion_failures": 0,
+        "conversion_fetches": 0,
+        "detail_failures": 0,
+        "detail_fetches": 0,
+        "list_failures": 0,
+        "list_fetches": 0,
+        "price_failures": 0,
+        "price_fetches": 0
+      },
+      "symbols_mapped": 0
+    },
+    "positions": {
+      "by_state": {
+        "CLOSED": 1
+      },
+      "close_reasons": {
+        "TP1": 1
+      },
+      "users_live": 0
+    },
+    "reconcile_interval_sec": 30.0,
+    "reconciler": {
+      "last_cycle_at": "<clock>",
+      "last_cycle_users": 0,
+      "stats": {
+        "cycles": 1
+      }
+    },
+    "stream": null,
+    "stream_enabled": true,
+    "written_at": "<clock>"
+  }
+}

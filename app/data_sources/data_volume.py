@@ -244,6 +244,20 @@ class DataVolumeReader:
         """
         return self._load(STRUCTURAL_VETO_FILE)
 
+    def coindcx_status(self) -> Any:
+        """CoinDCX venue status (engine ``src/venues/coindcx/reconciler.py``,
+        ``write_status_file``), rewritten every reconcile cycle whether or not
+        execution is armed.  Carries its own ``reconcile_interval_sec`` so the
+        page grades freshness on the engine's cadence, never one invented here.
+        """
+        return self._load("coindcx_status.json")
+
+    def coindcx_self_test(self) -> Any:
+        """The owner's last CoinDCX real-account self-test report (engine
+        ``src/venues/coindcx/self_test.py``).  Written once, when a run ends —
+        there is no on-disk "running" state."""
+        return self._load("coindcx_self_test.json")
+
     def unlock_shorts(self) -> Any:
         """Unlock-short dark lane (engine ``src/unlock_shorts.py``).
 
