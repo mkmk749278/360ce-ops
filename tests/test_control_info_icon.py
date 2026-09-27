@@ -43,6 +43,7 @@ _URL_TO_TEMPLATE = {
     "/control/referrals": "referrals.html",
     "/trials": "trials.html",
     "/control/access": "control_access.html",
+    "/control/coindcx": "control_coindcx.html",
 }
 
 _COMMENT = re.compile(r"\{#.*?#\}", re.S)

@@ -323,6 +323,17 @@ class EngineApiClient:
         rather than a success."""
         return await self._post("/api/auto-mode", {"mode": mode})
 
+    async def coindcx_self_test(self, uid: str, symbol: str, margin_currency: str) -> Any:
+        """Queue the owner's CoinDCX real-account self-test (owner-gated
+        engine-side, and refused there unless ``uid`` is allow-listed).
+
+        Returns ``{"queued": True, "request_id": ...}``; the result arrives
+        later as ``coindcx_self_test.json`` on the data volume."""
+        return await self._post(
+            "/api/admin/coindcx/self-test",
+            {"uid": uid, "symbol": symbol, "margin_currency": margin_currency},
+        )
+
     async def kill_switch_state(self) -> Any:
         """Current global kill-switch state ``{engaged, reason,
         initialised}``."""

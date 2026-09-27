@@ -238,6 +238,11 @@ OWNER_ONLY: dict[str, str] = {
     "/control/access": "the read-only access panel — a guest must not see or mint grants",
     "/control/access/issue": "write — mints access",
     "/control/access/revoke": "write — revokes access",
+    "/control/coindcx": (
+        "the CoinDCX venue panel — renders the owner's uid and CoinDCX wallet "
+        "balance, and hosts a control that places a real order"
+    ),
+    "/control/coindcx/self-test": "write — places a real order on the owner's CoinDCX account",
     "/trials": "subscriber trial grants — PII",
     "/diag/geometry": "runs `docker exec` against the engine container",
     "/diag/paper": "runs `docker exec` against the engine container",
