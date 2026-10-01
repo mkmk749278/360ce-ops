@@ -148,7 +148,8 @@
         "list_failures": 0,
         "list_fetches": 0,
         "price_failures": 0,
-        "price_fetches": 0
+        "price_fetches": 0,
+        "price_stale_refusals": 0
       },
       "symbols_mapped": 0
     },
