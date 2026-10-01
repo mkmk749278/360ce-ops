@@ -105,6 +105,55 @@
       </div>
     </div>
 
+    {% set f = safety.faults %}
+    {% set b = safety.breaker %}
+    <h3>Safety</h3>
+    <div class="kpis">
+      <div class="kpi">
+        <div class="kpi-label">Live positions without a stop</div>
+        <div class="kpi-value">
+          {% if f is none %}<span class="badge badge-muted">not reported</span>
+          {% elif f.get('unprotected_now') %}<span class="badge badge-err">{{ f.unprotected_now }} NAKED</span>
+          {% else %}<span class="badge badge-ok">0</span>{% endif %}
+        </div>
+        {% if f is not none and f.get('unprotected_now') %}
+          <div class="small">Oldest {{ f.oldest_unprotected_s | secs }}. The reconciler retries the stop every
+            cycle; past two minutes the engine pages.</div>
+        {% elif f is none %}<div class="small muted">This engine predates the count.</div>{% endif %}
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Records CoinDCX returns no row for</div>
+        <div class="kpi-value">
+          {% if f is none %}<span class="badge badge-muted">not reported</span>
+          {% elif f.get('rows_missing_now') %}<span class="badge badge-warn">{{ f.rows_missing_now }}</span>
+          {% else %}<span class="badge badge-ok">0</span>{% endif %}
+        </div>
+        {% if f is not none and f.get('rows_missing_now') %}
+          <div class="small">Oldest {{ f.oldest_row_missing_s | secs }}. Left untouched — absent is not flat —
+            but its age cap cannot run either; past ten minutes the engine pages.</div>
+        {% endif %}
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Venue breaker</div>
+        <div class="kpi-value">
+          {% if b is none %}<span class="badge badge-muted">not reported</span>
+          {% elif b.get('held_in_memory') %}<span class="badge badge-err">TRIPPED — held in memory</span>
+          {% elif safety.paused_by_breaker %}<span class="badge badge-err">TRIPPED — CoinDCX paused</span>
+          {% else %}<span class="badge badge-ok">armed</span>{% endif %}
+        </div>
+        {% if b is not none %}
+          <div class="small muted">{{ b.get('failures_in_window', 0) }} of {{ b.get('threshold') }} failures in
+            {{ b.get('window_s') | secs }} · {{ b.get('trips', 0) }} trip(s) since boot.
+            A trip pauses CoinDCX only; Binance users keep trading.</div>
+          {% if b.get('last_trip_reason') %}<div class="small">Last trip: <code>{{ b.last_trip_reason }}</code></div>{% endif %}
+          {% if safety.paused_by_breaker %}<div class="small">Reset by turning <strong>CoinDCX auto-trade</strong>
+            back ON below, once the cause is understood.</div>{% endif %}
+          {% if b.get('held_in_memory') %}<div class="small">The engine could not write the master switch, so the
+            trip is held until it restarts.</div>{% endif %}
+        {% endif %}
+      </div>
+    </div>
+
     <h3>Positions by state</h3>
     {% set by_state = pos.get('by_state') or {} %}
     {% if by_state %}

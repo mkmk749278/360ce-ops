@@ -88,6 +88,7 @@ async def coindcx_page(request: Request):
             "status": ok_status,
             "execution": dcx.execution_view(ok_status) if ok_status else None,
             "stream": dcx.stream_view(ok_status) if ok_status else None,
+            "safety": dcx.safety_view(ok_status) if ok_status else None,
             "counters": {
                 "Reconciler": dcx.counter_rows((ok_status.get("reconciler") or {}).get("stats")),
                 "Executor": dcx.counter_rows(ok_status.get("executor")),

@@ -425,3 +425,40 @@ def test_a_fallback_never_reads_as_a_choice_and_an_old_engine_says_so(wired):
     assert "Binance — fallback" in cells and "read_failed" in cells
     assert "not reported" in cells
     assert "has not chosen CoinDCX" not in cells
+
+
+# ── safety: unprotected positions, missing rows, venue breaker (2026-10-01) ──
+
+def test_the_engines_vector_carries_the_safety_blocks():
+    """Driven from the ENGINE's own output, so a renamed key fails here."""
+    view = dcx.safety_view(_status())
+    assert view["faults"] == {"oldest_row_missing_s": None, "oldest_unprotected_s": None,
+                              "rows_missing_now": 0, "unprotected_now": 0}
+    assert view["breaker"]["threshold"] == 10 and view["paused_by_breaker"] is False
+
+
+def test_an_engine_predating_the_blocks_reads_not_reported_never_zero(wired):
+    s = _status()
+    s.pop("breaker", None)
+    s["reconciler"].pop("faults", None)
+    wired["status"] = s
+    with TestClient(app) as c:
+        _login(c)
+        html = c.get("/control/coindcx").text
+    section = html.split("<h3>Safety</h3>")[1].split("<h3>Positions by state</h3>")[0]
+    assert section.count("not reported") == 3
+    assert 'badge-ok">0' not in section
+
+
+def test_a_naked_position_and_a_breaker_trip_are_shouted(wired):
+    s = _status()
+    s["reconciler"]["faults"] = {"unprotected_now": 1, "oldest_unprotected_s": 180.0,
+                                 "rows_missing_now": 0, "oldest_row_missing_s": None}
+    s["breaker"].update(trips=1, last_trip_reason="10 CoinDCX placement failures in 60s")
+    s["execution_enabled"] = False
+    wired["status"] = s
+    with TestClient(app) as c:
+        _login(c)
+        html = c.get("/control/coindcx").text
+    assert "1 NAKED" in html
+    assert "TRIPPED — CoinDCX paused" in html and "Binance users keep trading" in html

@@ -117,6 +117,26 @@ def stream_view(status: dict[str, Any]) -> dict[str, Any]:
     return {"state": "reported", **snap}
 
 
+def safety_view(status: dict[str, Any]) -> dict[str, Any]:
+    """The two things that can hurt a user's real account, plus the breaker.
+
+    ``faults`` (engine 2026-10-01): live positions the exchange shows WITHOUT
+    a stop, and records the exchange returns no row for (skipped every cycle,
+    age cap included).  ``breaker``: CoinDCX's own venue breaker, whose trip
+    writes the master switch OFF instead of halting Binance users.
+
+    Each block is tri-state.  ``None`` means an engine predating it, never
+    zero: an absent count is not a clean account.
+    """
+    rec = status.get("reconciler") if isinstance(status.get("reconciler"), dict) else {}
+    faults = rec.get("faults") if isinstance(rec.get("faults"), dict) else None
+    breaker = status.get("breaker") if isinstance(status.get("breaker"), dict) else None
+    paused_by_breaker = bool(
+        breaker and breaker.get("trips") and status.get("execution_enabled") is False
+    )
+    return {"faults": faults, "breaker": breaker, "paused_by_breaker": paused_by_breaker}
+
+
 def counter_rows(block: Any) -> list[tuple[str, Any]]:
     """The engine's counters in the engine's keys, sorted for reading."""
     if not isinstance(block, dict):

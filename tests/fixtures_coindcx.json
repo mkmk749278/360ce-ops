@@ -131,6 +131,17 @@
       "active": true,
       "size": 1
     },
+    "breaker": {
+      "failures_in_window": 0,
+      "failures_total": 0,
+      "held_in_memory": false,
+      "last_trip_at": null,
+      "last_trip_persisted": null,
+      "last_trip_reason": "",
+      "threshold": 10,
+      "trips": 0,
+      "window_s": 60.0
+    },
     "dispatch": {},
     "execution_enabled": false,
     "executor": {},
@@ -148,7 +159,8 @@
         "list_failures": 0,
         "list_fetches": 0,
         "price_failures": 0,
-        "price_fetches": 0
+        "price_fetches": 0,
+        "price_stale_refusals": 0
       },
       "symbols_mapped": 0
     },
@@ -164,6 +176,12 @@
     },
     "reconcile_interval_sec": 30.0,
     "reconciler": {
+      "faults": {
+        "oldest_row_missing_s": null,
+        "oldest_unprotected_s": null,
+        "rows_missing_now": 0,
+        "unprotected_now": 0
+      },
       "last_cycle_at": "<clock>",
       "last_cycle_users": 0,
       "stats": {
