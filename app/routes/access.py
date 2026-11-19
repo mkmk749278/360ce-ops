@@ -27,6 +27,8 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 
 from app import audit
+from app.machine_tokens import TTL_CHOICES as MACHINE_TTL_CHOICES
+from app.machine_tokens import TTLS as MACHINE_TTLS
 
 router = APIRouter()
 
@@ -68,16 +70,21 @@ async def access_page(request: Request):
     # flash rather than in the flash itself, so the plaintext never rides in the
     # session cookie and a refresh cannot re-display it.
     new_code = None
+    new_machine_token = None
     if isinstance(flash, dict) and flash.get("code_nonce"):
         pending = getattr(request.app.state, "guest_pending_codes", None) or {}
         new_code = pending.pop(flash["code_nonce"], None)
+    if isinstance(flash, dict) and flash.get("machine_nonce"):
+        pending = getattr(request.app.state, "guest_pending_codes", None) or {}
+        new_machine_token = pending.pop(flash["machine_nonce"], None)
+    machine_store = getattr(request.app.state, "machine_tokens", None)
 
     # Only the access-related rows, so the page reports on itself rather than
     # showing the engine's control history a second time.
     rows = [
         e
         for e in audit.tail(settings.audit_log_path, limit=400)
-        if str(e.get("action", "")).startswith("guest_")
+        if str(e.get("action", "")).startswith(("guest_", "machine_token_", "mcp_"))
     ][:25]
 
     return templates.TemplateResponse(
@@ -88,6 +95,10 @@ async def access_page(request: Request):
             "grants": store.list_grants(),
             "ttl_choices": GUEST_TTL_CHOICES,
             "new_code": new_code,
+            "new_machine_token": new_machine_token,
+            "machine_tokens": machine_store.list_tokens() if machine_store else [],
+            "machine_ttl_choices": MACHINE_TTL_CHOICES,
+            "mcp_url": str(request.base_url).rstrip("/") + "/mcp",
             # The URL the holder actually opens, derived from the request rather
             # than hardcoded: the page is reachable on the deployed host and on
             # a local dev server, and a copy button that hands over the wrong
@@ -191,4 +202,49 @@ async def access_revoke(
         else "Nothing to revoke: that code is already revoked or expired."
     )
     request.session["_access_flash"] = {"ok": ok, "text": text}
+    return RedirectResponse("/control/access", status_code=303)
+
+
+@router.post("/control/access/machine/issue")
+async def machine_issue(request: Request, label: str = Form(""), ttl: str = Form("30d")):
+    """Mint a machine token for the hourly analyst's MCP connection.
+
+    What it can do is ``app/routes/mcp.py``'s tool table: named engine catalog
+    reads plus ``submit_plan``, which records a plan in the engine's analyst
+    ledger and reaches no subscriber or order. Shown once; only its hash is kept.
+    """
+    settings = request.app.state.settings
+    store = request.app.state.machine_tokens
+    ttl_sec = MACHINE_TTLS.get((ttl or "").strip())
+    if ttl_sec is None:
+        request.session["_access_flash"] = {"ok": False,
+                                            "text": f"Rejected — unknown duration {ttl!r}."}
+        return RedirectResponse("/control/access", status_code=303)
+    token, tid = store.issue(label=label, ttl_sec=ttl_sec)
+    pending = getattr(request.app.state, "guest_pending_codes", None)
+    if pending is None:
+        pending = {}
+        request.app.state.guest_pending_codes = pending
+    nonce = secrets.token_hex(8)
+    pending[nonce] = token
+    audit.record(settings.audit_log_path, action="machine_token_issued",
+                 params={"label": label or "analyst", "ttl": ttl, "token_id": tid},
+                 result={}, ok=True)
+    request.session["_access_flash"] = {
+        "ok": True, "machine_nonce": nonce,
+        "text": f"Machine token minted ({ttl}). Copy it now — it is not shown again."}
+    return RedirectResponse("/control/access", status_code=303)
+
+
+@router.post("/control/access/machine/revoke")
+async def machine_revoke(request: Request, token_id: str = Form("")):
+    """Kill one machine token. Effective on its next MCP request."""
+    settings = request.app.state.settings
+    ok = request.app.state.machine_tokens.revoke((token_id or "").strip())
+    audit.record(settings.audit_log_path, action="machine_token_revoked",
+                 params={"token_id": token_id},
+                 result={} if ok else {"error": "not found or already revoked"}, ok=ok)
+    request.session["_access_flash"] = {
+        "ok": ok, "text": ("Machine token revoked — its next MCP call is refused."
+                           if ok else "Nothing to revoke: already revoked or unknown.")}
     return RedirectResponse("/control/access", status_code=303)

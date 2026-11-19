@@ -212,6 +212,75 @@
 </section>
 
 <section class="card">
+  <div class="card-title"><h2>Analyst machine tokens</h2>
+    {% call info("About machine tokens") %}
+      <p>A machine token lets the scheduled analyst session call the MCP server at
+        <code>{{ mcp_url }}</code>. It can read the analyst's market, watchlist,
+        pair and plan views, and submit one plan; the engine validates the plan
+        and records it. Nothing it does reaches a subscriber, the signal queue or
+        an order. Every call is in the access log below.</p>
+      <p>Shown once; only its SHA-256 hash is stored. Revoking takes effect on
+        the next call.</p>
+    {% endcall %}
+  </div>
+  {% if new_machine_token %}
+  <div class="flash flash-ok new-code">
+    <strong>New machine token — copy it now, it is not shown again:</strong>
+    <div class="new-code-value">
+      <code id="new-machine-token">{{ new_machine_token }}</code>
+      <button type="button" class="btn btn-plain" id="copy-machine"
+              data-code="{{ new_machine_token }}"
+              onclick="navigator.clipboard &amp;&amp; navigator.clipboard.writeText(this.dataset.code).then(()=>{this.textContent='Copied'},()=>{});">Copy</button>
+    </div>
+    <div class="new-code-url">Send it as <code>Authorization: Bearer &lt;token&gt;</code> to
+      <code>{{ mcp_url }}</code></div>
+  </div>
+  {% endif %}
+  <form method="post" action="/control/access/machine/issue" class="inline-form">
+    <label class="grow">Label
+      <input type="text" name="label" placeholder="hourly-analyst" maxlength="64">
+    </label>
+    <label>Valid for
+      <select name="ttl">
+        {% for key, label, _sec in machine_ttl_choices %}
+        <option value="{{ key }}" {% if key == '30d' %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn btn-primary">Generate machine token</button>
+  </form>
+  {% if machine_tokens %}
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>Label</th><th>State</th><th>Expires</th><th class="num">Calls</th>
+      <th class="num">Refused</th><th>Last used</th><th></th></tr></thead>
+    <tbody>
+      {% for t in machine_tokens %}
+      <tr class="{% if t.state == 'live' %}row-ok{% else %}row-dead{% endif %}">
+        <td class="nowrap"><strong>{{ t.label }}</strong></td>
+        <td>{% if t.state == 'live' %}<span class="badge badge-ok">live</span>
+          {% else %}<span class="badge badge-muted">{{ t.state }}</span>{% endif %}</td>
+        <td class="nowrap">{% if t.state == 'live' %}in {{ t.seconds_remaining|duration }}{% else %}<span class="muted">{{ t.expires_at|when }}</span>{% endif %}</td>
+        <td class="num">{{ t.uses }}</td>
+        <td class="num">{% if t.denials %}<span class="badge badge-warn">{{ t.denials }}</span>{% else %}0{% endif %}</td>
+        <td class="nowrap muted">{{ t.last_used|when }}</td>
+        <td>{% if t.state == 'live' %}
+          <form method="post" action="/control/access/machine/revoke" style="display:inline"
+                onsubmit="return confirm('Revoke machine token {{ t.label }}?');">
+            <input type="hidden" name="token_id" value="{{ t.id }}">
+            <button type="submit" class="btn btn-soft-danger btn-sm">Revoke</button>
+          </form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No machine tokens have been minted.</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <div class="card-title"><h2>Access log</h2>
     {% call info("About the access log") %}
       <p>Mints, logins, revocations and every refused request. A refusal names

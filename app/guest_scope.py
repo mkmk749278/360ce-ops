@@ -238,6 +238,9 @@ OWNER_ONLY: dict[str, str] = {
     "/control/access": "the read-only access panel — a guest must not see or mint grants",
     "/control/access/issue": "write — mints access",
     "/control/access/revoke": "write — revokes access",
+    "/control/access/machine/issue": "write — mints an analyst machine token",
+    "/control/access/machine/revoke": "write — revokes an analyst machine token",
+    "/mcp": "machine-token surface for the hourly analyst; never a session route",
     "/control/coindcx": (
         "the CoinDCX venue panel — renders the owner's uid and CoinDCX wallet "
         "balance, and hosts a control that places a real order"

@@ -53,6 +53,7 @@ class Settings:
     audit_log_path: str
     app_tokens_path: str
     guest_access_path: str
+    machine_tokens_path: str
     device_tokens_path: str
     fcm_service_account: str
     agent_redis_url: str
@@ -125,6 +126,7 @@ def load_settings() -> Settings:
         # writable volume as the audit log and the app-tokens store, so a
         # live grant survives a deploy and a revoke is not undone by one.
         guest_access_path=_env("OPS_GUEST_ACCESS_PATH", "/data/ops_guest_access.json"),
+        machine_tokens_path=_env("OPS_MACHINE_TOKENS_PATH", "/data/ops_machine_tokens.json"),
         # Registered FCM device tokens for push (Phase 4). Plaintext addressing
         # tokens (not secrets) on the writable volume, shared between the web app
         # (registers) and the monitoring agent (sends).
