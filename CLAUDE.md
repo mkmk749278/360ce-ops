@@ -1875,6 +1875,18 @@ unread. The console works for a guest exactly as `GUEST_ACTION_ROUTES`
 documents. **Check the tool before blaming the system, and read the whole
 refusal.**
 
+## `/mcp` — the analyst's door, and why it is a tool table (2026-11-19)
+
+The hourly AI analyst connects with a **machine token** (Control → Access),
+not a session or the engine Bearer (`docs/ANALYST_MCP.md`). The scope is the
+`TOOLS` table in `app/routes/mcp.py`. Each tool forwards one engine
+catalog key, so the engine decides what the key may do, as with the
+diag console. A guest-session decision that applies here: **one token kind,
+one table, no scope parameter.** That way the blast radius is argued once. Exactly
+one tool writes (`submit_plan`, the engine's analyst ledger), and a test pins
+that set. Every call is audited as `machine:<label>`. An unknown tool counts
+against the token's `denials` and never reaches the engine.
+
 ## Data sources (one-line each)
 
 | Source | Module |

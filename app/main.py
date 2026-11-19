@@ -18,6 +18,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.app_tokens import AppTokenStore
+from app.machine_tokens import MachineTokenStore
 from app.auth_mw import AuthRedirectMiddleware
 from app import guest_scope
 from app import template_filters
@@ -41,6 +42,7 @@ from app.routes import (
     routing,
     alerts,
     api_v1,
+    mcp,
     audit_status,
     auth,
     control,
@@ -116,6 +118,7 @@ async def lifespan(app: FastAPI):
     # are purged at boot so the file cannot grow forever; purging changes no
     # access decision, since an expired grant already fails verification.
     app.state.guest_access = GuestAccessStore(settings.guest_access_path)
+    app.state.machine_tokens = MachineTokenStore(settings.machine_tokens_path)
     app.state.guest_access.purge()
     app.state.guest_pending_codes = {}
     app.state.device_registry = DeviceRegistry(settings.device_tokens_path)
@@ -151,6 +154,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 app.include_router(auth.router)
 app.include_router(guest.router)
 app.include_router(api_v1.router)
+app.include_router(mcp.router)
 app.include_router(pulse.router)
 app.include_router(truth.router)
 app.include_router(signals.router)

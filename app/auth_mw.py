@@ -58,6 +58,11 @@ class AuthRedirectMiddleware(BaseHTTPMiddleware):
         # redirect (a 302→/login would break a non-browser client).
         if _under(path, "/api/v1"):
             return await call_next(request)
+        # /mcp is the analyst's machine-token surface (app/routes/mcp.py): it
+        # authenticates every request itself and answers 401 JSON, so a 302 to
+        # /login would break a non-browser client exactly as it would /api/v1.
+        if path == "/mcp":
+            return await call_next(request)
         if not request.session.get("authenticated"):
             return RedirectResponse("/login", status_code=302)
 
