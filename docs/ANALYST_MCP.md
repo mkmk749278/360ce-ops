@@ -14,6 +14,7 @@ engine diagnostic-catalog key; the engine decides what that key may do.
 | `watchlist` | `read.analyst_watchlist` | no |
 | `pair_snapshot(symbol)` | `read.analyst_pair` | no |
 | `recent_plans(limit)` | `read.analyst_plans` | no |
+| `plan_outcomes` | `read.analyst_outcomes` | no |
 | `derivatives_status` | `read.deriv_history` | no |
 | `submit_plan(plan)` | `action.analyst_submit_plan` | appends to the engine's analyst ledger |
 
@@ -21,7 +22,7 @@ engine diagnostic-catalog key; the engine decides what that key may do.
 this per catalog entry, by AST. It needs `DIAG_ACTIONS_ENABLED` on the engine.
 
 Not yet tools (the engine does not publish them yet): book state, the unlock
-calendar as its own view, and plan outcomes (spec step 4).
+calendar as its own view.
 
 ## Credentials
 
