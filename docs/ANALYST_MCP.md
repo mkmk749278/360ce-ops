@@ -11,6 +11,8 @@ engine diagnostic-catalog key; the engine decides what that key may do.
 | Tool | Engine catalog key | Writes |
 |---|---|---|
 | `market_context` | `read.analyst_market` | no |
+| `market_scan` | `read.analyst_scan` | no |
+| `chart(symbol, tf, bars)` | `read.analyst_chart` | no |
 | `watchlist` | `read.analyst_watchlist` | no |
 | `pair_snapshot(symbol)` | `read.analyst_pair` | no |
 | `recent_plans(limit)` | `read.analyst_plans` | no |

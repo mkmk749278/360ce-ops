@@ -157,3 +157,17 @@ def test_a_guest_session_cannot_mint_or_reach_mcp_by_cookie(ctx):
     from app import guest_scope
     for path in ("/mcp", "/control/access/machine/issue", "/control/access/machine/revoke"):
         assert path in guest_scope.OWNER_ONLY
+
+
+def test_chart_tool_bounds_its_arguments_before_the_engine(ctx):
+    c, token, _ = ctx
+    r = _rpc(c, token, "tools/call", {"name": "chart",
+                                      "arguments": {"symbol": "ethusdt", "tf": "4h", "bars": 50}})
+    assert r.json()["result"]["isError"] is False
+    assert app.state.engine_api.calls[-1] == ("read.analyst_chart",
+                                              {"symbol": "ETHUSDT", "tf": "4h", "bars": 50})
+    for bad in ({"symbol": "x"}, {"symbol": "ETHUSDT", "tf": "3m"},
+                {"symbol": "ETHUSDT", "bars": 9999}):
+        n = len(app.state.engine_api.calls)
+        res = _rpc(c, token, "tools/call", {"name": "chart", "arguments": bad}).json()["result"]
+        assert res["isError"] is True and len(app.state.engine_api.calls) == n

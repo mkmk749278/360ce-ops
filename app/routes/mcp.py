@@ -43,6 +43,22 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
         "Read first. BTC regime per timeframe, BTC 24h/7d change and ATR, 7d altcoin "
         "breadth vs BTC (n, stale and missing counted), UTC session, and macro-calendar "
         "readability (not wired: treat as UNKNOWN, never as 'no events').", _EMPTY),
+    "market_scan": (
+        "read.analyst_scan",
+        "Every universe coin (~75), one compact row each: price, change 1h/4h/24h/7d, "
+        "1h-ATR %, 24h volume surge vs the 7-day mean, position in the 7-day range, "
+        "funding and 24h OI change (None = no history yet, never zero). Use it to "
+        "triage the WHOLE market yourself.", _EMPTY),
+    "chart": (
+        "read.analyst_chart",
+        "Raw CLOSED candles for one coin: [open_time_ms, open, high, low, close, volume, "
+        "taker_buy_share], oldest first, plus 48h of hourly OI / funding / premium. No "
+        "indicators: read the structure yourself (swings, higher highs/lows, ranges, "
+        "breaks, volume). Read top-down: 1d, 4h, 1h, then 15m for the trigger.",
+        {"type": "object", "required": ["symbol"], "additionalProperties": False,
+         "properties": {"symbol": {"type": "string"},
+                        "tf": {"enum": ["15m", "1h", "4h", "1d"]},
+                        "bars": {"type": "integer", "minimum": 10, "maximum": 300}}}),
     "watchlist": (
         "read.analyst_watchlist",
         "Pairs within 1.5x 1h-ATR of a level scoring >= 60, best first, with refusals "
@@ -71,8 +87,12 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
         _EMPTY),
     "submit_plan": (
         "action.analyst_submit_plan",
-        "Submit this hour's plan. The engine validates every setup against the CURRENT "
-        "level menu and records it, accepted or rejected with a reason. Measured dark: "
+        "Submit this hour's plan. Give each setup EITHER your own prices from your chart "
+        "read (entry_prices, stop_price, target_prices: each must lie within the 7-day "
+        "traded range +/-1 ATR) OR level ids from pair_snapshot's menu, plus a scenario "
+        "and p_target (your probability of reaching the first target; it is scored for "
+        "calibration). The engine validates and records each setup, accepted or rejected "
+        "with a reason. Measured dark: "
         "nothing reaches a subscriber or an order. 'stand_aside' with no setups is a "
         "valid and common plan.",
         {"type": "object", "required": ["plan"], "additionalProperties": False,
@@ -83,8 +103,7 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
                  "notes": {"type": "string", "maxLength": 500},
                  "setups": {"type": "array", "maxItems": 5, "items": {
                      "type": "object",
-                     "required": ["symbol", "side", "archetype", "entry_level_ids",
-                                  "stop_level_id", "target_level_ids", "invalidation"],
+                     "required": ["symbol", "side", "archetype", "invalidation"],
                      "properties": {
                          "symbol": {"type": "string"},
                          "side": {"enum": ["long", "short"]},
@@ -97,6 +116,14 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
                          "stop_level_id": {"type": "string"},
                          "target_level_ids": {"type": "array", "minItems": 1,
                                               "maxItems": 3, "items": {"type": "string"}},
+                         "entry_prices": {"type": "array", "minItems": 1, "maxItems": 2,
+                                          "items": {"type": "number"}},
+                         "stop_price": {"type": "number"},
+                         "target_prices": {"type": "array", "minItems": 1, "maxItems": 3,
+                                           "items": {"type": "number"}},
+                         "scenario": {"type": "string", "maxLength": 500},
+                         "p_target": {"type": "number", "exclusiveMinimum": 0,
+                                      "exclusiveMaximum": 1},
                          "expiry_hours": {"type": "number", "minimum": 1, "maximum": 24},
                          "invalidation": {"type": "string", "maxLength": 500}}}}}}}}),
 }
@@ -127,6 +154,17 @@ def _tool_args(name: str, args: Any, label: str) -> dict[str, Any]:
         if not _SYMBOL_RE.match(sym):
             raise ValueError("symbol must look like XXXUSDT")
         return {"symbol": sym}
+    if name == "chart":
+        sym = str(args.get("symbol") or "").upper()
+        if not _SYMBOL_RE.match(sym):
+            raise ValueError("symbol must look like XXXUSDT")
+        tf = args.get("tf", "1h")
+        if tf not in ("15m", "1h", "4h", "1d"):
+            raise ValueError("tf must be one of 15m, 1h, 4h, 1d")
+        bars = args.get("bars", 120)
+        if not isinstance(bars, int) or not 10 <= bars <= 300:
+            raise ValueError("bars must be an integer 10-300")
+        return {"symbol": sym, "tf": tf, "bars": bars}
     if name == "recent_plans":
         lim = args.get("limit", 5)
         if not isinstance(lim, int) or not 1 <= lim <= 20:
@@ -173,9 +211,10 @@ async def mcp_post(request: Request) -> Response:
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": SERVER_INFO,
             "instructions": (
-                "You are the hourly setup analyst. Read market_context, then watchlist, "
-                "then pair_snapshot for candidates. Plan by LEVEL ID only. Most hours the "
-                "right plan is stand_aside. Submit exactly one plan per hour."),
+                "You are the hourly setup analyst. Read market_context and market_scan, "
+                "read the charts of your candidates top-down yourself, then submit one "
+                "plan per hour with your own prices, a scenario and p_target. Most hours "
+                "the right plan is stand_aside."),
         })
     if method == "ping":
         return _rpc(id_, result={})
