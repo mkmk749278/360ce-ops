@@ -59,6 +59,12 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
         {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1,
                                                     "maximum": 20}},
          "additionalProperties": False}),
+    "plan_outcomes": (
+        "read.analyst_outcomes",
+        "How your past accepted setups did, walked forward dark on 5m bars, per arm "
+        "(your limit entry, your tranches, market at submit, no trade): n, win rate, "
+        "average net of a 0.07% round trip, with and without the top 1%. Unfilled "
+        "limits are scored at market. Read n before any average.", _EMPTY),
     "derivatives_status": (
         "read.deriv_history",
         "State of the hourly OI/funding/premium/taker recorder (it may be switched off).",
