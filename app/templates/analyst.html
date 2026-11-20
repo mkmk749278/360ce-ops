@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% from "_info.html" import info %}
+{% block title %}AI analyst · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>AI analyst — plans and dark outcomes</h1>
+
+<div class="card">
+  <div class="card-title"><h2>Does the model add anything?</h2>
+    {% call info("How to read this") %}
+      <p>The hourly analyst picks levels by id from the engine's menu. Every
+        accepted setup is walked forward <strong>dark</strong> on 5m bars, under
+        several arms over the same opportunity. Nothing here reached a
+        subscriber or an order.</p>
+      <p><strong>The refutation condition:</strong> if the
+        <em>fixed rule</em> (same symbol and side, levels picked mechanically
+        from the same menu) matches the analyst net of fees, the model added
+        nothing and we ship the rule.</p>
+      <p>Net of a 0.07% round trip. Stop first on an ambiguous bar; no target
+        on a limit's fill bar. An unfilled limit is scored at the market
+        outcome. Read <strong>n</strong> before any average, and the
+        without-top-1% column beside it, because our gross is tail-driven.</p>
+    {% endcall %}
+  </div>
+
+  {% if out_state == 'not_reported' %}
+    <p class="warn">NOT REPORTED — this engine has no <code>read.analyst_outcomes</code>
+      entry. That is an engine predating this page: a deploy question.</p>
+  {% elif out_state == 'failed' %}
+    <p class="warn">COULD NOT READ — the engine or the transport said:
+      <code>{{ out_detail }}</code></p>
+  {% elif out_state == 'no_ledger' %}
+    <p class="muted">No plan has been submitted yet (<code>{{ out_detail }}</code>).
+      Expected until the hourly sessions start (spec step 5).</p>
+  {% else %}
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Arm</th><th class="num">n</th><th class="num">Win %</th>
+        <th class="num">Avg net %</th><th class="num">Avg net % w/o top 1%</th>
+        <th class="num">Total net %</th><th class="num">Unfilled → market</th>
+        <th class="num">Open</th><th class="num">Insufficient</th></tr></thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ r.label }}{% if not r.known %} <span class="badge badge-warn">unclassified</span>{% endif %}</td>
+          <td class="num"><strong>{{ r.n }}</strong></td>
+          <td class="num">{{ (r.win_rate * 100)|pct if r.win_rate is not none else '—' }}</td>
+          <td class="num">{{ r.avg_net_pct|pct }}</td>
+          <td class="num">{{ r.trim_avg|pct }}{% if r.trim_dropped %} <span class="muted small">(−{{ r.trim_dropped }})</span>{% endif %}</td>
+          <td class="num">{{ r.total_net_pct|pct }}</td>
+          <td class="num">{{ r.unfilled }}</td>
+          <td class="num">{{ r.open }}</td>
+          <td class="num">{{ r.insufficient }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% if arms_not_built %}
+      <p class="muted small">Not built yet, so not zero: {{ arms_not_built|join(', ') }}.</p>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-title"><h2>Recent plans</h2>
+    {% call info("About plans") %}
+      <p>Each plan is validated against the menu as it stood at submit. A
+        rejected setup carries the engine's named reason. <em>stand_aside</em>
+        with no setups is a valid and common plan.</p>
+    {% endcall %}
+  </div>
+  {% if plans_state == 'not_reported' %}
+    <p class="warn">NOT REPORTED — no <code>read.analyst_plans</code> entry on this engine.</p>
+  {% elif plans_state == 'failed' %}
+    <p class="warn">COULD NOT READ — <code>{{ plans_detail }}</code></p>
+  {% elif plans_state == 'no_ledger' or not plans %}
+    <p class="muted">No plans yet.</p>
+  {% else %}
+    <p class="small">Setups: <strong>{{ totals.get('setups') or 0 }}</strong>,
+      accepted <strong>{{ totals.get('accepted') or 0 }}</strong>.
+      {% if rejections %}Rejected by reason:
+        {% for k, v in rejections.items() %}<code>{{ k }}</code> {{ v }}{% if not loop.last %}, {% endif %}{% endfor %}
+      {% endif %}</p>
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Submitted</th><th>Bias</th><th>Setup</th><th>Status</th>
+        <th class="num">Stop × 1h-ATR</th><th class="num">TP1 distance %</th><th>Notes</th></tr></thead>
+      <tbody>
+      {% for p in plans %}
+        {% for s in p.setups %}
+        <tr>
+          <td class="nowrap">{% if loop.first %}{{ p.submitted_at|when }}{% endif %}</td>
+          <td>{% if loop.first %}{{ p.bias }}{% endif %}</td>
+          <td class="nowrap">{{ s.symbol }} {{ s.side }} · {{ s.archetype }}</td>
+          <td>{% if s.status == 'accepted' %}<span class="badge badge-ok">accepted</span>
+            {% else %}<span class="badge badge-muted">{{ s.reason }}</span>
+              <div class="muted small">{{ s.detail }}</div>{% endif %}</td>
+          <td class="num">{{ s.stop_atr if s.stop_atr is not none else '—' }}</td>
+          <td class="num">{{ s.tp1_pct|pct }}</td>
+          <td class="muted small">{% if loop.first %}{{ p.notes }}{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td class="nowrap">{{ p.submitted_at|when }}</td><td>{{ p.bias }}</td>
+          <td colspan="5" class="muted">no setups</td></tr>
+        {% endfor %}
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}
