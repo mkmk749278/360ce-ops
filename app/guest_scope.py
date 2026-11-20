@@ -177,6 +177,9 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         # diagnostic catalog — which is itself already guest-readable, so this
         # widens nothing.
         "/system/firestore",
+        # The analyst's plans and dark outcomes — read through the diagnostic
+        # catalog, which a guest can already reach; nothing here writes.
+        "/analyst",
         # -- diagnostics ----------------------------------------------------
         "/truth",
         "/truth/raw.json",
