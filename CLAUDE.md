@@ -20,6 +20,8 @@ repo already lives by: the fix for a drifting mirror is not a second mirror.
 
 Same as in 360-v2: CTE with full technical ownership. Read briefs every session. Update `ACTIVE_CONTEXT.md` (in 360-v2) at session end if anything here changed materially.
 
+**Times in the session chat are in IST (owner, 2026-11-20).** Every time told to the owner in chat (next check-in, CI or deploy ETA, reminder, when something finished) is Indian Standard Time, written like "11:00 AM IST", never UTC alone: the owner reads it on a phone in India. Convert first (IST = UTC + 5:30; 05:00 UTC is 10:30 AM IST); add the UTC time in brackets only when it helps match a log or an ops page. Chat only: the ops pages, the engine and logs stay UTC end to end.
+
 For every change, ask: **"how does this make signals more profitable for paid subscribers?"** If the answer is engineering polish without a measurable effect on subscriber-visible quality, defer.
 
 ## Scope of this repo
