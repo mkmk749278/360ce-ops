@@ -112,3 +112,144 @@ async def analyst_page(request: Request):
         "totals": plans.get("totals") or {},
         "rejections": plans.get("rejections_by_reason") or {},
     })
+
+
+# ── /signals/analyst — the analyst's setups read as a signal feed (2026-11-22) ──
+#
+# Owner: "make analyst like real signals but to ops only, not for users".
+# Engine side: ``analyst_walk.feed`` via ``read.analyst_feed``. Every row is a
+# setup the validator ACCEPTED, walked dark; none of it reached a subscriber,
+# the signal queue or an order. Ops computes nothing about the outcome — state
+# and PnL are the engine's ``analyst`` arm. The one thing added here is a live
+# mark for rows still running, from the whole-book ticker (one request,
+# TTL-cached), and it is kept out of every realised figure.
+
+#: The engine's states, in display order, with what each means. Labels only:
+#: a state the engine publishes and this map lacks renders under its raw name,
+#: badged ``unclassified``.
+FEED_STATE_COPY = {
+    "pending": ("Pending", "badge-accent", "Limit not reached yet; still inside its expiry."),
+    "active": ("Active", "badge-warn", "Limit filled; walking to TP1 or the stop."),
+    "tp_hit": ("TP1 hit", "badge-ok", "Reached the first target before the stop."),
+    "sl_hit": ("SL hit", "badge-bad", "Stopped out (stop counts first on an ambiguous bar)."),
+    "time_exit": ("Time exit", "badge-muted", "Neither level in 12h; closed at the bar close."),
+    "not_filled": ("Not filled", "badge-muted",
+                   "The limit was never reached. PnL shown is the MARKET outcome, not a fill."),
+    "waiting_data": ("Waiting for bars", "badge-muted", "No 5m bars after the submit yet."),
+    "not_walked": ("Not walked yet", "badge-muted", "The 5-minute walk has not reached it."),
+    "insufficient": ("Insufficient", "badge-err", "Bars do not cover the window; no verdict."),
+}
+#: States whose position is still running, so a live mark means something.
+LIVE_STATES = ("pending", "active")
+#: The engine walks every 5 minutes; a running row not advanced in 3 steps is stale.
+FEED_STALE_STEPS = 3
+
+
+def _signed_pct(side: str, frm: float, to: float) -> float:
+    move = (to - frm) / frm * 100.0
+    return move if side == "long" else -move
+
+
+def feed_rows(rows: list, prices: dict, now: float, step_s: float = 300.0) -> list[dict]:
+    """Display rows: the engine's row plus label, live mark and freshness."""
+    out = []
+    for r in rows:
+        r = dict(r)
+        st = r.get("state") or ""
+        label, badge, meaning = FEED_STATE_COPY.get(st, (st, "badge-warn", ""))
+        r.update(state_label=label, state_badge=badge, state_meaning=meaning,
+                 state_known=st in FEED_STATE_COPY)
+        a = r.get("analyst") or {}
+        side = r.get("side") or ""
+        mark = prices.get(r.get("symbol") or "") if st in LIVE_STATES else None
+        r["mark"] = mark
+        r["unrealized_pct"] = r["to_entry_pct"] = r["to_stop_pct"] = r["to_tp1_pct"] = None
+        entries = r.get("entries") or []
+        targets = r.get("targets") or []
+        if mark:
+            if st == "active" and a.get("entry"):
+                r["unrealized_pct"] = round(_signed_pct(side, float(a["entry"]), mark), 3)
+            elif st == "pending" and entries:
+                # Distance price still has to travel to the limit (positive = away).
+                e1 = float(entries[0]["price"])
+                r["to_entry_pct"] = round(abs(mark - e1) / mark * 100.0, 3)
+            if r.get("stop"):
+                r["to_stop_pct"] = round(-_signed_pct(side, mark, float(r["stop"])), 3)
+            if targets:
+                r["to_tp1_pct"] = round(_signed_pct(side, mark, float(targets[0])), 3)
+        upd = a.get("updated_at")
+        r["walk_age_s"] = (now - float(upd)) if upd else None
+        r["walk_stale"] = bool(st in LIVE_STATES and upd
+                               and now - float(upd) > FEED_STALE_STEPS * step_s)
+        out.append(r)
+    return out
+
+
+def feed_summary(rows: list[dict]) -> dict:
+    """Over the rows on screen. Realised = TP / SL / time exit on a FILL;
+    a not-filled row is counted apart, because its PnL is the market's."""
+    def net(r):
+        return (r.get("analyst") or {}).get("net_pct")
+    filled = [r for r in rows if r.get("state") in ("tp_hit", "sl_hit", "time_exit")
+              and net(r) is not None]
+    nf = [r for r in rows if r.get("state") == "not_filled" and net(r) is not None]
+    nets = [net(r) for r in filled]
+    return {
+        "n_filled_closed": len(filled),
+        "wins": sum(x > 0 for x in nets),
+        "avg_net_pct": round(sum(nets) / len(nets), 4) if nets else None,
+        "total_net_pct": round(sum(nets), 4) if nets else None,
+        "n_not_filled": len(nf),
+        "not_filled_avg_market_pct": (round(sum(net(r) for r in nf) / len(nf), 4)
+                                      if nf else None),
+        "n_running": sum(r.get("state") in LIVE_STATES for r in rows),
+    }
+
+
+def _counts(rows: list[dict], key: str) -> dict:
+    c: dict = {}
+    for r in rows:
+        c[r.get(key) or ""] = c.get(r.get(key) or "", 0) + 1
+    return c
+
+
+@router.get("/signals/analyst")
+async def analyst_feed_page(request: Request, state: str = "", side: str = ""):
+    import time
+
+    api = request.app.state.engine_api
+    try:
+        raw = await api.diag_run("read.analyst_feed", {"limit": 300})
+    except Exception as exc:  # pragma: no cover - defensive
+        raw = {"error": f"{type(exc).__name__}: {exc}"}
+    feed_state, detail = classify(raw)
+    res = (raw.get("result") or {}) if feed_state == STATE_OK else {}
+    engine_rows = res.get("rows") or []
+    prices: dict = {}
+    if any(r.get("state") in LIVE_STATES for r in engine_rows):
+        try:
+            prices = await request.app.state.binance_klines.fetch_all_prices()
+        except Exception:  # pragma: no cover - a missing mark blanks a column
+            prices = {}
+    now = float(res.get("generated_at") or time.time())
+    rows = feed_rows(engine_rows, prices, now, float(res.get("walk_step_s") or 300.0))
+    # Every selector's counts with every filter applied EXCEPT its own.
+    by_side = [r for r in rows if not side or r.get("side") == side]
+    by_state = [r for r in rows if not state or r.get("state") == state]
+    shown = [r for r in by_side if not state or r.get("state") == state]
+    state_counts = _counts(by_side, "state")
+    state_keys = [k for k in FEED_STATE_COPY if k in state_counts] + \
+        [k for k in state_counts if k not in FEED_STATE_COPY]
+    return request.app.state.templates.TemplateResponse("analyst_feed.html", {
+        "request": request, "active": "analyst_feed",
+        "feed_state": feed_state, "detail": detail,
+        "rows": shown, "summary": feed_summary(shown),
+        "state_counts": state_counts, "state_keys": state_keys,
+        "state_copy": FEED_STATE_COPY, "side_counts": _counts(by_state, "side"),
+        "f_state": state, "f_side": side,
+        "n_total": res.get("n_accepted_total"), "n_engine": len(engine_rows),
+        "limit": res.get("limit"), "note": res.get("note"),
+        "marks_missing": bool(any(r.get("state") in LIVE_STATES for r in engine_rows)
+                              and not prices),
+        "generated_at": res.get("generated_at"),
+    })

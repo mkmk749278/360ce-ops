@@ -180,6 +180,8 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         # The analyst's plans and dark outcomes — read through the diagnostic
         # catalog, which a guest can already reach; nothing here writes.
         "/analyst",
+        # The same setups read as a signal feed (dark, ops-only).
+        "/signals/analyst",
         # -- diagnostics ----------------------------------------------------
         "/truth",
         "/truth/raw.json",
