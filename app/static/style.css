@@ -1142,3 +1142,15 @@ details.tun-vals .tun-apply { margin: 0.6rem -0.75rem -0.75rem; }
    switchboard rule), wrapping under the state on a phone. */
 .sw-row { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem 1rem; flex-wrap: wrap; padding: 0.55rem 0; border-bottom: 1px solid var(--border-soft); }
 .sw-row > .sw-state { flex: 1 1 280px; min-width: 0; margin: 0; }
+
+/* /signals/analyst — the analyst's setups as signal cards (2026-11-22). */
+.asig-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 0.8rem; }
+.asig-grid > * { min-width: 0; }
+.asig-card { background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-md); padding: 0.75rem 0.9rem; display: flex; flex-direction: column; gap: 0.45rem; }
+.asig-head { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+.asig-time { margin-left: auto; }
+.asig-levels { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; }
+.asig-result { font-size: 0.9rem; }
+.asig-why summary { cursor: pointer; color: var(--fg-dim); }
+.asig-why p { margin: 0.3rem 0; }
+@media (max-width: 480px) { .asig-grid { grid-template-columns: 1fr; } }

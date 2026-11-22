@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% from "_info.html" import info %}
+{% macro p(v) %}{% if v is none %}—{% else %}{{ v|pct }}%{% endif %}{% endmacro %}
+{% block title %}AI analyst feed · 360 CE Ops{% endblock %}
+{% block content %}
+<h1>AI analyst feed</h1>
+<p class="small"><span class="badge badge-accent">DARK · OPS ONLY</span>
+  Each card is a setup the hourly analyst submitted and the engine accepted.
+  None of it reached a subscriber, the signal queue or an order.
+  <a href="/analyst">Verdict vs the fixed rule →</a></p>
+
+<div class="card">
+  <div class="card-title"><h2>How a card is scored</h2>
+    {% call info("Scoring rules") %}
+      <p>State and PnL are the engine's <strong>analyst</strong> arm: a limit
+        order at the first entry price, exiting at the <strong>first
+        target</strong> or the stop, else a time exit after 12h. Later targets
+        are the analyst's own and are shown, not booked.</p>
+      <p>Net of a 0.07% round trip. Stop counts first on a 5m bar that touched
+        both levels, and a target is never booked on the bar that filled the
+        limit.</p>
+      <p><strong>Not filled</strong> means the market never came back to the
+        limit before expiry. Its PnL is what entering at market would have
+        made, and it is counted apart from real fills.</p>
+      <p>Live mark, unrealised PnL and distances use Binance's last price and
+        are never part of a realised figure. The walk advances on 5m bar
+        closes, so a level the mark has just crossed books on the next close.</p>
+    {% endcall %}
+  </div>
+
+  {% if feed_state == 'not_reported' %}
+    <p class="warn">NOT REPORTED — this engine has no <code>read.analyst_feed</code>
+      entry. That is an engine predating this page: a deploy question.</p>
+  {% elif feed_state == 'failed' %}
+    <p class="warn">COULD NOT READ — the engine or the transport said:
+      <code>{{ detail }}</code></p>
+  {% elif feed_state == 'no_ledger' %}
+    <p class="muted">No plan has been submitted yet (<code>{{ detail }}</code>).</p>
+  {% else %}
+    <div class="kpis">
+      <div class="kpi"><div class="kpi-label">Filled &amp; closed</div>
+        <div class="kpi-value">{{ summary.n_filled_closed }}</div>
+        <div class="muted small">{{ summary.wins }} won</div></div>
+      <div class="kpi"><div class="kpi-label">Avg net % (fills)</div>
+        <div class="kpi-value {% if summary.avg_net_pct is not none and summary.avg_net_pct > 0 %}pos{% elif summary.avg_net_pct is not none and summary.avg_net_pct < 0 %}neg{% endif %}">{{ p(summary.avg_net_pct) }}</div>
+        <div class="muted small">total {{ p(summary.total_net_pct) }}</div></div>
+      <div class="kpi"><div class="kpi-label">Not filled</div>
+        <div class="kpi-value">{{ summary.n_not_filled }}</div>
+        <div class="muted small">market outcome avg {{ p(summary.not_filled_avg_market_pct) }}</div></div>
+      <div class="kpi"><div class="kpi-label">Running</div>
+        <div class="kpi-value">{{ summary.n_running }}</div>
+        <div class="muted small">pending + active</div></div>
+    </div>
+    <p class="muted small">Figures above cover the cards shown. Read n before
+      any average.{% if n_total is not none and n_total > n_engine %}
+      <span class="warn-text">Showing the newest {{ n_engine }} of {{ n_total }}
+        accepted setups.</span>{% endif %}
+      {% if generated_at %}Engine read {{ generated_at|when }}.{% endif %}</p>
+    {% if marks_missing %}
+      <p class="warn small">Live marks unavailable (Binance did not answer), so
+        running cards show no unrealised PnL. Realised figures are unaffected.</p>
+    {% endif %}
+
+    <form method="get" action="/signals/analyst" class="filters">
+      <label>State
+        <select name="state">
+          <option value="">all</option>
+          {% for k in state_keys %}<option value="{{ k }}" {% if k == f_state %}selected{% endif %}>{{ state_copy[k][0] if k in state_copy else k }} ({{ state_counts[k] }})</option>{% endfor %}
+        </select>
+      </label>
+      <label>Side
+        <select name="side">
+          <option value="">all</option>
+          {% for k, v in side_counts.items() %}<option value="{{ k }}" {% if k == f_side %}selected{% endif %}>{{ k }} ({{ v }})</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit">Filter</button>
+      <span class="muted">{{ rows|length }} cards</span>
+    </form>
+
+    {% if not rows %}
+      <p class="muted">No setups match.</p>
+    {% else %}
+    <div class="asig-grid">
+    {% for r in rows %}
+      {% set a = r.analyst or {} %}
+      <div class="asig-card">
+        <div class="asig-head">
+          <strong>{{ r.symbol }}</strong>
+          <span class="side-{{ r.side }}">{{ (r.side or '')|upper }}</span>
+          <span class="badge {{ r.state_badge }}" title="{{ r.state_meaning }}">{{ r.state_label }}</span>
+          {% if not r.state_known %}<span class="badge badge-warn">unclassified</span>{% endif %}
+          {% if r.walk_stale %}<span class="badge badge-err" title="The engine has not advanced this setup in over 15 minutes.">walk stale</span>{% endif %}
+          <span class="muted small asig-time">{{ r.submitted_at|when }}</span>
+        </div>
+        <div class="muted small">{{ r.archetype }} · bias {{ r.bias or '—' }}{% if r.p_target is not none %} · p(TP1) {{ (r.p_target * 100)|round|int }}%{% endif %}{% if r.rr_tp1 is not none %} · R:R {{ r.rr_tp1 }}{% endif %}</div>
+        <div class="asig-levels">
+          <div><span class="muted small">Entry</span>
+            {% for e in r.entries %}<div class="mono">{{ e.price|price }}{% if r.entries|length > 1 %} <span class="muted small">×{{ (e.weight * 100)|round|int }}%</span>{% endif %}</div>{% endfor %}</div>
+          <div><span class="muted small">Stop</span><div class="mono neg">{{ r.stop|price }}</div>
+            {% if r.stop_atr is not none %}<div class="muted small">{{ r.stop_atr }}× ATR</div>{% endif %}</div>
+          <div><span class="muted small">Targets</span>
+            {% for t in r.targets %}<div class="mono pos">{{ t|price }}{% if loop.first %} <span class="muted small">scored</span>{% endif %}</div>{% endfor %}</div>
+        </div>
+        <div class="asig-result">
+          {% if r.state in ('tp_hit', 'sl_hit', 'time_exit') %}
+            Filled {{ a.entry|price }} → exit {{ a.exit|price }}
+            · <strong class="{% if a.net_pct is not none and a.net_pct > 0 %}pos{% elif a.net_pct is not none and a.net_pct < 0 %}neg{% endif %}">{{ p(a.net_pct) }} net</strong>
+            <span class="muted small">MFE {{ p(a.mfe_pct) }} · MAE {{ p(a.mae_pct) }} · closed {{ a.exit_at|when }}</span>
+          {% elif r.state == 'not_filled' %}
+            Limit never reached.
+            {% if a.net_pct is not none %}At market it would have made
+              <span class="{% if a.net_pct > 0 %}pos{% elif a.net_pct < 0 %}neg{% endif %}">{{ p(a.net_pct) }}</span> net.
+            {% else %}The market outcome is still running.{% endif %}
+          {% elif r.state == 'active' %}
+            Filled {{ a.entry|price }} {{ a.entry_at|when }}
+            {% if r.mark %}· mark {{ r.mark|price }} ·
+              <strong class="{% if r.unrealized_pct is not none and r.unrealized_pct > 0 %}pos{% elif r.unrealized_pct is not none and r.unrealized_pct < 0 %}neg{% endif %}">{{ p(r.unrealized_pct) }} unrealised</strong>
+              <div class="muted small">to stop {{ p(r.to_stop_pct) }} · to TP1 {{ p(r.to_tp1_pct) }}
+                {% if r.to_stop_pct is not none and r.to_stop_pct < 0 %} · <span class="warn-text">mark past the stop — books on the next 5m close</span>{% endif %}
+                {% if r.to_tp1_pct is not none and r.to_tp1_pct < 0 %} · <span class="warn-text">mark past TP1 — books on the next 5m close</span>{% endif %}</div>
+            {% endif %}
+          {% elif r.state == 'pending' %}
+            Waiting for the limit{% if r.mark %} · mark {{ r.mark|price }}, {{ p(r.to_entry_pct) }} away{% endif %}
+            {% if r.expires_at %}<span class="muted small">· expires {{ r.expires_at|when }}</span>{% endif %}
+          {% else %}
+            <span class="muted">{{ r.state_meaning }}{% if a.reason %} (<code>{{ a.reason }}</code>){% endif %}</span>
+          {% endif %}
+        </div>
+        {% set m = r.market or {} %}{% set fr = r.fixed_rule or {} %}
+        <div class="muted small">Controls: market at submit {{ p(m.net_pct) if m.net_pct is not none else (m.status or '—') }}
+          · fixed rule {{ p(fr.net_pct) if fr.net_pct is not none else (fr.status or '—') }}{% if fr.exit_reason == 'no_rule_setup' %} (no rule setup){% endif %}</div>
+        {% if r.scenario or r.invalidation %}
+        <details class="asig-why"><summary class="small">Analyst's reasoning</summary>
+          {% if r.scenario %}<p class="small"><strong>Scenario:</strong> {{ r.scenario }}</p>{% endif %}
+          {% if r.invalidation %}<p class="small"><strong>Invalidation:</strong> {{ r.invalidation }}</p>{% endif %}
+          {% if r.plan_notes %}<p class="small muted"><strong>Plan notes:</strong> {{ r.plan_notes }}</p>{% endif %}
+        </details>
+        {% endif %}
+      </div>
+    {% endfor %}
+    </div>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

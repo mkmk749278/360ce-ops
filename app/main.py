@@ -184,11 +184,12 @@ app.include_router(trail_governor.router)
 app.include_router(router_drops.router)
 # Before signal_detail, same reason: /signals/{signal_id} swallows any literal.
 app.include_router(unlock_shorts.router)
+# Before signal_detail: analyst serves the literal /signals/analyst feed.
+app.include_router(analyst.router)
 app.include_router(signal_detail.router)
 app.include_router(pairs.router)
 app.include_router(system.router)
 app.include_router(firestore_cost.router)
-app.include_router(analyst.router)
 app.include_router(diag.router)
 app.include_router(data_intake.router)
 app.include_router(diag_console.router)
