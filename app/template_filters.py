@@ -36,6 +36,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import jinja2
+
 #: Binance USD-M futures quote precision bound. Rounding here cannot discard a
 #: price the exchange was able to express, which is what makes it safe to apply
 #: to a column holding several instruments at once.
@@ -45,7 +47,11 @@ EMDASH = "—"
 
 
 def _as_float(value: Any) -> float | None:
-    if value is None or isinstance(value, bool):
+    # Jinja's Undefined (a key the payload did not carry) is "not reported",
+    # exactly like None — float() on it raises UndefinedError, which is not a
+    # TypeError, so one partial row 500'd /signals/analyst (live, 2026-11-25).
+    # A display filter renders the em-dash; it never takes down the page.
+    if value is None or isinstance(value, (bool, jinja2.Undefined)):
         return None
     try:
         out = float(value)

@@ -21,6 +21,7 @@ from app.app_tokens import AppTokenStore
 from app.machine_tokens import MachineTokenStore
 from app.auth_mw import AuthRedirectMiddleware
 from app import charts, guest_scope
+from app.status_strip import status_strip
 from app import template_filters
 from app.guest_access import GuestAccessStore
 from app.totp import TotpGate
@@ -72,6 +73,7 @@ from app.routes import (
     signals,
     strategy_lab,
     labs,
+    jump,
     analyst,
     firestore_cost,
     system,
@@ -134,6 +136,8 @@ _STATIC_URLS = _hash_static()
 templates.env.globals["static_url"] = static_url
 # Inline-SVG charts (app/charts.py): pure functions over data the page already has.
 templates.env.globals["charts"] = charts
+# Site-wide status strip (app/status_strip.py): free-to-know degradations only.
+templates.env.globals["status_strip"] = status_strip
 # `price` / `pct` / `secs` — a bare {{ value }} renders float repr, and several
 # live pages were doing exactly that (see app/template_filters.py).
 template_filters.register(templates.env)
@@ -233,6 +237,7 @@ app.include_router(raw_edge.router)
 app.include_router(path_scorecard.router)
 app.include_router(strategy_lab.router)
 app.include_router(labs.router)
+app.include_router(jump.router)
 app.include_router(emission_controller.router)
 app.include_router(positions.router)
 app.include_router(profit.router)

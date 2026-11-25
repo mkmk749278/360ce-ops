@@ -27,9 +27,9 @@ import pytest
 
 TEMPLATES = pathlib.Path(__file__).resolve().parent.parent / "app" / "templates"
 
-#: The Control group, derived from base.html's NAV literal so a new Control
+#: The Control group, derived from _nav.html's NAV literal so a new Control
 #: sub-tab is covered without editing this file.
-_NAV = (TEMPLATES / "base.html").read_text()
+_NAV = (TEMPLATES / "_nav.html").read_text()
 _CONTROL_URLS = re.findall(
     r"\('(/[^']*)',\s*'[^']*',\s*'[^']*'\)",
     _NAV[_NAV.index("('control', 'Control'"):_NAV.index("('diagnostics'")],
@@ -56,7 +56,7 @@ def _source(name: str) -> str:
 
 def test_every_control_tab_is_mapped_to_its_template():
     """A new Control sub-tab must be added here, or it escapes both guards."""
-    assert _CONTROL_URLS, "could not parse the Control group out of base.html"
+    assert _CONTROL_URLS, "could not parse the Control group out of _nav.html"
     missing = [u for u in _CONTROL_URLS if u not in _URL_TO_TEMPLATE]
     assert not missing, f"Control tab(s) with no template mapping: {missing}"
 

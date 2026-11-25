@@ -246,6 +246,24 @@ def test_contract_the_engine_feed_carries_what_the_cards_read(tmp_path, monkeypa
     assert analyst.feed_summary(rows)["n_filled_closed"] == 1
 
 
+def test_a_row_not_yet_walked_renders_instead_of_500ing(monkeypatch):
+    """Live, 2026-11-25: the engine sends `market: {}` / `fixed_rule: {}` for a
+    setup the walk has not reached. The template read `m.net_pct`, which is
+    Undefined there and `is not none`, so the `pct` filter raised and ONE row
+    took the whole page to 500. The fixture above always carried a full block —
+    a fixture chooses a shape and then agrees with you about it."""
+    row = _row("p:9", "not_walked")
+    row["market"] = {}
+    row["fixed_rule"] = {}
+    payload = {"ok": True, "error": "", "result": dict(FEED["result"], rows=[row])}
+    body = _feed(monkeypatch, payload)
+    assert "Controls: market at submit —" in body
+
+
+def test_the_pct_filter_reads_undefined_as_not_reported():
+    from app.main import templates
+    t = templates.env.from_string("{{ d.missing | pct }}|{{ d.missing | price }}")
+    assert t.render(d={}) == "—|—"
 # ── 2026-11-25: the split, the open book, no-valid-trade ─────────────────────
 
 UPGRADED = {"ok": True, "error": "", "result": {

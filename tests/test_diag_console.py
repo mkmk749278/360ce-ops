@@ -180,7 +180,16 @@ def test_the_page_carries_no_freeform_input(client):
     import re
 
     body = client.get("/diagnostics/console").text
-    inputs = re.findall(r"<input[^>]*>", body)
+    # The PAGE's own inputs: everything inside <main>. The site chrome carries
+    # the Ctrl+K palette's search box, which has no name, sits in no form and
+    # never leaves the browser — it changes the URL, nothing reaches the
+    # engine. Scoping to <main> keeps this guard exactly as strict for the
+    # console itself, and asserts the chrome input really is formless.
+    main = body[body.index("<main>"):body.index("</main>")]
+    chrome_inputs = re.findall(r"<input[^>]*>", body.replace(main, ""))
+    for tag in chrome_inputs:
+        assert "name=" not in tag, f"a named input in the site chrome: {tag}"
+    inputs = re.findall(r"<input[^>]*>", main)
     for tag in inputs:
         if 'type="hidden"' in tag:
             assert 'name="key"' in tag, f"unexpected hidden field: {tag}"

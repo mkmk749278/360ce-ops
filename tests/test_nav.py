@@ -40,10 +40,10 @@ NAV_EXEMPT: set[str] = set()   # `{}` is a dict — this bit me writing the test
 
 
 def _nav_entries() -> list[tuple[str, str, str]]:
-    """(path, label, active-key) parsed out of `base.html`'s own NAV literal."""
-    src = (REPO / "app" / "templates" / "base.html").read_text()
+    """(path, label, active-key) parsed out of `_nav.html`'s NAV literal (base.html imports it)."""
+    src = (REPO / "app" / "templates" / "_nav.html").read_text()
     m = re.search(r"set NAV = (\[.*?\])\s*-?%\}", src, re.S)
-    assert m, "could not find the NAV literal in base.html"
+    assert m, "could not find the NAV literal in _nav.html"
     # Strip Jinja comments before parsing — they are not Python.
     body = re.sub(r"\{#-?.*?-?#\}", "", m.group(1), flags=re.S)
     nav = ast.literal_eval(body)
@@ -87,7 +87,7 @@ def test_every_registered_signals_page_is_in_the_nav():
     missing = _registered_pages() - nav_paths - NAV_EXEMPT
     assert not missing, (
         f"registered but unreachable from the nav: {sorted(missing)}. "
-        "Add an entry to base.html's NAV, or to NAV_EXEMPT with a reason."
+        "Add an entry to _nav.html's NAV, or to NAV_EXEMPT with a reason."
     )
 
 

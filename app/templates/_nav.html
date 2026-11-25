@@ -1,0 +1,61 @@
+{#- The navigation, defined once. base.html renders it; /_partial/jump-index
+    serves it to the Ctrl+K palette. A second copy of this list would drift
+    (tests/test_nav.py parses THIS file). -#}
+{%- set NAV = [
+      ('overview', 'Overview', [('/', 'Pulse', 'pulse')]),
+      ('live', 'Live', [
+          ('/signals', 'Feed', 'signals'),
+          ('/positions', 'Positions', 'positions'),
+          ('/pairs', 'Pairs', 'pairs'),
+          ('/signals/router-drops', 'Router drops', 'router_drops'),
+          ('/signals/analyst', 'AI analyst feed', 'analyst_feed'),
+          ('/analyst', 'AI analyst: model value', 'analyst')]),
+      ('labs', 'Labs', [
+          ('/labs', 'Index', 'labs'),
+          ('/signals/trail-governor', 'Trail governor (LIVE)', 'trail_governor'),
+          ('/signals/ai-governor', 'AI governor', 'ai_governor'),
+          ('/signals/governor-live', 'AI governor live', 'governor_live'),
+          ('/signals/sar-live', 'SAR live', 'sar_live'),
+          ('/signals/atr-live', 'ATR trail live', 'atr_live'),
+          ('/signals/sar', 'SAR signals', 'sar_signals'),
+          ('/sar-exit', 'SAR exit A/B', 'sar_exit'),
+          ('/signals/entry-features', 'Entry features', 'entry_features'),
+          ('/signals/structural-veto', 'Structural veto', 'structural_veto'),
+          ('/signals/structural-snap', 'Snap geometry', 'structural_snap'),
+          ('/signals/dark-live', 'Dark feed', 'dark_live'),
+          ('/signals/price-action', 'Price action', 'price_action'),
+          ('/signals/unlock-shorts', 'Unlock shorts', 'unlock_shorts'),
+          ('/strategy-lab', 'Strategy Lab', 'strategy_lab'),
+          ('/emission-controller', 'Layer G', 'emission_controller')]),
+      ('performance', 'Performance', [
+          ('/track-record', 'Track record', 'track_record'),
+          ('/performance', 'Rolling stats', 'performance'),
+          ('/raw-edge', 'Entry edge', 'raw_edge'),
+          ('/path-scorecard', 'Path scorecard', 'path_scorecard'),
+          ('/profit', 'Held-to-stop', 'profit'),
+          ('/dark-signals', 'Dark signals', 'dark_signals'),
+          ('/exit-backtest', 'Exit backtest', 'exit_backtest'),
+          ('/invalidations', 'Invalidations', 'invalidations')]),
+      ('system', 'System', [
+          ('/system', 'Containers', 'system_containers'),
+          ('/system/liveness', 'Liveness', 'system_liveness'),
+          ('/system/redis', 'Redis bridge', 'system_redis'),
+          ('/system/firestore', 'Firestore reads', 'system_firestore')]),
+      ('control', 'Control', [
+          ('/control', 'Engine', 'control'),
+          ('/control/routing', 'Routing', 'routing'),
+          ('/control/promotions', 'Promotions', 'promotions'),
+          ('/control/users', 'Users', 'users'),
+          ('/control/referrals', 'Referrals', 'referrals'),
+          ('/trials', 'Trials', 'trials'),
+          ('/control/coindcx', 'CoinDCX', 'coindcx'),
+          ('/control/access', 'Access', 'access')]),
+      ('diagnostics', 'Diagnostics', [
+          ('/truth', 'Truth report', 'truth'),
+          ('/alerts', 'Alerts', 'alerts'),
+          ('/diagnostics/data-intake', 'Data intake', 'data_intake'),
+          ('/diagnostics/console', 'Diag console', 'diag_console'),
+          ('/diag/geometry', 'Diag runner', 'diag'),
+          ('/audit', 'Audit board', 'audit'),
+          ('/data', 'Data & export', 'data')]),
+  ] %}

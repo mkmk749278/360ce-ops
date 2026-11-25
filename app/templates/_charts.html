@@ -33,7 +33,7 @@
         {% if r.second is not none %}<span class="bar bar-second {{ 'pos' if r.second_pos else 'neg' }}" style="{{ 'left:50%' if r.second_pos else 'right:50%' }};width:{{ r.second_width }}%"></span>{% endif %}
         <span class="bar {{ 'pos' if r.pos else 'neg' }}" style="{{ 'left:50%' if r.pos else 'right:50%' }};width:{{ r.width }}%"></span>
       </span>
-      <span class="bar-val num mono {{ 'pos' if r.value > 0 else 'neg' if r.value < 0 else '' }}">{{ '%+.3f' % r.value }}{{ unit }}{% if r.second is not none %} <span class="muted">/ {{ '%+.3f' % r.second }}</span>{% endif %}</span>
+      <span class="bar-val num mono {{ 'pos' if r.value > 0 else 'neg' if r.value < 0 else '' }}">{{ '%+.3f' % r.value }}{{ unit }}{% if r.second is not none %} <span class="muted">/ {{ '%+.3f' % r.second }}{{ unit }}</span>{% endif %}</span>
       <span class="bar-n muted small">n {{ r.n }}</span>
     </div>
     {% endfor %}
