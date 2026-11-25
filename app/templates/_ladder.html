@@ -1,0 +1,37 @@
+{#- Price ladder (app/ladder.py): stop at the left edge, furthest target at
+    the right, current price as a dot with the move from entry filled in.
+    A refused ladder shows its reason and the raw levels — never a bar drawn
+    over levels that do not line up. -#}
+{% macro ladder_bar(lad, compact=false) %}
+{%- if lad.refused %}
+  <span class="muted small" title="{{ lad.refused }}">no ladder — {{ lad.refused }}</span>
+{%- else %}
+  {%- set cur = lad.current %}
+  <div class="ladder{% if compact %} ladder-compact{% endif %}" role="img"
+       aria-label="{% for m in lad.marks %}{{ m.label }} {{ m.price | price }}{% if not loop.last %}, {% endif %}{% endfor %}{% if cur %}, now {{ cur.price | price }}{% endif %}">
+    <div class="ladder-track"></div>
+    {%- if cur %}
+    <div class="ladder-fill {{ 'pos-fill' if cur.favourable else 'neg-fill' }}" style="left:{{ cur.fill_left }}%;width:{{ cur.fill_width }}%"></div>
+    {%- endif %}
+    {%- for m in lad.marks %}
+    <div class="ladder-tick tick-{{ m.kind }}" style="left:{{ m.pos }}%" title="{{ m.label }} {{ m.price | price }}"></div>
+    {%- endfor %}
+    {%- if cur %}
+    <div class="ladder-now{% if cur.beyond %} beyond{% endif %}" style="left:{{ cur.pos }}%" title="now {{ cur.price | price }}{% if cur.beyond %} — {{ cur.beyond }}{% endif %}"></div>
+    {%- endif %}
+  </div>
+  {%- if not compact %}
+  <div class="ladder-labels">
+    {%- for m in lad.marks %}
+    <span class="ladder-label tick-{{ m.kind }}"><span class="muted">{{ m.label }}</span> <span class="mono">{{ m.price | price }}</span></span>
+    {%- endfor %}
+    {%- if cur %}<span class="ladder-label"><span class="muted">Now</span> <span class="mono">{{ cur.price | price }}</span>{% if cur.beyond %} <span class="badge badge-bad">{{ cur.beyond }}</span>{% endif %}</span>{% endif %}
+  </div>
+  {%- else %}
+  <div class="ladder-mini mono small muted">
+    {%- for m in lad.marks %}{{ m.label }} {{ m.price | price }}{% if not loop.last %} · {% endif %}{% endfor %}
+    {%- if cur and cur.beyond %} · <span class="neg">now {{ cur.beyond }}</span>{% endif %}
+  </div>
+  {%- endif %}
+{%- endif %}
+{% endmacro %}

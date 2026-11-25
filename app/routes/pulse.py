@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from app.pulse_view import liveness_view, pulse_view
+
 router = APIRouter()
 
 
@@ -21,8 +23,10 @@ async def pulse(request: Request):
             "request": request,
             "pulse": pulse_data,
             "auto_mode": auto,
+            "view": pulse_view(pulse_data, auto),
             "heartbeat": heartbeat,
             "liveness": liveness,
+            "lv": liveness_view(liveness),
             "active": "pulse",
         },
     )
@@ -36,5 +40,6 @@ async def pulse_partial(request: Request):
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "_pulse_card.html",
-        {"request": request, "pulse": pulse_data, "auto_mode": auto},
+        {"request": request, "pulse": pulse_data, "auto_mode": auto,
+         "view": pulse_view(pulse_data, auto)},
     )

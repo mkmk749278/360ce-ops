@@ -1,15 +1,70 @@
+{#- The glance: eight tiles over the engine's own typed payloads
+    (/api/pulse, /api/auto-mode). An unreadable payload renders every tile it
+    feeds as an em-dash and names the cause — never a zero. The raw JSON is
+    one click away, because a field this page has never heard of must still be
+    readable. Refreshes in place every 30s. -#}
 <section class="card pulse-card" hx-get="/_partial/pulse" hx-trigger="every 30s" hx-swap="outerHTML">
-  <h2>API pulse <span class="muted">refreshes every 30s</span></h2>
-  {% if pulse is mapping and pulse.error %}
-    <div class="error">API error: {{ pulse.error }}</div>
-  {% else %}
-    <pre class="mono small">{{ pulse | tojson(indent=2) }}</pre>
+  {%- set v = view %}
+  {% if v.pulse_error %}
+  <p class="small"><span class="badge badge-bad">UNREADABLE</span>
+    <code>/api/pulse</code>: {{ v.pulse_error }}</p>
   {% endif %}
+  {% if v.auto_error %}
+  <p class="small"><span class="badge badge-warn">UNREADABLE</span>
+    <code>/api/auto-mode</code>: {{ v.auto_error }}</p>
+  {% endif %}
+  <div class="tiles">
+    <div class="tile">
+      <div class="tile-label">Engine</div>
+      <div class="tile-value">{% if v.status %}<span class="badge badge-{{ v.status_tone }}">{{ v.status }}</span>{% else %}—{% endif %}</div>
+      <div class="tile-sub">up {{ v.uptime | duration }}</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Mode</div>
+      <div class="tile-value mode-{{ v.mode or 'unknown' }}">{{ (v.mode or '—') | upper }}</div>
+      <div class="tile-sub">{% if v.mode_flags %}<span class="warn">{{ v.mode_flags | join(' · ') }}</span>{% elif v.auto_error %}from /api/pulse{% else %}no pause or limit{% endif %}</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Market regime</div>
+      <div class="tile-value mono">{{ v.regime or '—' }}</div>
+      <div class="tile-sub">{% if v.regime_pct_trending is not none %}{{ v.regime_pct_trending | pct(0) }}% of cycles trending{% else %}—{% endif %}</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Today PnL</div>
+      <div class="tile-value num {{ v.pnl_tone or '' }}">{% if v.pnl_usd is not none %}{{ '%+.2f' % v.pnl_usd }} <span class="tile-unit">USD</span>{% else %}—{% endif %}</div>
+      <div class="tile-sub">{% if v.pnl_pct is not none %}{{ '%+.2f' % v.pnl_pct }}%{% else %}—{% endif %}{% if v.equity is not none %} · equity {{ '%.2f' % v.equity }}{% endif %}</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Daily loss budget</div>
+      <div class="tile-value num">{% if v.budget_used is not none and v.budget is not none %}{{ '%.2f' % v.budget_used }} <span class="tile-unit">/ {{ '%.2f' % v.budget }}</span>{% else %}—{% endif %}</div>
+      {% if v.budget_frac is not none %}
+      <div class="meter" title="{{ (v.budget_frac * 100) | round(0) | int }}% of today's loss budget used"><span class="meter-{{ v.budget_tone }}" style="width:{{ (v.budget_frac * 100) | round(1) }}%"></span></div>
+      {% else %}
+      <div class="tile-sub">{% if v.budget == 0 %}no budget set{% else %}—{% endif %}</div>
+      {% endif %}
+    </div>
+    <div class="tile">
+      <div class="tile-label">Signals today</div>
+      <div class="tile-value num">{{ v.signals_today if v.signals_today is not none else '—' }}</div>
+      <div class="tile-sub"><a href="/signals">feed →</a></div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Open positions</div>
+      <div class="tile-value num">{{ v.open_positions if v.open_positions is not none else '—' }}</div>
+      <div class="tile-sub"><a href="/positions">positions →</a></div>
+    </div>
+    <div class="tile">
+      <div class="tile-label">Scanning pairs</div>
+      <div class="tile-value num">{{ v.scanning_pairs if v.scanning_pairs is not none else '—' }}</div>
+      <div class="tile-sub"><a href="/pairs">pairs →</a></div>
+    </div>
+  </div>
+  <details class="raw-section">
+    <summary>Inspect raw JSON</summary>
+    <pre class="mono small">/api/pulse
+{{ pulse | tojson(indent=2) }}
 
-  <h3>Auto-mode</h3>
-  {% if auto_mode is mapping and auto_mode.error %}
-    <div class="error">API error: {{ auto_mode.error }}</div>
-  {% else %}
-    <pre class="mono small">{{ auto_mode | tojson(indent=2) }}</pre>
-  {% endif %}
+/api/auto-mode
+{{ auto_mode | tojson(indent=2) }}</pre>
+  </details>
 </section>

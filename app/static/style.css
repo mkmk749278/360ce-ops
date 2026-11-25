@@ -342,7 +342,10 @@ table.tunables td { padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--bord
 /* A long unbroken diagnostic string (a liveness Detail on / and /truth) used
    to push its table — and the page — sideways. Only these free-text cells
    wrap anywhere; codes and symbols elsewhere in a table must not split. */
-.cell-wrap { max-width: 380px; overflow-wrap: anywhere; word-break: break-word; }
+/* break-word, not anywhere: `anywhere` lowers min-content, so on a phone the
+   table squeezed the column until words split mid-word. The table scrolls
+   inside its card instead (base.html). */
+.cell-wrap { min-width: 12rem; max-width: 380px; overflow-wrap: break-word; }
 
 /* ---- One unified badge system ---- */
 .badge {
@@ -1161,3 +1164,66 @@ details.tun-vals .tun-apply { margin: 0.6rem -0.75rem -0.75rem; }
 .asig-why summary { cursor: pointer; color: var(--fg-dim); }
 .asig-why p { margin: 0.3rem 0; }
 @media (max-width: 480px) { .asig-grid { grid-template-columns: 1fr; } }
+
+/* ---- Pulse tiles (2026-11-25) ----
+   The landing page's glance: one fact per tile, the number in tabular
+   figures, a muted line of context under it. An em-dash is "the engine did
+   not report this"; a zero is a reading. */
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(138px, 1fr)); gap: 0.6rem; margin: 0.2rem 0 0.8rem; }
+.tile { min-width: 0; padding: 0.7rem 0.85rem; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--bg-elev); }
+.tile-label { font-size: 0.7rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--fg-dim); }
+.tile-value { font-size: 1.25rem; font-weight: 650; margin: 0.25rem 0 0.15rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tile-value.mono { font-size: 1rem; }
+.tile-value.num { text-align: left; }
+.tile-unit { font-size: 0.75rem; font-weight: 500; color: var(--fg-dim); }
+.tile-sub { font-size: 0.75rem; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+.mode-unknown { color: var(--fg-dim); }
+.meter { height: 6px; margin-top: 0.45rem; border-radius: 3px; background: var(--border); overflow: hidden; }
+.meter > span { display: block; height: 100%; border-radius: 3px; }
+.meter-ok { background: var(--pos); }
+.meter-warn { background: var(--warn); }
+.meter-bad { background: var(--neg); }
+.alert-rail { display: grid; gap: 0.35rem; margin: 0.2rem 0 0.7rem; }
+.alert-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; padding: 0.45rem 0.65rem; border: 1px solid rgba(255,92,87,0.35); border-radius: var(--r-sm); background: rgba(255,92,87,0.06); font-size: 0.82rem; }
+.alert-row .cell-wrap { flex: 1 1 260px; }
+
+/* ---- Price ladder (app/ladder.py, _ladder.html) ----
+   Stop at the left edge, furthest target at the right; the dot is the
+   current price and the fill is the move from entry (green toward the
+   targets, red toward the stop). */
+.ladder { position: relative; height: 22px; margin: 0.5rem 0.4rem 0.3rem; min-width: 160px; }
+.ladder-compact { height: 16px; margin: 0.15rem 0.3rem; }
+.ladder-track { position: absolute; left: 0; right: 0; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; background: var(--border); }
+.ladder-fill { position: absolute; top: 50%; height: 4px; margin-top: -2px; }
+.pos-fill { background: var(--pos); }
+.neg-fill { background: var(--neg); }
+.ladder-tick { position: absolute; top: 15%; bottom: 15%; width: 2px; margin-left: -1px; background: var(--fg-dim); }
+.ladder-tick.tick-stop { background: var(--neg); }
+.ladder-label.tick-stop .mono { color: var(--neg); }
+.ladder-tick.tick-target { background: var(--pos); }
+.ladder-label.tick-target .mono { color: var(--pos); }
+.ladder-tick.tick-entry { background: var(--fg); }
+.ladder-tick.tick-stop-now { background: var(--warn); top: 0; bottom: 0; }
+.ladder-label.tick-stop-now .mono { color: var(--warn); }
+.ladder-now { position: absolute; top: 50%; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--accent); border: 2px solid var(--bg-card); }
+.ladder-now.beyond { background: var(--neg); }
+.ladder-labels { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font-size: 0.78rem; margin: 0.2rem 0 0.8rem; }
+.ladder-label .mono { font-variant-numeric: tabular-nums; }
+.ladder-mini { white-space: normal; }
+td.ladder-cell { min-width: 200px; }
+.positions-table td.num, .positions-table th.num { text-align: right; }
+
+/* ---- Signal dossier ---- */
+.dossier { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 1rem; align-items: start; }
+.dossier > * { min-width: 0; }
+@media (max-width: 900px) { .dossier { grid-template-columns: 1fr; } }
+table.facts th { text-align: left; color: var(--fg-dim); font-weight: 500; width: 40%; }
+table.facts td { font-variant-numeric: tabular-nums; }
+
+/* Every figure in a table uses tabular (fixed-width) digits, so columns of
+   prices and percentages line up without anyone remembering a class. */
+td, th { font-variant-numeric: tabular-nums; }
+/* Beats `.data-table td` / `table.data th` (text-align: left) on specificity. */
+table td.num, table th.num { text-align: right; }
+table th.num { white-space: nowrap; }
+h1 .mono:not(.small) { font-size: inherit; }

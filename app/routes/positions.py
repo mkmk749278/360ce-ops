@@ -20,6 +20,8 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from app.ladder import ladder
+
 router = APIRouter()
 
 
@@ -72,6 +74,10 @@ def _enrich_row(item: dict) -> dict:
     """Add classification + relative-time fields the template renders."""
     return {
         **item,
+        "ladder": ladder(
+            item.get("direction"), item.get("stop_loss"), item.get("entry"),
+            item.get("current_price"), item.get("tp1"), item.get("tp2"),
+        ),
         "row_class": _classify_row(item),
         "timestamp_relative": _format_relative(item.get("timestamp")),
         "dispatch_relative": _format_relative(item.get("dispatch_timestamp")),
@@ -85,17 +91,24 @@ async def positions_diag(request: Request):
 
     error: str | None = None
     items: list[dict] = []
-    monitor_running = False
+    # None = not observed. Defaulting to False printed "NO — coroutine not
+    # alive" over an engine we simply could not reach.
+    monitor_running: bool | None = None
     generated_at: str | None = None
 
-    if isinstance(payload, dict):
-        if payload.get("error"):
-            error = str(payload.get("error"))
+    if not isinstance(payload, dict):
+        error = "the engine returned no object"
+    else:
+        # Key presence, never truthiness: ops' transport wrapper carries
+        # `error` (blank for an unmessaged timeout) and no `ok` (2026-09-03).
+        if "error" in payload and "ok" not in payload:
+            error = str(payload.get("error") or "the request failed with no message")
         else:
             raw_items = payload.get("items") or []
             if isinstance(raw_items, list):
                 items = [_enrich_row(it) for it in raw_items if isinstance(it, dict)]
-            monitor_running = bool(payload.get("monitor_running", False))
+            mr = payload.get("monitor_running")
+            monitor_running = mr if isinstance(mr, bool) else None
             generated_at = payload.get("generated_at")
 
     # Sort: sl_breached first, then feed_stale, then by age.  The operator

@@ -271,7 +271,39 @@ def test_positions_route_renders_empty_state(monkeypatch):
         r = client.get("/positions")
         assert r.status_code == 200
         assert "No active positions." in r.text
-        assert "monitor_running: <strong>NO" in r.text
+        assert "NO — engine.monitor coroutine not alive" in r.text
+
+
+def test_positions_monitor_state_absent_is_not_reported_as_no(monkeypatch):
+    """A payload with no `monitor_running` key used to default to False and
+    print "NO — coroutine not alive": a cause the page never observed."""
+    with TestClient(app) as client:
+        _login(client)
+
+        async def _fake_diag(self):
+            return {"items": [], "total": 0}
+
+        from app.data_sources.engine_api import EngineApiClient
+        monkeypatch.setattr(EngineApiClient, "positions_diag", _fake_diag, raising=True)
+        r = client.get("/positions")
+        assert "coroutine not alive" not in r.text
+        assert "not reported" in r.text
+
+
+def test_positions_blank_transport_error_is_unreadable_not_empty(monkeypatch):
+    """An unmessaged timeout arrives as {"error": ""}; `payload.get("error")`
+    read it as success and printed "No active positions"."""
+    with TestClient(app) as client:
+        _login(client)
+
+        async def _fake_diag(self):
+            return {"endpoint": "/internal/diag/positions", "error": ""}
+
+        from app.data_sources.engine_api import EngineApiClient
+        monkeypatch.setattr(EngineApiClient, "positions_diag", _fake_diag, raising=True)
+        r = client.get("/positions")
+        assert "UNREADABLE" in r.text
+        assert "No active positions." not in r.text
 
 
 def test_positions_link_in_nav():

@@ -6,55 +6,74 @@
 {% include "_pulse_card.html" %}
 
 <section class="card">
-  <h2>Feature liveness <span class="muted">engine-data / feature_liveness.json — 5-min cycle</span></h2>
-  {% if liveness is mapping and liveness.error %}
-    <div class="muted small">{{ liveness.error }} (pre-rollout build or feature_liveness_enabled off)</div>
-  {% elif liveness is mapping and liveness.features %}
-    {% set alerts = liveness.alerts or [] %}
-    {% if alerts %}
-      {% for a in alerts %}
-        <div class="error">⚠ {{ a.feature }} — {{ a.detail }} (sustained {{ a.streak }} cycles)</div>
-      {% endfor %}
-    {% else %}
-      <div class="small" style="color: var(--pos);">All probed features producing data at their expected rates{% if liveness.boot_grace_active %} · boot grace active{% endif %}</div>
+  <h2>Feature liveness <span class="muted">engine-data / feature_liveness.json — 5-min cycle{% if lv.generated_at %} · as of {{ lv.generated_at | when }}{% endif %}</span></h2>
+  {% if lv.state != 'ok' %}
+    <p class="small"><span class="badge badge-warn">NOT READABLE</span>
+      {{ lv.error or 'no feature manifest on the data volume' }} —
+      a pre-rollout build, or <code>feature_liveness_enabled</code> is off.</p>
+    <details class="raw-section"><summary>Inspect raw JSON</summary>
+      <pre class="mono small">{{ liveness | tojson(indent=2) }}</pre></details>
+  {% else %}
+    {#- Lead with what needs a look. The full manifest is ~60 rows in
+        alphabetical order, which put sustained failures wherever their names
+        happened to sort (outside audit, 2026-11-25). -#}
+    {% if lv.alerts %}
+      <div class="alert-rail">
+        {% for a in lv.alerts %}
+        <div class="alert-row"><span class="badge badge-bad">SUSTAINED</span>
+          <span class="mono">{{ a.feature }}</span>
+          <span class="muted cell-wrap">{{ a.detail }}</span>
+          <span class="muted small">{{ a.streak }} cycles</span></div>
+        {% endfor %}
+      </div>
     {% endif %}
-    <table class="small">
-      <thead><tr><th>Feature</th><th>Status</th><th>Detail</th><th>Streak</th></tr></thead>
+    <p class="small">
+      <strong class="{% if lv.needs_look %}warn{% else %}pos{% endif %}">{{ lv.n_ok }} of {{ lv.all | length }}</strong>
+      probed features are producing data at their expected rates{% if lv.boot_grace %} · boot grace active{% endif %}.
+      {% if lv.needs_look %}{{ lv.needs_look | length }} need{{ '' if lv.needs_look | length > 1 else 's' }} a look:{% endif %}
+    </p>
+    {% macro lv_table(rows) %}
+    <table class="data-table small">
+      <thead><tr><th>Feature</th><th>Status</th><th>Detail</th><th class="num">Streak</th></tr></thead>
       <tbody>
-        {% for name, f in liveness.features | dictsort %}
+        {% for f in rows %}
         <tr>
-          <td class="mono">{{ name }}</td>
+          <td class="mono">{{ f.name }}</td>
           <td><span class="badge {% if f.status == 'ok' %}st-active{% elif f.status == 'violating' %}st-open{% else %}st-expired{% endif %}">{{ f.status }}</span></td>
           <td class="muted cell-wrap">{{ f.detail }}</td>
-          <td>{{ f.streak }}</td>
+          <td class="num">{{ f.streak if f.streak is not none else '—' }}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
-    {% if liveness.fail_open %}
-      <h3>Fail-open exception counters</h3>
-      <table class="small">
-        <thead><tr><th>Site</th><th>Count</th><th>Last error</th></tr></thead>
+    {% endmacro %}
+    {% if lv.needs_look %}{{ lv_table(lv.needs_look) }}{% endif %}
+    <details class="raw-section">
+      <summary>Show all {{ lv.all | length }} features</summary>
+      {{ lv_table(lv.all) }}
+    </details>
+    {% if lv.fail_open %}
+    <details class="raw-section">
+      <summary>Fail-open exception counters ({{ lv.fail_open | length }} site{{ '' if lv.fail_open | length == 1 else 's' }})</summary>
+      <table class="data-table small">
+        <thead><tr><th>Site</th><th class="num">Count</th><th>Last error</th></tr></thead>
         <tbody>
-          {% for site, entry in liveness.fail_open | dictsort %}
+          {% for site, entry in lv.fail_open | dictsort %}
           <tr>
             <td class="mono">{{ site }}</td>
-            <td>{{ entry.count }}</td>
-            <td class="muted mono">{{ entry.last_error }}</td>
+            <td class="num">{{ entry.count }}</td>
+            <td class="muted mono cell-wrap">{{ entry.last_error }}</td>
           </tr>
           {% endfor %}
         </tbody>
       </table>
+    </details>
     {% else %}
-      <div class="muted small">Fail-open exception counters: none recorded</div>
+      <p class="muted small">Fail-open exception counters: none recorded.</p>
     {% endif %}
-  {% else %}
-    <pre class="mono small">{{ liveness | tojson(indent=2) }}</pre>
   {% endif %}
 </section>
 
-<section class="card">
-  <h2>Heartbeat <span class="muted">monitor-logs / heartbeat.txt</span></h2>
-  <pre class="mono small">{{ heartbeat }}</pre>
-</section>
+<p class="muted small">monitor-logs heartbeat: <span class="mono">{{ (heartbeat or '—') | trim | truncate(160) }}</span>
+  · the ops agent's own heartbeat is on <a href="/system/liveness">System → Liveness</a>.</p>
 {% endblock %}
