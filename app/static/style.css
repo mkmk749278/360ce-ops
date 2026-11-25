@@ -1232,3 +1232,7 @@ h1 .mono:not(.small) { font-size: inherit; }
    found on the first live guest read, 2026-11-25. Cap every one. */
 main select { max-width: 100%; }
 main label { max-width: 100%; }
+
+/* ---- Labs index ---- */
+table.labs-table td:first-child { width: 22%; white-space: nowrap; }
+table.labs-table td:last-child { width: 34%; }
