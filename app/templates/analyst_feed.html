@@ -128,8 +128,11 @@
           {% endif %}
         </div>
         {% set m = r.market or {} %}{% set fr = r.fixed_rule or {} %}
-        <div class="muted small">Controls: market at submit {{ p(m.net_pct) if m.net_pct is not none else (m.status or '—') }}
-          · fixed rule {{ p(fr.net_pct) if fr.net_pct is not none else (fr.status or '—') }}{% if fr.exit_reason == 'no_rule_setup' %} (no rule setup){% endif %}</div>
+        {#- .get, never attribute access: a row not yet walked carries
+            `market: {}`, where `m.net_pct` is Undefined, `is not none` is TRUE,
+            and the whole page 500'd on one row (live, 2026-11-25). -#}
+        <div class="muted small">Controls: market at submit {{ p(m.get('net_pct')) if m.get('net_pct') is not none else (m.get('status') or '—') }}
+          · fixed rule {{ p(fr.get('net_pct')) if fr.get('net_pct') is not none else (fr.get('status') or '—') }}{% if fr.get('exit_reason') == 'no_rule_setup' %} (no rule setup){% endif %}</div>
         {% if r.scenario or r.invalidation %}
         <details class="asig-why"><summary class="small">Analyst's reasoning</summary>
           {% if r.scenario %}<p class="small"><strong>Scenario:</strong> {{ r.scenario }}</p>{% endif %}
