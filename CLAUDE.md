@@ -1887,6 +1887,34 @@ one tool writes (`submit_plan`, the engine's analyst ledger), and a test pins
 that set. Every call is audited as `machine:<label>`. An unknown tool counts
 against the token's `denials` and never reaches the engine.
 
+## The 2026-11-25 refinement — three things the live reads taught (#241–#247)
+
+An outside audit was applied as five phases, each checked against production
+in a guest session. Three defects were invisible to every test and to the
+local render, and each has a derived guard now:
+
+- **Cloudflare caches `/static/*` for four hours, and nothing was versioned.**
+  Every deploy served new HTML over the previous stylesheet, so Phase 2 went
+  live unstyled. Link assets with `static_url('style.css')`, which appends a
+  hash of the file's bytes; `tests/test_static_cache_busting.py` fails on any
+  bare `/static/` link. **A page that renders right locally can be wrong in
+  production for reasons the repo cannot see — read the live page after a
+  deploy, not just the test run.**
+- **Jinja's `Undefined` is not `None`, and `x.k is not none` is TRUE for it.**
+  `/signals/analyst` 500'd whenever one row carried `market: {}`, because the
+  template read `m.net_pct` and handed `Undefined` to `pct`. Read optional
+  payload keys with `.get`; the number filters now render `—` for
+  `Undefined` too, so a display filter can never take a page down. The test
+  fixture always had a full block — a fixture chooses a shape and then agrees
+  with you about it, again.
+- **The nav lives in `app/templates/_nav.html`.** `base.html` imports it and
+  `/_partial/jump-index` (the Ctrl+K palette) reads it, filtered by the same
+  set the gate enforces. Tests that check the nav parse that file. Two traps
+  found moving it: a Jinja comment is not allowed inside a `{% set %}`
+  expression (every page failed), and inlining the route list into each page
+  would have changed the meaning of every "this URL is absent" assertion —
+  the palette fetches it on first open instead.
+
 ## Data sources (one-line each)
 
 | Source | Module |
