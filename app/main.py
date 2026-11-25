@@ -71,6 +71,7 @@ from app.routes import (
     signal_detail,
     signals,
     strategy_lab,
+    labs,
     analyst,
     firestore_cost,
     system,
@@ -229,6 +230,7 @@ app.include_router(track_record.router)
 app.include_router(raw_edge.router)
 app.include_router(path_scorecard.router)
 app.include_router(strategy_lab.router)
+app.include_router(labs.router)
 app.include_router(emission_controller.router)
 app.include_router(positions.router)
 app.include_router(profit.router)

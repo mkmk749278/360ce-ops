@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Labs — 360 CE Ops{% endblock %}
+{% block content %}
+<h1>Labs <span class="muted small">{{ n }} experiments, governors and A/B arms</span></h1>
+<p class="muted small">Everything here measures; a few can also act. The last column says which —
+  a fact about how each one is built. Whether it is switched on, fresh, or stalled
+  right now is graded on its own page, on the engine's clock.</p>
+
+{% for cat, rows in groups.items() %}
+<section class="card">
+  <h2>{{ cat }}</h2>
+  <table class="data-table labs-table">
+    <thead><tr><th>Experiment</th><th>What it measures</th><th>Can it change what users get?</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><a href="{{ r.path }}"><strong>{{ r.name }}</strong></a></td>
+        <td class="small">{{ r.what }}</td>
+        <td class="small">{% if r.tier == 'acts' %}<span class="badge badge-warn">ACTS</span> {% elif r.tier == 'switchable' %}<span class="badge badge-muted">SWITCHABLE</span> {% endif %}{{ r.reach }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+{% endblock %}

@@ -156,6 +156,8 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/_partial/exit-backtest/status",
         # -- autonomy -------------------------------------------------------
         "/strategy-lab",
+        # The Labs index: links and design facts only, no data of its own.
+        "/labs",
         "/strategy-lab/export.csv",
         "/strategy-lab/export.json",
         "/_partial/strategy_lab",
