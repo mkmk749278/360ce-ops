@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Positions — 360 CE Ops{% endblock %}
 {% block content %}
+{% from "_ladder.html" import ladder_bar %}
 <h1>Positions <span class="muted small">live state X-ray</span></h1>
 
 <section class="card">
@@ -14,55 +15,50 @@
     evaluate.  Green rows are healthy.
   </p>
   <p class="mono small">
-    monitor_running: <strong>{{ "yes" if monitor_running else "NO — engine.monitor coroutine not alive" }}</strong>
-    {% if generated_at %}<span class="muted">· snapshot at {{ generated_at }}</span>{% endif %}
+    monitor_running: <strong>{% if monitor_running is sameas true %}yes{% elif monitor_running is sameas false %}<span class="neg">NO — engine.monitor coroutine not alive</span>{% else %}<span class="muted">not reported</span>{% endif %}</strong>
+    {% if generated_at %}<span class="muted">· snapshot at {{ generated_at | when }}</span>{% endif %}
   </p>
 </section>
 
 {% if error %}
 <section class="card">
-  <div class="muted">Endpoint error: <code>{{ error }}</code></div>
+  <p class="small"><span class="badge badge-bad">UNREADABLE</span> <code>{{ error }}</code></p>
+  <p class="muted small">This is not "no positions": the engine did not answer, so nothing is known about them.</p>
 </section>
 {% elif rows %}
-<table class="data-table">
+{#- Risk first (outside audit, 2026-11-25): PnL % was clipped off the right
+    edge behind four separate price columns. Those are one ladder now, with
+    the raw levels printed under it, so nothing is lost. -#}
+<table class="data-table positions-table">
   <thead>
     <tr>
       <th>Symbol</th>
       <th>Side</th>
-      <th>Status</th>
-      <th>Setup</th>
-      <th>Entry</th>
-      <th>SL</th>
-      <th>TP1</th>
-      <th>TP2</th>
-      <th>Current</th>
-      <th>Candle 1m H/L</th>
-      <th>Feed age (s)</th>
-      <th>SL breach %</th>
-      <th>PnL %</th>
+      <th class="num">PnL %</th>
+      <th class="num" title="Distance from the current price to the stop. ≤ 0 with status ACTIVE is a monitor gap.">SL breach %</th>
+      <th>SL → Entry → TP</th>
+      <th class="num">Feed age</th>
+      <th>Status · setup</th>
       <th>Opened</th>
     </tr>
   </thead>
   <tbody>
   {% for r in rows %}
     <tr class="row-{{ r.row_class }}">
-      <td>{{ r.symbol }}</td>
+      <td><strong>{{ r.symbol }}</strong></td>
       <td class="side-{{ (r.direction or '')|lower }}">{{ r.direction }}</td>
-      <td>{{ r.status }}</td>
-      <td>{{ r.setup_class }}</td>
-      <td class="mono">{{ r.entry | price }}</td>
-      <td class="mono neg">{{ r.stop_loss | price }}</td>
-      <td class="mono pos">{{ r.tp1 | price }}</td>
-      <td class="mono pos">{{ r.tp2 | price }}</td>
-      <td class="mono">{{ r.current_price | price }}</td>
-      <td class="mono small">{{ r.candle_1m_high | price }} / {{ r.candle_1m_low | price }}</td>
-      <td class="mono small">{{ r.candle_1m_age_sec | secs }}</td>
-      <td class="mono {% if r.sl_breach_distance_pct is not none and r.sl_breach_distance_pct <= 0 %}neg{% endif %}">
+      <td class="num {% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">
+        {{ "%+.3f"|format(r.pnl_pct) if r.pnl_pct is not none else "—" }}
+      </td>
+      <td class="num {% if r.sl_breach_distance_pct is not none and r.sl_breach_distance_pct <= 0 %}neg{% endif %}">
         {% if r.sl_breach_distance_pct is not none %}{{ "%.3f"|format(r.sl_breach_distance_pct) }}{% else %}—{% endif %}
       </td>
-      <td class="{% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">
-        {{ "%.3f"|format(r.pnl_pct) if r.pnl_pct is not none else "—" }}
+      <td class="ladder-cell">
+        {{ ladder_bar(r.ladder, compact=true) }}
+        <div class="mono small muted">1m H/L {{ r.candle_1m_high | price }} / {{ r.candle_1m_low | price }}</div>
       </td>
+      <td class="num mono small">{{ r.candle_1m_age_sec | secs }}{% if r.candle_1m_age_sec is not none %}s{% endif %}</td>
+      <td class="small">{{ r.status }}<br><span class="muted">{{ r.setup_class }}</span></td>
       <td class="mono small">{% if r.timestamp_relative %}<span title="{{ r.timestamp or '' }}">{{ r.timestamp_relative }}</span>{% else %}{{ r.minutes_open }}m{% endif %}</td>
     </tr>
   {% endfor %}

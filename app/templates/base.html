@@ -155,6 +155,35 @@
       p.insertBefore(box, t);
       box.appendChild(t);
     });
+    /* …and a column whose every filled cell is a number is right-aligned,
+       header included, so digits line up by place value. Derived from the
+       cells rather than declared per template, for the same reason. A column
+       with one word in it is left as it is. */
+    var NUM = /^[+\-−]?[$]?\d[\d,]*(\.\d+)?\s*(%|[smhd]|USD|USDT|R|x)?$/;
+    document.querySelectorAll('main table').forEach(function (t) {
+      var body = t.tBodies[0];
+      if (!body || !body.rows.length) return;
+      var cols = 0;
+      for (var i = 0; i < body.rows.length; i++) cols = Math.max(cols, body.rows[i].cells.length);
+      for (var c = 0; c < cols; c++) {
+        var seen = 0, ok = true;
+        for (var r = 0; r < body.rows.length && ok; r++) {
+          var cell = body.rows[r].cells[c];
+          if (!cell || cell.colSpan > 1) continue;
+          var txt = cell.textContent.trim();
+          if (!txt || txt === '—' || txt === '-') continue;
+          seen++;
+          ok = NUM.test(txt);
+        }
+        if (!ok || !seen) continue;
+        for (var r2 = 0; r2 < body.rows.length; r2++) {
+          var cl = body.rows[r2].cells[c];
+          if (cl && cl.colSpan === 1) cl.classList.add('num');
+        }
+        var head = t.tHead && t.tHead.rows[0] && t.tHead.rows[0].cells[c];
+        if (head && head.colSpan === 1) head.classList.add('num');
+      }
+    });
   })();
 
   /* The ⓘ popovers (_info.html). A <details> already opens and closes with no

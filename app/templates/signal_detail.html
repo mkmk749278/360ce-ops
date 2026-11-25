@@ -1,42 +1,105 @@
 {% extends "base.html" %}
 {% block title %}Signal {{ signal_id }} — 360 CE Ops{% endblock %}
 {% block content %}
-<h1>Signal <span class="mono">{{ signal_id }}</span></h1>
+{% from "_ladder.html" import ladder_bar %}
 <p><a href="/signals" class="muted">← back to signals</a></p>
 
-<section class="card">
-  <h2>Live (engine API)</h2>
-  {% if live is mapping and live.error %}
-    <div class="error">{{ live.error }}</div>
-  {% else %}
-    <pre class="mono small">{{ live | tojson(indent=2) }}</pre>
-  {% endif %}
-</section>
+{% if live_ok %}
+{%- set L = live %}
+<h1><span class="mono">{{ L.symbol or signal_id }}</span>
+  <span class="side-{{ (L.direction or '')|lower }}">{{ L.direction }}</span>
+  <span class="muted small mono">{{ signal_id }}</span></h1>
 
-<section class="card">
-  <h2>Performance record <span class="muted">signal_performance.json</span></h2>
-  {% if performance %}
-    <pre class="mono small">{{ performance | tojson(indent=2) }}</pre>
-  {% else %}
-    <div class="muted">No performance record found.</div>
-  {% endif %}
-</section>
+<div class="dossier">
+  <section class="card">
+    <div class="tiles">
+      <div class="tile"><div class="tile-label">Status</div>
+        <div class="tile-value">{{ L.status or '—' }}</div>
+        <div class="tile-sub">{% if L.is_open is sameas true %}open{% elif L.is_open is sameas false %}closed{% else %}—{% endif %}</div></div>
+      <div class="tile"><div class="tile-label">PnL</div>
+        <div class="tile-value num {% if d.pnl is not none and d.pnl > 0 %}pos{% elif d.pnl is not none and d.pnl < 0 %}neg{% endif %}">{% if d.pnl is not none %}{{ '%+.2f' % d.pnl }}%{% else %}—{% endif %}</div>
+        <div class="tile-sub">MFE {% if d.mfe is not none %}{{ '%+.2f' % d.mfe }}%{% else %}—{% endif %} · MAE {% if d.mae is not none %}{{ '%+.2f' % d.mae }}%{% else %}—{% endif %}</div></div>
+      <div class="tile"><div class="tile-label">Setup</div>
+        <div class="tile-value mono">{{ L.setup_class or '—' }}</div>
+        <div class="tile-sub">{{ L.agent_name or '' }}</div></div>
+      <div class="tile"><div class="tile-label">Confidence</div>
+        <div class="tile-value num">{% if d.confidence is not none %}{{ '%.1f' % d.confidence }}{% else %}—{% endif %}</div>
+        <div class="tile-sub">tier {{ L.quality_tier or '—' }}</div></div>
+      <div class="tile"><div class="tile-label">Regime at entry</div>
+        <div class="tile-value mono">{{ L.entry_regime or '—' }}</div>
+        <div class="tile-sub">{{ L.pair_admission or '' }}</div></div>
+    </div>
 
-<section class="card">
-  <h2>Invalidation record <span class="muted">invalidation_records.json</span></h2>
-  {% if invalidation %}
-    <pre class="mono small">{{ invalidation | tojson(indent=2) }}</pre>
-  {% else %}
-    <div class="muted">No invalidation record (signal was not killed).</div>
-  {% endif %}
-</section>
+    <h2>Price ladder</h2>
+    {{ ladder_bar(d.ladder) }}
 
+    <table class="small facts">
+      <tbody>
+        <tr><th>Created</th><td class="mono">{{ L.timestamp | when }}</td></tr>
+        <tr><th>Dispatched</th><td class="mono">{{ L.dispatch_timestamp | when }}</td></tr>
+        <tr><th>Terminal outcome</th><td class="mono">{{ L.terminal_outcome_timestamp | when }}</td></tr>
+        <tr><th>Held</th><td class="mono">{% if L.hold_mins is not none %}{{ L.hold_mins }} min{% else %}—{% endif %}</td></tr>
+        <tr><th>Pre-TP</th><td class="mono">{% if L.pre_tp_hit %}hit{% if L.pre_tp_trigger_price %} at {{ L.pre_tp_trigger_price | price }}{% endif %}{% else %}not hit{% endif %}</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>Records <span class="muted">engine data volume</span></h2>
+    {% for title, src, rec, absent in [
+        ('Performance record', 'signal_performance.json', performance, 'No closed-signal record (still open, or never delivered).'),
+        ('Invalidation record', 'invalidation_records.json', invalidation, 'No invalidation record (signal was not killed).'),
+        ('Signal history', 'signal_history.json', history, 'No history record found.'),
+    ] %}
+    <details class="raw-section">
+      <summary>{{ title }} <span class="muted small">{{ src }} · {{ 'present' if rec else 'none' }}</span></summary>
+      {% if rec %}<pre class="mono small">{{ rec | tojson(indent=2) }}</pre>
+      {% else %}<p class="muted small" style="padding:0 0.9rem">{{ absent }}</p>{% endif %}
+    </details>
+    {% endfor %}
+  </section>
+</div>
+
+{% else %}
+<h1>Signal <span class="mono">{{ signal_id }}</span></h1>
 <section class="card">
-  <h2>Signal history <span class="muted">signal_history.json</span></h2>
-  {% if history %}
-    <pre class="mono small">{{ history | tojson(indent=2) }}</pre>
-  {% else %}
-    <div class="muted">No history record found.</div>
-  {% endif %}
+  <p class="small"><span class="badge badge-warn">LIVE VIEW UNREADABLE</span>
+    {% if live is mapping %}<code>{{ live.error or 'the request failed with no message' }}</code>{% endif %}
+    — showing the records on the data volume instead.</p>
+  {% for title, src, rec in [('Performance record', 'signal_performance.json', performance), ('Invalidation record', 'invalidation_records.json', invalidation), ('Signal history', 'signal_history.json', history)] %}
+    <details class="raw-section"{% if rec %} open{% endif %}>
+      <summary>{{ title }} <span class="muted small">{{ src }} · {{ 'present' if rec else 'none' }}</span></summary>
+      {% if rec %}<pre class="mono small">{{ rec | tojson(indent=2) }}</pre>{% endif %}
+    </details>
+  {% endfor %}
 </section>
+{% endif %}
+
+<details class="raw-section">
+  <summary>Raw engine payload (JSON)</summary>
+  <div style="padding:0.5rem 0.9rem 0"><button type="button" class="btn btn-sm" data-copy-target="raw-live">Copy JSON</button>
+    <span class="muted small" data-copy-status></span></div>
+  <pre class="mono small" id="raw-live">{{ live | tojson(indent=2) }}</pre>
+</details>
+<script>
+/* Copy the payload the server rendered. navigator.clipboard is undefined over
+   plain HTTP and in some embedded browsers, so the fallback selects the text
+   and says so — a button that appears to work and does nothing is worse than
+   none. */
+document.querySelectorAll('[data-copy-target]').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var el = document.getElementById(b.getAttribute('data-copy-target'));
+    var status = b.parentNode.querySelector('[data-copy-status]');
+    function select() {
+      var r = document.createRange(); r.selectNodeContents(el);
+      var s = window.getSelection(); s.removeAllRanges(); s.addRange(r);
+      status.textContent = 'Selected — press Ctrl+C to copy.';
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(el.textContent).then(
+        function () { status.textContent = 'Copied.'; }, select);
+    } else { select(); }
+  });
+});
+</script>
 {% endblock %}
