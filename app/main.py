@@ -20,7 +20,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.app_tokens import AppTokenStore
 from app.machine_tokens import MachineTokenStore
 from app.auth_mw import AuthRedirectMiddleware
-from app import guest_scope
+from app import charts, guest_scope
 from app import template_filters
 from app.guest_access import GuestAccessStore
 from app.totp import TotpGate
@@ -132,6 +132,8 @@ def _hash_static() -> dict[str, str]:
 
 _STATIC_URLS = _hash_static()
 templates.env.globals["static_url"] = static_url
+# Inline-SVG charts (app/charts.py): pure functions over data the page already has.
+templates.env.globals["charts"] = charts
 # `price` / `pct` / `secs` — a bare {{ value }} renders float repr, and several
 # live pages were doing exactly that (see app/template_filters.py).
 template_filters.register(templates.env)

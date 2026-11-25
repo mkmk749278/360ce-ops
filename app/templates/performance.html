@@ -67,6 +67,8 @@
   {% endif %}
 </section>
 
+{% from "_charts.html" import band_block %}
+<section class="card">{{ band_block(charts.band_bars(agg.by_score_band, 'avg_pnl'), 'Avg PnL % by score band') }}</section>
 {{ stat_table(agg.by_score_band, 'By score band') }}
 {{ stat_table(agg.by_symbol, 'By symbol') }}
 {{ stat_table(agg.by_setup, 'By setup') }}

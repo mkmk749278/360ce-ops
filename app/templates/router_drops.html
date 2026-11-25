@@ -40,6 +40,8 @@
   </div>
 {% else %}
 
+{% from "_charts.html" import funnel_block %}
+<div class="card">{{ funnel_block(charts.delivery_funnel(reduced.processed, reduced.delivered, reduced.dropped, reduced.rows)) }}</div>
 <div class="card">
   <h2>Delivery</h2>
   <table class="kv">
