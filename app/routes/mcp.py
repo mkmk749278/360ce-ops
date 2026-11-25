@@ -48,7 +48,8 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
         "Every universe coin (~75), one compact row each: price, change 1h/4h/24h/7d, "
         "1h-ATR %, 24h volume surge vs the 7-day mean, position in the 7-day range, "
         "funding and 24h OI change (None = no history yet, never zero). Use it to "
-        "triage the WHOLE market yourself.", _EMPTY),
+        "triage the WHOLE market yourself. Pairs with stale 1h bars are listed under "
+        "'stale', not in rows: a setup on one is refused as data_stale.", _EMPTY),
     "chart": (
         "read.analyst_chart",
         "Raw CLOSED candles for one coin: [open_time_ms, open, high, low, close, volume, "
@@ -80,7 +81,11 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
         "How your past accepted setups did, walked forward dark on 5m bars, per arm "
         "(your limit entry, your tranches, market at submit, no trade): n, win rate, "
         "average net of a 0.07% round trip, with and without the top 1%. Unfilled "
-        "limits are scored at market. Read n before any average.", _EMPTY),
+        "limits are scored at market. Also: analyst_split (filled vs scored-at-market, "
+        "and how filled setups ended: target / stop / 12h time exit), active_book (your "
+        "setups still pending or running, by side: read it BEFORE planning), and "
+        "recent_closed (your last 10 closed setups with p_target, R:R, entry distance, "
+        "7d-range position, exit, MFE and MAE). Read n before any average.", _EMPTY),
     "derivatives_status": (
         "read.deriv_history",
         "State of the hourly OI/funding/premium/taker recorder (it may be switched off).",
@@ -99,6 +104,7 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
          "properties": {"plan": {
              "type": "object", "required": ["bias", "setups"],
              "properties": {
+                 "prompt_version": {"type": "string", "maxLength": 40},
                  "bias": {"enum": ["risk_on", "risk_off", "neutral", "stand_aside"]},
                  "notes": {"type": "string", "maxLength": 500},
                  "setups": {"type": "array", "maxItems": 5, "items": {

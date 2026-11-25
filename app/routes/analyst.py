@@ -80,6 +80,8 @@ def arm_rows(by_arm: dict) -> list[dict]:
             "trim_avg": trim.get("avg_net_pct"), "trim_dropped": trim.get("dropped"),
             "open": a.get("open", 0), "insufficient": a.get("insufficient", 0),
             "unfilled": a.get("unfilled_scored_at_market", 0),
+            # None = an engine predating the 2026-11-25 geometry fix, not zero.
+            "no_valid_trade": a.get("no_valid_trade"),
         })
     return rows
 
@@ -107,6 +109,10 @@ async def analyst_page(request: Request):
         "rows": arm_rows(outcomes.get("by_arm") or {}),
         "arms_not_built": outcomes.get("arms_not_built") or [],
         "note": outcomes.get("note"),
+        # Each None = an engine predating it (2026-11-25), rendered as such.
+        "split": outcomes.get("analyst_split"),
+        "book": outcomes.get("active_book"),
+        "recent_closed": outcomes.get("recent_closed"),
         "plans_state": plans_state, "plans_detail": plans_detail,
         "plans": plans.get("plans") or [],
         "totals": plans.get("totals") or {},

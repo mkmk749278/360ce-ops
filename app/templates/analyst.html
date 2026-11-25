@@ -38,6 +38,7 @@
       <thead><tr><th>Arm</th><th class="num">n</th><th class="num">Win %</th>
         <th class="num">Avg net %</th><th class="num">Avg net % w/o top 1%</th>
         <th class="num">Total net %</th><th class="num">Unfilled → market</th>
+        <th class="num">No valid trade</th>
         <th class="num">Open</th><th class="num">Insufficient</th></tr></thead>
       <tbody>
       {% for r in rows %}
@@ -49,6 +50,7 @@
           <td class="num">{{ r.trim_avg|pct }}{% if r.trim_dropped %} <span class="muted small">(−{{ r.trim_dropped }})</span>{% endif %}</td>
           <td class="num">{{ r.total_net_pct|pct }}</td>
           <td class="num">{{ r.unfilled }}</td>
+          <td class="num">{{ r.no_valid_trade if r.no_valid_trade is not none else '—' }}</td>
           <td class="num">{{ r.open }}</td>
           <td class="num">{{ r.insufficient }}</td>
         </tr>
@@ -61,6 +63,72 @@
     {% endif %}
   {% endif %}
 </div>
+
+{% if out_state == 'ok' %}
+<div class="card">
+  <div class="card-title"><h2>The analyst arm, taken apart</h2>
+    {% call info("Why this card exists") %}
+      <p>The analyst arm's headline pools limits that <strong>filled</strong>
+        with limits that never filled and are <strong>scored at the market
+        outcome</strong>. Read alone, it is partly the market arm.</p>
+      <p>A filled setup has <strong>three</strong> endings, not two: the first
+        target, the stop, or the 12h time exit. An expectancy written as
+        p(target) × R − (1 − p) books every time exit as a full loss.</p>
+      <p><em>No valid trade</em>: at submit the market was already past the
+        setup's own first target (or stop), so a market entry has no geometry.
+        It scores 0.00% and is counted. Before 2026-11-25 these rows were
+        walked and booked a "target" at a loss; the engine has corrected them.</p>
+    {% endcall %}
+  </div>
+  {% if split is none %}
+    <p class="muted">Not reported by this engine (it predates the split).</p>
+  {% else %}
+    {% set f = split.filled or {} %}{% set m = split.scored_at_market or {} %}
+    <p class="small">Fill rate <strong>{{ (split.fill_rate * 100)|pct if split.fill_rate is not none else '—' }}</strong>
+      · filled n <strong>{{ f.n or 0 }}</strong>, avg {{ f.avg_net_pct|pct }} net
+      · scored at market n <strong>{{ m.n or 0 }}</strong>, avg {{ m.avg_net_pct|pct }} net</p>
+    {% if split.filled_by_exit %}
+    <div class="table-scroll"><table class="data-table">
+      <thead><tr><th>Filled, ended at</th><th class="num">n</th><th class="num">Share</th>
+        <th class="num">Avg net %</th></tr></thead>
+      <tbody>{% for k, v in split.filled_by_exit.items() %}
+        <tr><td><code>{{ k }}</code></td><td class="num"><strong>{{ v.n }}</strong></td>
+          <td class="num">{{ (v.share * 100)|pct }}</td><td class="num">{{ v.avg_net_pct|pct }}</td></tr>
+      {% endfor %}</tbody></table></div>
+    {% else %}<p class="muted small">No filled setup has resolved yet.</p>{% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-title"><h2>Open book</h2>
+    {% call info("About the open book") %}
+      <p>Setups still pending, filled and running, or not walked yet. The
+        hourly analyst reads this same block before planning. Alts move with
+        BTC: same-side setups are one bet, not several.</p>
+    {% endcall %}
+  </div>
+  {% if book is none %}
+    <p class="muted">Not reported by this engine (it predates the open book).</p>
+  {% else %}
+    <p class="small"><strong>{{ book.n }}</strong> open · long {{ book.by_side.long }}
+      · short {{ book.by_side.short }}
+      {% if book.active_by_side %}(filled: long {{ book.active_by_side.long }}, short {{ book.active_by_side.short }}){% endif %}</p>
+    {% if book.setups %}
+    <div class="table-scroll"><table class="data-table">
+      <thead><tr><th>Setup</th><th>State</th><th class="num">Age h</th><th class="num">Entry</th>
+        <th class="num">Stop</th><th class="num">TP1</th><th class="num">p(TP1)</th>
+        <th class="num">MFE %</th><th class="num">MAE %</th></tr></thead>
+      <tbody>{% for i in book.setups %}
+        <tr><td class="nowrap">{{ i.symbol }} {{ i.side }}</td><td><code>{{ i.state }}</code></td>
+          <td class="num">{{ i.age_h }}</td><td class="num">{{ i.entry|price }}</td>
+          <td class="num">{{ i.stop|price }}</td><td class="num">{{ i.tp1|price }}</td>
+          <td class="num">{{ i.p_target if i.p_target is not none else '—' }}</td>
+          <td class="num">{{ i.mfe_pct|pct }}</td><td class="num">{{ i.mae_pct|pct }}</td></tr>
+      {% endfor %}</tbody></table></div>
+    {% endif %}
+  {% endif %}
+</div>
+{% endif %}
 
 <div class="card">
   <div class="card-title"><h2>Recent plans</h2>
