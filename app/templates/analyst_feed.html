@@ -109,7 +109,10 @@
             <span class="muted small">MFE {{ p(a.mfe_pct) }} · MAE {{ p(a.mae_pct) }} · closed {{ a.exit_at|when }}</span>
           {% elif r.state == 'not_filled' %}
             Limit never reached.
-            {% if a.net_pct is not none %}At market it would have made
+            {% if a.exit_reason == 'no_valid_trade' %}At submit the market was already
+              {{ 'past the first target' if a.reason == 'entry_past_target' else 'past the stop' }},
+              so there was no market trade to score: <strong>0.00%</strong>, no trade.
+            {% elif a.net_pct is not none %}At market it would have made
               <span class="{% if a.net_pct > 0 %}pos{% elif a.net_pct < 0 %}neg{% endif %}">{{ p(a.net_pct) }}</span> net.
             {% else %}The market outcome is still running.{% endif %}
           {% elif r.state == 'active' %}
@@ -131,7 +134,7 @@
         {#- .get, never attribute access: a row not yet walked carries
             `market: {}`, where `m.net_pct` is Undefined, `is not none` is TRUE,
             and the whole page 500'd on one row (live, 2026-11-25). -#}
-        <div class="muted small">Controls: market at submit {{ p(m.get('net_pct')) if m.get('net_pct') is not none else (m.get('status') or '—') }}
+        <div class="muted small">Controls: market at submit {% if m.get('exit_reason') == 'no_valid_trade' %}no trade (<code>{{ m.get('reason') }}</code>){% else %}{{ p(m.get('net_pct')) if m.get('net_pct') is not none else (m.get('status') or '—') }}{% endif %}
           · fixed rule {{ p(fr.get('net_pct')) if fr.get('net_pct') is not none else (fr.get('status') or '—') }}{% if fr.get('exit_reason') == 'no_rule_setup' %} (no rule setup){% endif %}</div>
         {% if r.scenario or r.invalidation %}
         <details class="asig-why"><summary class="small">Analyst's reasoning</summary>
