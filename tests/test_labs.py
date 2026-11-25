@@ -1,6 +1,6 @@
 """Labs: one list of experiments, rendered twice (nav group + /labs index).
 
-The index and base.html's Labs nav group are two renderings of the same set.
+The index and _nav.html's Labs nav group are two renderings of the same set.
 A hand-kept second list drifts silently, so they are held equal here: a new
 experiment page cannot be linked in one place and forgotten in the other.
 """
@@ -22,7 +22,7 @@ from tests.test_nav import REPO  # noqa: E402
 
 
 def _nav_group(key: str) -> list[str]:
-    src = (REPO / "app" / "templates" / "base.html").read_text()
+    src = (REPO / "app" / "templates" / "_nav.html").read_text()
     m = re.search(r"set NAV = (\[.*?\])\s*-?%\}", src, re.S)
     body = re.sub(r"\{#-?.*?-?#\}", "", m.group(1), flags=re.S)
     for gkey, _label, subs in ast.literal_eval(body):

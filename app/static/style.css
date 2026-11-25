@@ -1286,3 +1286,19 @@ svg.chart-pipe { height: 74px; }
   .bar-row { grid-template-columns: minmax(60px, 90px) 1fr auto; }
   .bar-n { display: none; }
 }
+
+/* ---- Status strip and quick jump (2026-11-25) ---- */
+.status-strip { display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; padding: 0.35rem 1.5rem; border-bottom: 1px solid var(--border); background: var(--bg-card); }
+.strip-item { font-size: 0.78rem; text-decoration: none; padding: 0.15rem 0.55rem; border-radius: var(--r-pill); border: 1px solid; }
+.strip-bad { color: var(--neg); border-color: rgba(255,92,87,0.4); background: rgba(255,92,87,0.1); }
+.strip-warn { color: var(--warn); border-color: rgba(227,179,65,0.4); background: rgba(227,179,65,0.1); }
+.jump-btn kbd { font-family: var(--mono); font-size: 0.7rem; color: var(--fg-dim); margin-left: 0.2rem; }
+.palette { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.55); display: flex; justify-content: center; align-items: flex-start; padding-top: 12vh; }
+.palette[hidden] { display: none; }
+.palette-box { width: min(560px, calc(100vw - 32px)); background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md); box-shadow: var(--shadow); overflow: hidden; }
+#palette-q { width: 100%; box-sizing: border-box; padding: 0.8rem 1rem; font-size: 0.95rem; background: var(--bg-elev); color: var(--fg); border: none; border-bottom: 1px solid var(--border); outline: none; }
+#palette-list { list-style: none; margin: 0; padding: 0.3rem 0; max-height: 50vh; overflow-y: auto; }
+#palette-list a { display: flex; justify-content: space-between; gap: 1rem; padding: 0.45rem 1rem; color: var(--fg); text-decoration: none; font-size: 0.88rem; }
+#palette-list li.on a, #palette-list a:hover { background: var(--accent-soft); }
+.palette-hint { padding: 0.4rem 1rem; border-top: 1px solid var(--border); }
+@media (max-width: 720px) { .jump-btn kbd { display: none; } .status-strip { padding: 0.35rem 16px; } }

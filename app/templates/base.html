@@ -27,64 +27,7 @@
           A/B experiment (outside audit, 2026-11-25: 17 Signals sub-tabs mixed
           the two). URLs are unchanged; only the grouping moved. The Labs list
           is also the /labs index, and tests/test_labs.py holds them equal. -#}
-  {%- set NAV = [
-      ('overview', 'Overview', [('/', 'Pulse', 'pulse')]),
-      ('live', 'Live', [
-          ('/signals', 'Feed', 'signals'),
-          ('/positions', 'Positions', 'positions'),
-          ('/pairs', 'Pairs', 'pairs'),
-          ('/signals/router-drops', 'Router drops', 'router_drops'),
-          ('/signals/analyst', 'AI analyst feed', 'analyst_feed'),
-          ('/analyst', 'AI analyst: model value', 'analyst')]),
-      ('labs', 'Labs', [
-          ('/labs', 'Index', 'labs'),
-          ('/signals/trail-governor', 'Trail governor (LIVE)', 'trail_governor'),
-          ('/signals/ai-governor', 'AI governor', 'ai_governor'),
-          ('/signals/governor-live', 'AI governor live', 'governor_live'),
-          ('/signals/sar-live', 'SAR live', 'sar_live'),
-          ('/signals/atr-live', 'ATR trail live', 'atr_live'),
-          ('/signals/sar', 'SAR signals', 'sar_signals'),
-          ('/sar-exit', 'SAR exit A/B', 'sar_exit'),
-          ('/signals/entry-features', 'Entry features', 'entry_features'),
-          ('/signals/structural-veto', 'Structural veto', 'structural_veto'),
-          ('/signals/structural-snap', 'Snap geometry', 'structural_snap'),
-          ('/signals/dark-live', 'Dark feed', 'dark_live'),
-          ('/signals/price-action', 'Price action', 'price_action'),
-          ('/signals/unlock-shorts', 'Unlock shorts', 'unlock_shorts'),
-          ('/strategy-lab', 'Strategy Lab', 'strategy_lab'),
-          ('/emission-controller', 'Layer G', 'emission_controller')]),
-      ('performance', 'Performance', [
-          ('/track-record', 'Track record', 'track_record'),
-          ('/performance', 'Rolling stats', 'performance'),
-          ('/raw-edge', 'Entry edge', 'raw_edge'),
-          ('/path-scorecard', 'Path scorecard', 'path_scorecard'),
-          ('/profit', 'Held-to-stop', 'profit'),
-          ('/dark-signals', 'Dark signals', 'dark_signals'),
-          ('/exit-backtest', 'Exit backtest', 'exit_backtest'),
-          ('/invalidations', 'Invalidations', 'invalidations')]),
-      ('system', 'System', [
-          ('/system', 'Containers', 'system_containers'),
-          ('/system/liveness', 'Liveness', 'system_liveness'),
-          ('/system/redis', 'Redis bridge', 'system_redis'),
-          ('/system/firestore', 'Firestore reads', 'system_firestore')]),
-      ('control', 'Control', [
-          ('/control', 'Engine', 'control'),
-          ('/control/routing', 'Routing', 'routing'),
-          ('/control/promotions', 'Promotions', 'promotions'),
-          ('/control/users', 'Users', 'users'),
-          ('/control/referrals', 'Referrals', 'referrals'),
-          ('/trials', 'Trials', 'trials'),
-          ('/control/coindcx', 'CoinDCX', 'coindcx'),
-          ('/control/access', 'Access', 'access')]),
-      ('diagnostics', 'Diagnostics', [
-          ('/truth', 'Truth report', 'truth'),
-          ('/alerts', 'Alerts', 'alerts'),
-          ('/diagnostics/data-intake', 'Data intake', 'data_intake'),
-          ('/diagnostics/console', 'Diag console', 'diag_console'),
-          ('/diag/geometry', 'Diag runner', 'diag'),
-          ('/audit', 'Audit board', 'audit'),
-          ('/data', 'Data & export', 'data')]),
-  ] %}
+  {%- from "_nav.html" import NAV %}
   {#- A read-only guest (app/guest_scope.py) gets the same nav minus what it
       cannot reach. The filter reads GUEST_READ_ROUTES — the SAME set the gate
       enforces, injected as a Jinja global — rather than a second list of
@@ -112,6 +55,7 @@
         <a href="{{ subs[0][0] }}" class="{% if ns.group==gkey %}on{% endif %}">{{ glabel }}</a>
       {%- endfor %}
     </nav>
+    <button type="button" class="btn btn-sm jump-btn" id="palette-open" title="Jump to (Ctrl+K)">Jump <kbd>⌘K</kbd></button>
     {%- if is_guest %}
     <div class="user">
       <span class="badge badge-warn" title="Temporary read-only grant — the control plane is not reachable from this session">READ-ONLY</span>
@@ -129,9 +73,31 @@
     {%- endfor %}
   </div>
   {%- endif %}
+  {%- set strip = status_strip(request) %}
+  {%- if strip %}
+  <div class="status-strip">
+    {%- for it in strip %}
+    <a class="strip-item strip-{{ it.tone }}" href="{{ it.href }}">{{ it.text }}</a>
+    {%- endfor %}
+  </div>
+  {%- endif %}
   <main>
     {% block content %}{% endblock %}
   </main>
+  {#- Ctrl/Cmd+K quick jump. Its route list is fetched from
+      /_partial/jump-index on first open — the nav filtered for THIS session,
+      so it never offers a page the gate would refuse — rather than embedded
+      in every page, where every "this URL is absent" assertion would start
+      matching it. A pasted signal id opens its dossier; a symbol opens the
+      track record filtered to it. -#}
+  <div class="palette" id="palette" hidden>
+    <div class="palette-box" role="dialog" aria-label="Jump to">
+      <input id="palette-q" type="text" autocomplete="off" spellcheck="false"
+             placeholder="Jump to a page, paste a signal id, or type a symbol…">
+      <ul id="palette-list"></ul>
+      <div class="muted small palette-hint">↑↓ to move · Enter to open · Esc to close</div>
+    </div>
+  </div>
   <script>
   /* On a phone both nav rows scroll sideways, and the group or tab you are on
      could sit off-screen — so the page did not say where you were. Bring the
@@ -189,6 +155,69 @@
         if (head && head.colSpan === 1) head.classList.add('num');
       }
     });
+  })();
+
+  /* Quick jump (Ctrl/Cmd+K). */
+  (function () {
+    var box = document.getElementById('palette');
+    var q = document.getElementById('palette-q');
+    var list = document.getElementById('palette-list');
+    if (!box || !q || !list) return;
+    var pages = [], loaded = false;
+    function load() {
+      if (loaded) return;
+      loaded = true;
+      fetch('/_partial/jump-index', { credentials: 'same-origin' })
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (groups) {
+          groups.forEach(function (g) {
+            g[2].forEach(function (s) { pages.push({ url: s[0], label: s[1], group: g[1] }); });
+          });
+          render();
+        })
+        .catch(function () { loaded = false; });
+    }
+    var sel = 0, shown = [];
+    var SIGNAL = /^[A-Z0-9_]+-[0-9A-F]{6,}$/i, SYMBOL = /^[A-Z0-9]{2,20}USDT?$/i;
+    function render() {
+      var t = q.value.trim(), lo = t.toLowerCase();
+      shown = [];
+      if (SIGNAL.test(t)) shown.push({ url: '/signals/' + encodeURIComponent(t.toUpperCase()), label: 'Open signal ' + t.toUpperCase(), group: 'Signal' });
+      if (SYMBOL.test(t)) shown.push({ url: '/track-record?symbol=' + encodeURIComponent(t.toUpperCase()), label: 'Track record for ' + t.toUpperCase(), group: 'Symbol' });
+      pages.forEach(function (p) {
+        var hay = (p.group + ' ' + p.label + ' ' + p.url).toLowerCase();
+        if (!lo || lo.split(/\s+/).every(function (w) { return hay.indexOf(w) >= 0; })) shown.push(p);
+      });
+      sel = Math.min(sel, Math.max(0, shown.length - 1));
+      list.innerHTML = '';
+      shown.slice(0, 12).forEach(function (p, i) {
+        var li = document.createElement('li');
+        if (i === sel) li.className = 'on';
+        var a = document.createElement('a');
+        a.href = p.url;
+        a.textContent = p.label;
+        var g = document.createElement('span');
+        g.className = 'muted small';
+        g.textContent = p.group;
+        a.appendChild(g);
+        li.appendChild(a);
+        list.appendChild(li);
+      });
+    }
+    function open() { box.hidden = false; q.value = ''; sel = 0; load(); render(); q.focus(); }
+    function close() { box.hidden = true; }
+    document.addEventListener('keydown', function (ev) {
+      if ((ev.metaKey || ev.ctrlKey) && (ev.key === 'k' || ev.key === 'K')) { ev.preventDefault(); box.hidden ? open() : close(); return; }
+      if (box.hidden) return;
+      if (ev.key === 'Escape') { close(); }
+      else if (ev.key === 'ArrowDown') { ev.preventDefault(); sel = Math.min(sel + 1, Math.min(shown.length, 12) - 1); render(); }
+      else if (ev.key === 'ArrowUp') { ev.preventDefault(); sel = Math.max(sel - 1, 0); render(); }
+      else if (ev.key === 'Enter' && shown[sel]) { ev.preventDefault(); window.location.href = shown[sel].url; }
+    });
+    q.addEventListener('input', function () { sel = 0; render(); });
+    box.addEventListener('click', function (ev) { if (ev.target === box) close(); });
+    var btn = document.getElementById('palette-open');
+    if (btn) btn.addEventListener('click', open);
   })();
 
   /* The ⓘ popovers (_info.html). A <details> already opens and closes with no

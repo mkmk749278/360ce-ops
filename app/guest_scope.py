@@ -158,6 +158,9 @@ GUEST_READ_ROUTES: frozenset[str] = frozenset(
         "/strategy-lab",
         # The Labs index: links and design facts only, no data of its own.
         "/labs",
+        # The Ctrl+K palette index: the nav, already filtered for a guest
+        # with this same set, so it can reveal nothing the nav does not.
+        "/_partial/jump-index",
         "/strategy-lab/export.csv",
         "/strategy-lab/export.json",
         "/_partial/strategy_lab",

@@ -384,7 +384,7 @@ class TestWiring:
         """A page reachable only by typing its URL is 'measured but nowhere to
         look' one step removed."""
         from pathlib import Path
-        base = Path(__file__).resolve().parents[1] / "app/templates/base.html"
+        base = Path(__file__).resolve().parents[1] / "app/templates/_nav.html"
         assert "/diagnostics/data-intake" in base.read_text()
 
     def test_the_route_is_registered(self):

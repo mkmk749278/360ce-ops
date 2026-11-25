@@ -76,7 +76,7 @@ def test_the_page_is_in_the_navigation():
     as a real request) and covers this page automatically — this assertion is
     the cheap direct one beside it.
     """
-    nav = open("app/templates/base.html", encoding="utf-8").read()
+    nav = open("app/templates/_nav.html", encoding="utf-8").read()
     assert "('/signals/ai-governor', 'AI governor', 'ai_governor')" in nav
 
 

@@ -704,9 +704,9 @@ class TestDiscoverability:
         from pathlib import Path
 
         nav = (Path(__file__).resolve().parents[1]
-               / "app" / "templates" / "base.html").read_text()
+               / "app" / "templates" / "_nav.html").read_text()
         assert "'/signals/structural-snap'" in nav, (
-            "the page is not linked from base.html's NAV — it exists but is "
+            "the page is not linked from _nav.html's NAV — it exists but is "
             "only reachable by typing the URL"
         )
 
@@ -720,7 +720,7 @@ class TestDiscoverability:
         assert '"active": "structural_snap"' in src
 
         nav = (Path(__file__).resolve().parents[1]
-               / "app" / "templates" / "base.html").read_text()
+               / "app" / "templates" / "_nav.html").read_text()
         # The token in the route must match the one in the NAV tuple, or the
         # link renders but never highlights and the sub-nav still collapses.
         assert "'structural_snap'" in nav
