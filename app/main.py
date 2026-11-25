@@ -101,6 +101,36 @@ templates.env.globals["GUEST_READ_ROUTES"] = guest_scope.GUEST_READ_ROUTES
 # layer short of: a read-only session was being shown a POST form and a
 # job-trigger link it could only 403 on. Same table, same two rules.
 templates.env.globals["may_use"] = guest_scope.may_use
+
+
+def static_url(name: str) -> str:
+    """``/static/<name>?v=<content hash>``.
+
+    Cloudflare caches /static/* for four hours (``max-age=14400``), and the
+    templates linked ``/static/style.css`` with no version. So every deploy
+    served new HTML over the PREVIOUS stylesheet for up to four hours: on
+    2026-11-25 the phase-2 Pulse tiles went live unstyled. A hash of the file's
+    own bytes changes exactly when the file does, so a deploy that touches no
+    CSS keeps the cache and one that does cannot be served the old one.
+    Computed once per process — the files only change with a deploy.
+    """
+    return _STATIC_URLS.get(name) or f"/static/{name}"
+
+
+def _hash_static() -> dict[str, str]:
+    import hashlib
+
+    out: dict[str, str] = {}
+    for f in (BASE_DIR / "static").rglob("*"):
+        if f.is_file():
+            rel = f.relative_to(BASE_DIR / "static").as_posix()
+            digest = hashlib.sha256(f.read_bytes()).hexdigest()[:12]
+            out[rel] = f"/static/{rel}?v={digest}"
+    return out
+
+
+_STATIC_URLS = _hash_static()
+templates.env.globals["static_url"] = static_url
 # `price` / `pct` / `secs` — a bare {{ value }} renders float repr, and several
 # live pages were doing exactly that (see app/template_filters.py).
 template_filters.register(templates.env)

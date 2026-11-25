@@ -4,9 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}360 CE Ops{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
   <script src="https://unpkg.com/htmx.org@1.9.10" defer></script>
-  <script src="/static/sort.js" defer></script>
+  <script src="{{ static_url('sort.js') }}" defer></script>
 </head>
 <body>
   {#- Grouped information architecture: 6 top-level groups, each with sub-tabs.
