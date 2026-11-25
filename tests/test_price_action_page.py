@@ -169,7 +169,10 @@ def test_the_page_renders_and_says_nothing_was_delivered():
     with _client([_row("a", pnl=1.0)]) as c:
         body = c.get("/signals/price-action").text
     assert "Price action, driving" in body
-    assert "OWNER ONLY" in body
+    assert "NOT DELIVERED TO USERS" in body
+    # The banner describes signal ROUTING, not panel auth: the page is
+    # guest-readable, so "OWNER ONLY" contradicted the session reading it.
+    assert "OWNER ONLY" not in body
     assert "no channel" in body
 
 

@@ -54,7 +54,7 @@
       <td class="{% if r.pnl_pct is not none and r.pnl_pct > 0 %}pos{% elif r.pnl_pct is not none and r.pnl_pct < 0 %}neg{% endif %}">{{ r.pnl_pct | pct }}</td>
       <td style="white-space:nowrap">
         <a class="btn btn-sm" href="/signals/{{ r.id }}">Details</a>
-        {% if r.status == 'ACTIVE' %}
+        {% if r.status == 'ACTIVE' and may_use(request, "/control/close-signal", "POST") %}
         <form method="post" action="/control/close-signal" style="display:inline;margin-left:0.3rem"
               onsubmit="return confirm('Force-close {{ r.symbol }} ({{ r.id }})? It closes at the current mark and drops from the active book.');">
           <input type="hidden" name="signal_id" value="{{ r.id }}">

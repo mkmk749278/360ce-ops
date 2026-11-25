@@ -214,7 +214,7 @@
       <strong>The engine did not report a timeframe.</strong> That is a fault, not a quiet state —
       the governor cannot hand over without one, and it has been stored wrong before
       (<code>5</code> where the candle store is keyed <code>5m</code>, which left the mechanism
-      inert for a day). Check <a href="/control">Control → Engine</a>.
+      inert for a day). Check {% if may_use(request, "/control") %}<a href="/control">Control → Engine</a>{% else %}<strong>Control → Engine</strong> (owner-only){% endif %}.
     </p>
     {% endif %}
   {% endif %}

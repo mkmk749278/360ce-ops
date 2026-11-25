@@ -30,10 +30,13 @@ tests here are about the properties rather than the happy path:
 from __future__ import annotations
 
 import os
+import pathlib
 import time
 
 os.environ.setdefault("OPS_SESSION_SECRET", "test-secret")
 os.environ.setdefault("OPS_AUTH_TOKEN", "test-token")
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -589,3 +592,53 @@ def test_the_owner_still_sees_the_trigger(client):
     assert "/exit-backtest/run-now" in body
     assert "cannot start a run" not in body
     assert "Button not responding?" in body
+
+
+def test_owner_only_targets_in_templates_sit_behind_may_use():
+    """The crawl above only sees the branches its fixtures happen to render.
+
+    ``/signals`` drew a red ``Close`` (``POST /control/close-signal``) on every
+    ACTIVE row with no ``may_use`` guard, and the fixture has no ACTIVE rows, so
+    the crawl never saw it (outside audit, 2026-11-25). Trail-governor's
+    ``off`` branch linked a guest to ``/control`` for the same reason.
+
+    So this reads the TEMPLATES: any link or form aimed at a path the gate
+    refuses a guest must have a ``may_use`` check for that same path shortly
+    before it. Owner-only pages are exempt — a guest never renders them, and
+    the crawl still covers every guest page that does render.
+    """
+    import re
+
+    from app import guest_scope
+
+    owner_pages = re.compile(r"^(control.*|users|referrals|trials|diag|login)\.html$")
+
+    def refused(path: str, method: str) -> bool:
+        if method == "GET":
+            return path not in guest_scope.GUEST_READ_ROUTES
+        return path not in guest_scope.GUEST_ACTION_ROUTES
+
+    offending: list[str] = []
+    for f in sorted((REPO / "app" / "templates").glob("*.html")):
+        if owner_pages.match(f.name):
+            continue
+        src = f.read_text()
+        for m in re.finditer(r'(href|action)="(/(?:control|trials|diag/)[^"#?{]*)"', src):
+            path = m.group(2)
+            method = "GET"
+            if m.group(1) == "action":
+                tag_start = src.rfind("<form", 0, m.start())
+                tag = src[tag_start:src.find(">", m.end()) + 1]
+                mm = re.search(r'method="([a-zA-Z]+)"', tag)
+                method = (mm.group(1) if mm else "GET").upper()
+            if not refused(path, method):
+                continue
+            window = src[max(0, m.start() - 500):m.start()]
+            if f'may_use(request, "{path}"' not in window and f"may_use(request, '{path}'" not in window:
+                line = src.count("\n", 0, m.start()) + 1
+                offending.append(f"{f.name}:{line} {method} {path}")
+
+    assert not offending, (
+        "owner-only targets rendered without a may_use guard:\n  "
+        + "\n  ".join(offending)
+    )

@@ -48,7 +48,8 @@
     <p class="small">
       The master switch is off: every position, for every user, is on the
       ordinary SL/TP FSM exit. This is the default and is not a fault.
-      Turn it on from <a href="/control">Control → Engine</a>
+      Turn it on from
+      {% if may_use(request, "/control") %}<a href="/control">Control → Engine</a>{% else %}<strong>Control → Engine</strong> (owner-only){% endif %}
       (<code>trail_governor_enabled</code>).
     </p>
   {% elif state == 'armed' %}
@@ -73,8 +74,8 @@
       to refuse.
       {% if open_total is not none and open_total > 0 %}
         <strong>With open positions and none governed, check the per-user
-        <code>exit_mechanism</code> on <a href="/control/users">Control →
-        Users</a> before reading this as quiet.</strong>
+        <code>exit_mechanism</code> on
+        {% if may_use(request, "/control/users") %}<a href="/control/users">Control → Users</a>{% else %}Control → Users (owner-only){% endif %} before reading this as quiet.</strong>
       {% endif %}
     </p>
   {% else %}

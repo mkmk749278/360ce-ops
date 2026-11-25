@@ -682,6 +682,7 @@ async def entry_features_page(request: Request, setup: str = Query("")):
         "entry_features.html",
         {
             "request": request,
+            "active": "entry_features",
             "error": error,
             "coverage": coverage,
             "quality": quality,

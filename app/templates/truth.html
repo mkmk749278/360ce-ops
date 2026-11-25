@@ -131,7 +131,7 @@ not. Where the two differ, the live panel is now and this is the window.</p>
             {% set s = r.status | lower %}
             <span class="badge {% if s in ['ok','healthy'] %}badge-ok{% elif s in ['disabled','warmup'] %}badge-muted{% elif s in ['warn','warning','degraded'] %}badge-warn{% else %}badge-bad{% endif %}">{{ r.status }}</span>
           </td>
-          <td class="small">{{ r.detail }}</td>
+          <td class="small cell-wrap">{{ r.detail }}</td>
           <td class="mono">{{ r.streak if r.streak is not none else '—' }}</td>
         </tr>
         {% endfor %}
