@@ -244,3 +244,56 @@ def test_contract_the_engine_feed_carries_what_the_cards_read(tmp_path, monkeypa
     assert row["state"] == "tp_hit"
     rows = analyst.feed_rows(real["rows"], {}, T + 3000, real["walk_step_s"])
     assert analyst.feed_summary(rows)["n_filled_closed"] == 1
+
+
+# ── 2026-11-25: the split, the open book, no-valid-trade ─────────────────────
+
+UPGRADED = {"ok": True, "error": "", "result": {
+    **OUTCOMES["result"],
+    "by_arm": {**OUTCOMES["result"]["by_arm"],
+               "market": {"n": 12, "open": 0, "insufficient": 0,
+                          "unfilled_scored_at_market": 0, "no_valid_trade": 3}},
+    "analyst_split": {"fill_rate": 0.48,
+                      "filled": {"n": 37, "avg_net_pct": 0.41},
+                      "scored_at_market": {"n": 40, "avg_net_pct": 1.7},
+                      "filled_by_exit": {"horizon": {"n": 20, "share": 0.54,
+                                                     "avg_net_pct": 0.2},
+                                         "target": {"n": 11, "share": 0.3,
+                                                    "avg_net_pct": 2.9}}},
+    "active_book": {"n": 2, "by_side": {"long": 0, "short": 2},
+                    "active_by_side": {"long": 0, "short": 1}, "symbols": ["A", "B"],
+                    "setups": [{"symbol": "SOLUSDT", "side": "short", "state": "pending",
+                               "age_h": 1.5, "entry": 70.1, "stop": 71.0, "tp1": 68.0,
+                               "p_target": 0.33, "mfe_pct": None, "mae_pct": None}]},
+    "recent_closed": []}}
+
+
+def test_the_split_and_the_open_book_render(monkeypatch):
+    body = _get(monkeypatch, outcomes=UPGRADED)
+    assert "The analyst arm, taken apart" in body and "scored at market n" in body
+    assert "<code>horizon</code>" in body
+    assert "short 2" in body and "SOLUSDT short" in body
+
+
+def test_an_engine_predating_the_split_says_so(monkeypatch):
+    body = _get(monkeypatch)
+    assert "predates the split" in body and "predates the open book" in body
+
+
+def test_contract_split_book_and_no_valid_trade_are_published(tmp_path):
+    if not ENGINE_REPO.exists():
+        pytest.skip(ENGINE_ABSENT)
+    sys.path.insert(0, str(ENGINE_REPO))
+    try:
+        from src import analyst_plan as P  # type: ignore
+        from src import analyst_walk as W  # type: ignore
+        led = P.Ledger(str(tmp_path / "plans.sqlite"))
+        led._connect().close()
+        real = W.summary(path=led.path)
+    finally:
+        sys.path.remove(str(ENGINE_REPO))
+    assert {"analyst_split", "active_book", "recent_closed"} <= set(real)
+    assert {"filled", "scored_at_market", "fill_rate", "filled_by_exit"} <= set(
+        real["analyst_split"])
+    assert {"n", "by_side", "setups"} <= set(real["active_book"])
+    assert all("no_valid_trade" in a for a in real["by_arm"].values())
