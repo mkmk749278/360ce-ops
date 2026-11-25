@@ -1227,3 +1227,8 @@ td, th { font-variant-numeric: tabular-nums; }
 table td.num, table th.num { text-align: right; }
 table th.num { white-space: nowrap; }
 h1 .mono:not(.small) { font-size: inherit; }
+/* A <select> sizes to its longest option. /signals/dark-live's gate filter
+   (long gate names, outside .filters) pushed the page 8px wide on a phone —
+   found on the first live guest read, 2026-11-25. Cap every one. */
+main select { max-width: 100%; }
+main label { max-width: 100%; }
