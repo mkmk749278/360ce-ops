@@ -97,6 +97,8 @@
 </section>
 {% endmacro %}
 
+{% from "_charts.html" import band_block %}
+<section class="card">{{ band_block(charts.band_bars(agg.by_band, 'avg_realized', second='avg_mfe'), 'Realized vs MFE % by score band', first_label='average realized PnL %', second_label='average MFE % — how far the move ran before the exit') }}</section>
 {{ edge_table(agg.by_band, 'By score band') }}
 {{ edge_table(agg.by_setup, 'By setup') }}
 {{ edge_table(agg.by_regime, 'By regime') }}

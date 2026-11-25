@@ -131,6 +131,9 @@
     <strong>net</strong> money: a trade that made less than its own fee did not make money.
   </p>
 
+  {% from "_charts.html" import equity_block %}
+  {{ equity_block(equity) }}
+
   {% if summary.no_pnl %}
   <p class="warn small">
     <strong>{{ summary.no_pnl }} of {{ summary.n }}</strong> trades carry no readable

@@ -14,6 +14,9 @@
   that was the only part of the old alert the reader actually needed.
 </p>
 
+{% set pipe = charts.pipeline(chain) %}
+{% if pipe %}<div class="chart-block">{{ pipe }}
+  <p class="muted small">Each dot is one hop, numbered as in the table; click one to jump to its row. Amber with a hollow centre: nobody could check it.</p></div>{% endif %}
 <table class="data-table">
   <thead>
     <tr><th>#</th><th>Link</th><th>State</th><th>What it says</th><th>Fixed in</th></tr>

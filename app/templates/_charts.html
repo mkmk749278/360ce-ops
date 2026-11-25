@@ -1,0 +1,73 @@
+{#- Renderers for app/charts.py. Every chart prints what it could not place;
+    a chart that cannot be drawn says why instead of drawing a shape. -#}
+
+{% macro equity_block(eq) %}
+<div class="chart-block">
+  <h3>Cumulative net USDT <span class="muted small">by close time · drawdown from the running peak below</span></h3>
+  {% if eq.svg %}
+    {{ eq.svg }}
+    <div class="chart-axis muted small mono">
+      <span>{{ eq.start }}</span>
+      <span>final <strong class="{{ 'pos' if eq.final > 0 else 'neg' if eq.final < 0 else '' }}">{{ '%+.2f' % eq.final }}</strong>
+        · peak-to-trough <strong class="neg">{{ '%.2f' % eq.max_dd }}</strong>
+        · range {{ '%.2f' % eq.lo }} → {{ '%.2f' % eq.hi }}</span>
+      <span>{{ eq.end }}</span>
+    </div>
+  {% else %}
+    <p class="muted small">No chart: {{ eq.why }}.</p>
+  {% endif %}
+  {% if eq.skipped %}<p class="muted small">{{ eq.skipped }} trade(s) have no close time or no priced PnL and are not on the curve; they are still in the figures above.</p>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro band_block(b, label, unit='%', first_label=none, second_label=none) %}
+<div class="chart-block">
+  <h3>{{ label }}</h3>
+  {% if b.rows %}
+  <div class="bars">
+    {% for r in b.rows %}
+    <div class="bar-row">
+      <span class="bar-key mono">{{ r.key }}</span>
+      <span class="bar-track">
+        <span class="bar-mid"></span>
+        {% if r.second is not none %}<span class="bar bar-second {{ 'pos' if r.second_pos else 'neg' }}" style="{{ 'left:50%' if r.second_pos else 'right:50%' }};width:{{ r.second_width }}%"></span>{% endif %}
+        <span class="bar {{ 'pos' if r.pos else 'neg' }}" style="{{ 'left:50%' if r.pos else 'right:50%' }};width:{{ r.width }}%"></span>
+      </span>
+      <span class="bar-val num mono {{ 'pos' if r.value > 0 else 'neg' if r.value < 0 else '' }}">{{ '%+.3f' % r.value }}{{ unit }}{% if r.second is not none %} <span class="muted">/ {{ '%+.3f' % r.second }}</span>{% endif %}</span>
+      <span class="bar-n muted small">n {{ r.n }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% if second_label %}<p class="muted small">Solid: {{ first_label }}. Faint, behind it: {{ second_label }}.</p>{% endif %}
+  {% else %}
+  <p class="muted small">No chart: {{ b.why }}.</p>
+  {% endif %}
+  {% if b.skipped %}<p class="muted small">{{ b.skipped }} band(s) carry no value and are not drawn.</p>{% endif %}
+</div>
+{% endmacro %}
+
+{% macro funnel_block(f) %}
+<div class="chart-block">
+  <h3>Delivery funnel <span class="muted small">share of what the router dequeued</span></h3>
+  {% if f.ok %}
+  <div class="funnel-bar" role="img" aria-label="{{ f.delivered }} of {{ f.processed }} delivered">
+    <span class="seg seg-ok" style="width:{{ f.delivered_pct }}%" title="delivered {{ f.delivered }}"></span>
+    <span class="seg seg-bad" style="width:{{ f.dropped_pct }}%" title="dropped {{ f.dropped }}"></span>
+  </div>
+  <p class="small mono">{{ f.processed }} dequeued → <span class="pos">{{ f.delivered }} delivered ({{ '%.1f' % f.delivered_pct }}%)</span> · <span class="neg">{{ f.dropped }} dropped ({{ '%.1f' % f.dropped_pct }}%)</span></p>
+  {% if f.reasons %}
+  {%- set RC = ['seg-r0', 'seg-r1', 'seg-r2', 'seg-r3', 'seg-r4', 'seg-r5', 'seg-r6'] %}
+  <div class="funnel-bar funnel-reasons">
+    {% for r in f.reasons %}<span class="seg {{ RC[loop.index0 % 7] }}" style="width:{{ r.pct }}%" title="{{ r.label }} {{ r.n }}"></span>{% endfor %}
+  </div>
+  <ul class="funnel-legend small">
+    {% for r in f.reasons %}<li><span class="sw {{ RC[loop.index0 % 7] }}"></span><code>{{ r.label }}</code> {{ r.n }} <span class="muted">({{ '%.1f' % r.pct }}%)</span></li>{% endfor %}
+  </ul>
+  {% endif %}
+  {% if f.unattributed %}<p class="muted small">{{ f.unattributed }} drop(s) carry no reason counter — the reasons and the dropped total disagree, and the gap is shown, not spread across them.</p>{% endif %}
+  {% if f.over_attributed %}<p class="muted small">The reason counters sum to {{ f.over_attributed }} more than the dropped total; one candidate can be counted under more than one reason.</p>{% endif %}
+  {% else %}
+  <p class="muted small">No chart: {{ f.why }}.</p>
+  {% endif %}
+</div>
+{% endmacro %}

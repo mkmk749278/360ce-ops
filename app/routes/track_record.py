@@ -53,6 +53,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
+from app import charts
 from fastapi import APIRouter, Query, Request
 
 from app.data_sources import entry_fidelity
@@ -970,6 +971,9 @@ async def track_record(
             getattr(request.app.state.settings, "local_tz_hint", "")
         ),
         "summary": summary,
+        # Over EVERY filtered row, not the 500-row table: a curve over the
+        # capped page would end wherever the cap bit (#97).
+        "equity": charts.equity_curve(rows),
         "fidelity": fidelity,
         "fidelity_by_admission": fidelity_by_admission,
         "mfe_floor": mfe_floor,
