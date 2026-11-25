@@ -48,15 +48,24 @@ def ladder(
         return {"refused": "stop, entry or target not reported"}
     far = targets[-1][1]
     sign = 1 if side == "LONG" else -1
-    chain = [sl, en] + [v for _, v in targets]
+    chain = [en] + [v for _, v in targets]
     if any(sign * (b - a) <= 0 for a, b in zip(chain, chain[1:], strict=False)):
-        return {"refused": f"levels are not ordered for a {side}"}
-    span = far - sl
+        return {"refused": f"targets are not ordered beyond entry for a {side}"}
+    # A stop at or past entry is a normal live state — a break-even shift or a
+    # trail moved it (first live read, 2026-11-25: FILUSDT SHORT, SL = entry).
+    # The axis then starts at entry and the stop is drawn where it now rests.
+    # Only a stop beyond the last target has no honest axis.
+    moved = sign * (en - sl) <= 0
+    if sign * (far - sl) <= 0:
+        return {"refused": f"stop is beyond the last target for a {side}"}
+    left = en if moved else sl
+    span = far - left
 
     def pos(p: float) -> float:
-        return round((p - sl) / span * 100.0, 2)
+        return round((p - left) / span * 100.0, 2)
 
-    marks = [{"label": "SL", "price": sl, "pos": 0.0, "kind": "stop"},
+    marks = [{"label": "SL (moved)" if moved else "SL", "price": sl, "pos": pos(sl),
+              "kind": "stop-now" if moved else "stop"},
              {"label": "Entry", "price": en, "pos": pos(en), "kind": "entry"}]
     marks += [{"label": n, "price": v, "pos": pos(v), "kind": "target"} for n, v in targets]
     sn = _f(stop_now)
