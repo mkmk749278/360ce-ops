@@ -180,6 +180,8 @@ pre.mono, pre.small {
 /* ---- Forms ---- */
 .filters { display: flex; gap: 0.8rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
 .filters label { display: flex; flex-direction: column; font-size: 0.8rem; color: var(--fg-dim); gap: 0.25rem; }
+/* A select sizes to its longest option; on a phone that pushed /profit 10px wide. */
+.filters label, .filters select, .filters input { max-width: 100%; min-width: 0; }
 input, select {
   background: var(--bg-elev);
   border: 1px solid var(--border);
@@ -336,6 +338,11 @@ table.tunables td { padding: 0.5rem 0.65rem; border-bottom: 1px solid var(--bord
    and never defined, so both overflowed the viewport (found 2026-09-24 while
    laying out /control/routing, which needs the same thing). */
 .table-scroll { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+
+/* A long unbroken diagnostic string (a liveness Detail on / and /truth) used
+   to push its table — and the page — sideways. Only these free-text cells
+   wrap anywhere; codes and symbols elsewhere in a table must not split. */
+.cell-wrap { max-width: 380px; overflow-wrap: anywhere; word-break: break-word; }
 
 /* ---- One unified badge system ---- */
 .badge {

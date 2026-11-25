@@ -184,6 +184,21 @@ def test_every_nav_destination_answers():
     with TestClient(app) as client:
         client.post("/login", data={"password": os.environ["OPS_AUTH_TOKEN"]},
                     follow_redirects=False)
+        unlit: list[str] = []
         for path, label, _ in _nav_entries():
             r = client.get(path, follow_redirects=False)
             assert r.status_code != 404, f"{label} ({path}) 404s from the nav"
+            if r.status_code != 200 or "text/html" not in r.headers.get("content-type", ""):
+                continue
+            # The page must light up ITS OWN tab. `test_each_page_sets_its_own_
+            # active_key` skips a handler that sets no `active` at all, which is
+            # exactly how /signals/entry-features rendered with no sub-nav bar
+            # (outside audit, 2026-11-25). The rendered page is the authority.
+            on = re.findall(r'<a href="([^"]+)" class="on">', r.text)
+            if path not in on:
+                unlit.append(f"{label} ({path}) marks {on or 'nothing'}")
+        assert not unlit, (
+            "page(s) render without their own nav tab marked active — the "
+            "handler is not passing the nav's `active` key:\n  "
+            + "\n  ".join(unlit)
+        )

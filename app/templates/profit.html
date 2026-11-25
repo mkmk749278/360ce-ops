@@ -28,6 +28,8 @@
 <section class="card neg">Engine API error: {{ error }}</section>
 {% endif %}
 
+{% include "_binance_ban.html" %}
+
 {% if summary.degraded %}
 <p class="small muted" style="margin:0 0 .5rem">ℹ {{ summary.degraded }} row(s): "Result (held)" and
   "Max profit" use engine-recorded values (Binance candles unavailable on this host) —

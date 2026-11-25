@@ -141,6 +141,22 @@
     });
   })();
 
+  /* No table may widen the page. Several did (PNL % clipped on /positions,
+     VERDICT on /strategy-lab — outside audit, 2026-11-25), each because its
+     template forgot the .table-scroll wrapper. Rather than remember it on every
+     table, wrap any table in <main> that is not already inside a scroll box,
+     so a wide one scrolls inside its card instead. */
+  (function () {
+    document.querySelectorAll('main table').forEach(function (t) {
+      var p = t.parentElement;
+      if (!p || p.closest('.table-scroll')) return;
+      var box = document.createElement('div');
+      box.className = 'table-scroll';
+      p.insertBefore(box, t);
+      box.appendChild(t);
+    });
+  })();
+
   /* The ⓘ popovers (_info.html). A <details> already opens and closes with no
      script; this only makes it behave like a popover: one open at a time, a
      tap outside or Escape closes it, and near the right edge it opens

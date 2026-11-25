@@ -914,11 +914,17 @@ async def profit(
         regime=combo_regime or None,
         min_n=combo_min_n,
     )
+    # Same breaker as /dark-signals: when it is open the degraded rows have a
+    # named cause, and the reader should see it rather than a bare count.
+    klines = getattr(request.app.state, "binance_klines", None)
+    ban_open = bool(klines is not None and klines.circuit_open)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "profit.html",
         {
             "request": request,
+            "ban_seconds": int(klines.ban_seconds_remaining) if ban_open else 0,
+            "ban_reason": klines.ban_reason if ban_open else "",
             "rows": pagination["rows"],
             "summary": _summary(rows),
             "aggregates": _aggregates(rows),

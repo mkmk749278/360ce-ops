@@ -25,7 +25,7 @@
         <tr>
           <td class="mono">{{ name }}</td>
           <td><span class="badge {% if f.status == 'ok' %}st-active{% elif f.status == 'violating' %}st-open{% else %}st-expired{% endif %}">{{ f.status }}</span></td>
-          <td class="muted">{{ f.detail }}</td>
+          <td class="muted cell-wrap">{{ f.detail }}</td>
           <td>{{ f.streak }}</td>
         </tr>
         {% endfor %}
