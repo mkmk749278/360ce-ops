@@ -16,10 +16,24 @@
         <em>fixed rule</em> (same symbol and side, levels picked mechanically
         from the same menu) matches the analyst net of fees, the model added
         nothing and we ship the rule.</p>
-      <p>Net of a 0.07% round trip. Stop first on an ambiguous bar; no target
-        on a limit's fill bar. An unfilled limit is scored at the market
-        outcome. Read <strong>n</strong> before any average, and the
-        without-top-1% column beside it, because our gross is tail-driven.</p>
+      <p><strong>Realized</strong> is what a posted order earned: a limit the
+        market never reached earned <strong>0.00%</strong>, and a partial
+        tranche earns its return times the share that filled. Net of a flat
+        0.07% round trip. <em>Cost model</em> charges maker 0.02% / taker 0.05%
+        by order type, plus funding from the derivatives recorder at the
+        symbol's own settlement times. Slippage is not modelled. A row whose
+        funding the recorder cannot price is left out, so the cost model is
+        shown beside the flat-fee result <em>over the same rows</em>: their
+        gap is cost alone. Read how many of those rows were fills.</p>
+      <p>Before walk v2 (2026-11-27) the headline scored an unfilled limit at
+        the <em>market</em> outcome. That population is selected: a limit
+        goes unfilled because price ran away from it, so its market outcome
+        is conditionally good. It is shown on its own below and is never an
+        expected result.</p>
+      <p>Stop first on an ambiguous bar; no target on a limit's fill bar.
+        Read <strong>n</strong> before any average, the without-top-1% column
+        beside it, and <em>days +</em>: alts move with BTC, so a day of
+        same-side setups is close to one bet.</p>
     {% endcall %}
   </div>
 
@@ -33,23 +47,38 @@
     <p class="muted">No plan has been submitted yet (<code>{{ out_detail }}</code>).
       Expected until the hourly sessions start (spec step 5).</p>
   {% else %}
+    {% set realized = rows and rows[0].basis %}
+    {% if not realized %}
+      <p class="warn">OLD ENGINE — this engine publishes no headline basis, so
+        <em>Avg net</em> below still scores unfilled limits at the market
+        outcome. Read the analyst split card instead.</p>
+    {% else %}
+      <p class="small muted">Headline: <code>{{ rows[0].basis }}</code>{% if walk_version %} · walk v{{ walk_version }}{% endif %}</p>
+    {% endif %}
     <div class="table-scroll">
     <table class="data-table">
       <thead><tr><th>Arm</th><th class="num">n</th><th class="num">Win %</th>
-        <th class="num">Avg net %</th><th class="num">Avg net % w/o top 1%</th>
-        <th class="num">Total net %</th><th class="num">Unfilled → market</th>
+        <th class="num">{{ 'Realized' if realized else 'Avg net' }} %</th>
+        <th class="num">w/o top 1%</th><th class="num">Total %</th>
+        <th class="num">Filled only (n · avg)</th>
+        <th class="num">Cost model avg vs flat, same rows (n · filled · unknown)</th>
+        <th class="num">Days + / days</th>
         <th class="num">No valid trade</th>
         <th class="num">Open</th><th class="num">Insufficient</th></tr></thead>
       <tbody>
       {% for r in rows %}
         <tr>
-          <td>{{ r.label }}{% if not r.known %} <span class="badge badge-warn">unclassified</span>{% endif %}</td>
+          <td>{{ r.label }}{% if not r.known %} <span class="badge badge-warn">unclassified</span>{% endif %}
+            {% if r.excluded_blend_defect %}<div class="muted small">{{ r.excluded_blend_defect }} v1 blended row(s) held out until re-walked</div>{% endif %}</td>
           <td class="num"><strong>{{ r.n }}</strong></td>
           <td class="num">{{ (r.win_rate * 100)|pct if r.win_rate is not none else '—' }}</td>
-          <td class="num">{{ r.avg_net_pct|pct }}</td>
+          <td class="num"><strong>{{ r.avg_net_pct|pct }}</strong></td>
           <td class="num">{{ r.trim_avg|pct }}{% if r.trim_dropped %} <span class="muted small">(−{{ r.trim_dropped }})</span>{% endif %}</td>
           <td class="num">{{ r.total_net_pct|pct }}</td>
-          <td class="num">{{ r.unfilled }}</td>
+          <td class="num">{% if r.filled_n is not none %}{{ r.filled_n }} · {{ r.filled_avg|pct }}{% else %}—{% endif %}</td>
+          <td class="num">{% if r.cost_n %}{{ r.cost_avg|pct }} vs {{ r.cost_flat_same|pct }}{% elif r.cost_n is not none %}—{% else %}—{% endif %}
+            {% if r.cost_n is not none %}<span class="muted small">({{ r.cost_n }} · {{ r.cost_known_filled if r.cost_known_filled is not none else '?' }} · {{ r.cost_unknown }})</span>{% endif %}</td>
+          <td class="num">{% if r.n_days %}{{ r.days_positive }} / {{ r.n_days }}{% else %}—{% endif %}</td>
           <td class="num">{{ r.no_valid_trade if r.no_valid_trade is not none else '—' }}</td>
           <td class="num">{{ r.open }}</td>
           <td class="num">{{ r.insufficient }}</td>
@@ -68,9 +97,10 @@
 <div class="card">
   <div class="card-title"><h2>The analyst arm, taken apart</h2>
     {% call info("Why this card exists") %}
-      <p>The analyst arm's headline pools limits that <strong>filled</strong>
-        with limits that never filled and are <strong>scored at the market
-        outcome</strong>. Read alone, it is partly the market arm.</p>
+      <p>Limits that <strong>filled</strong> beside limits that never filled,
+        <strong>scored at the market outcome</strong>. The second figure is a
+        counterfactual over a selected population; the realized headline
+        counts those rows at 0.00%.</p>
       <p>A filled setup has <strong>three</strong> endings, not two: the first
         target, the stop, or the 12h time exit. An expectancy written as
         p(target) × R − (1 − p) books every time exit as a full loss.</p>
@@ -96,6 +126,114 @@
           <td class="num">{{ (v.share * 100)|pct }}</td><td class="num">{{ v.avg_net_pct|pct }}</td></tr>
       {% endfor %}</tbody></table></div>
     {% else %}<p class="muted small">No filled setup has resolved yet.</p>{% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-title"><h2>What a missed limit would have made</h2>
+    {% call info("Why this is not an expected result") %}
+      <p>Each limit arm's unfilled rows, scored at the market outcome. A limit
+        goes unfilled because price moved away from it, often in the trade's
+        direction, so this population is selected for winners. The
+        unconditional answer to "what if we entered at market" is the
+        <em>Market at submit</em> row above.</p>
+    {% endcall %}
+  </div>
+  {% set lim = rows|selectattr('missed_n', 'ne', none)|list %}
+  {% if not lim %}
+    <p class="muted">Not reported by this engine (it predates walk v2).</p>
+  {% else %}
+  <div class="table-scroll"><table class="data-table">
+    <thead><tr><th>Arm</th><th class="num">Unfilled n</th><th class="num">Their market outcome, avg %</th>
+      <th class="num">Old headline (unfilled at market), avg %</th></tr></thead>
+    <tbody>{% for r in lim %}
+      <tr><td>{{ r.label }}</td><td class="num"><strong>{{ r.missed_n }}</strong></td>
+        <td class="num">{{ r.missed_avg|pct }}</td><td class="num">{{ r.old_avg|pct }}</td></tr>
+    {% endfor %}</tbody></table></div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-title"><h2>Analyst arm — rules that only remove fills</h2>
+    {% call info("How to read the what-ifs") %}
+      <p>Each rule can only cancel a fill, and a cancelled fill earns 0.00%,
+        so each line is exact under the walk's own rules: no price is
+        invented. <em>Expiry 2h / 4h</em>: a fill later than that never
+        happens. <em>Cancel if TP1 first</em>: the limit is pulled once
+        price touches the first target before reaching the entry; rows walked
+        before walk v2 carry no such stamp and are counted unknown.</p>
+    {% endcall %}
+  </div>
+  {% if not whatif %}
+    <p class="muted">Not reported by this engine (it predates walk v2).</p>
+  {% else %}
+  <div class="table-scroll"><table class="data-table">
+    <thead><tr><th>Rule</th><th class="num">n</th><th class="num">Realized avg %</th>
+      <th class="num">Total %</th><th class="num">Fills dropped</th><th class="num">Unknown</th></tr></thead>
+    <tbody>
+    {% for key, label in [('baseline', 'As walked (expiry as planned)'), ('expiry_2h', 'Expiry 2h'), ('expiry_4h', 'Expiry 4h'), ('cancel_if_tp1_first', 'Cancel if TP1 first')] %}
+      {% set w = whatif.get(key) or {} %}
+      <tr><td>{{ label }}</td><td class="num"><strong>{{ w.get('n', 0) }}</strong></td>
+        <td class="num">{{ w.get('avg_net_pct')|pct }}</td><td class="num">{{ w.get('total_net_pct')|pct }}</td>
+        <td class="num">{{ w.get('fills_dropped', '—') }}</td><td class="num">{{ w.get('unknown', '—') }}</td></tr>
+    {% endfor %}
+    </tbody></table></div>
+  <p class="small muted">Unfilled limits where price reached TP1 before expiry: <strong>{{ whatif.get('unfilled_ran_to_tp1', '—') }}</strong>.</p>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-title"><h2>Day by day (realized total per UTC submit day)</h2>
+    {% call info("Why days") %}
+      <p>Setups placed the same day share BTC's move, so they are not
+        independent. A positive average built on one good day is one result,
+        not many. Each cell is that arm's realized total for the day, with its
+        row count.</p>
+    {% endcall %}
+  </div>
+  {% if not days %}
+    <p class="muted">Not reported by this engine (it predates walk v2), or no row has resolved.</p>
+  {% else %}
+  <div class="table-scroll"><table class="data-table">
+    <thead><tr><th>Day (UTC)</th><th class="num">Analyst</th><th class="num">Market</th><th class="num">Fixed rule</th></tr></thead>
+    <tbody>{% for d in days %}
+      <tr><td class="nowrap">{{ d.day }}</td>
+      {% for k in ('analyst', 'market', 'fixed_rule') %}
+        {% set c = d.get(k) %}
+        <td class="num">{% if c %}{{ c.total_pct|pct }} <span class="muted small">({{ c.n }})</span>{% else %}—{% endif %}</td>
+      {% endfor %}</tr>
+    {% endfor %}</tbody></table></div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-title"><h2>Forecast calibration</h2>
+    {% call info("Brier, and the bar it must clear") %}
+      <p>Scored on the analyst arm's FILLED setups only: an unfilled limit
+        never tested the forecast. A Brier score is lower-is-better, and it
+        says nothing unless it beats always forecasting the observed rate
+        (<em>base rate</em>). The three-outcome score (target / stop / 12h
+        time exit, 0–2) counts only setups that stated <code>p_stop</code>.</p>
+    {% endcall %}
+  </div>
+  {% set cal = calibration or {} %}
+  {% if not cal.get('n') %}
+    <p class="muted">No filled setup with a stated p(target) has resolved{% if cal.get('reason') %} ({{ cal.reason }}){% endif %}.</p>
+  {% else %}
+    {% set beat = cal.brier < cal.brier_of_base_rate %}
+    <p class="small">p(TP1), n <strong>{{ cal.n }}</strong>: mean stated {{ cal.mean_p_target }}, hit {{ cal.hit_rate }}
+      · Brier <strong>{{ cal.brier }}</strong> vs base rate {{ cal.brier_of_base_rate }}
+      {% if beat %}<span class="badge badge-ok">beats base rate</span>{% else %}<span class="badge badge-warn">no better than base rate</span>{% endif %}</p>
+    {% set t = cal.get('three_outcome') %}
+    {% if t is none %}
+      <p class="muted small">Three-outcome score not reported by this engine.</p>
+    {% elif not t.get('n') %}
+      <p class="muted small">Three-outcome: {{ t.get('reason') or 'no rows yet' }}.</p>
+    {% else %}
+      <p class="small">Three-outcome, n <strong>{{ t.n }}</strong>: Brier <strong>{{ t.brier }}</strong> vs base rate {{ t.brier_of_base_rate }}
+        · observed target {{ t.observed.target }} / stop {{ t.observed.stop }} / time {{ t.observed.horizon }}
+        · forecast {{ t.mean_forecast.target }} / {{ t.mean_forecast.stop }} / {{ t.mean_forecast.horizon }}</p>
+    {% endif %}
   {% endif %}
 </div>
 

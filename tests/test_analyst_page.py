@@ -315,3 +315,83 @@ def test_contract_split_book_and_no_valid_trade_are_published(tmp_path):
         real["analyst_split"])
     assert {"n", "by_side", "setups"} <= set(real["active_book"])
     assert all("no_valid_trade" in a for a in real["by_arm"].values())
+
+
+# ── walk v2 (2026-11-27): realized headline, cost model, what-ifs, days ─────
+
+
+def _walked_engine_summary(tmp_path):
+    """The engine's REAL summary over a ledger with one filled and one
+    unfilled setup, walked by the engine's real step."""
+    import json as _json
+    sys.path.insert(0, str(ENGINE_REPO))
+    try:
+        from src import analyst_plan as P  # type: ignore
+        from src import analyst_walk as W  # type: ignore
+        from src.historical_data import HistoricalDataStore  # type: ignore
+        led = P.Ledger(str(tmp_path / "plans.sqlite"))
+        con = led._connect()
+        t0 = 1_800_000_000.0
+        with con:
+            con.execute("INSERT INTO plans (plan_id, submitted_at) VALUES ('p', ?)", (t0,))
+            for i, (entry, stop) in enumerate(((99.0, 97.0), (90.0, 88.0))):
+                con.execute(
+                    "INSERT INTO setups (setup_id, plan_id, idx, symbol, side, status,"
+                    " entries_json, stop_price, targets_json, expires_at, submitted_at,"
+                    " p_target, p_stop) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (f"p:{i}", "p", i, "X", "long", "accepted",
+                     _json.dumps([{"id": "e", "price": entry, "weight": 1.0}]), stop,
+                     _json.dumps([{"id": "t", "price": 103.0}, {"id": "t2", "price": 106.0}]),
+                     t0 + 3600, t0, 0.4, 0.35))
+        con.close()
+        st = HistoricalDataStore()
+        bars = [(100, 100.5, 99.5, 100), (100, 100, 98.8, 99.2)] + \
+            [(99.5, 100, 99.4, 99.8)] * 12 + [(100, 106.5, 99.9, 106)]
+        for i, (o, h, lo, c) in enumerate(bars):
+            st.update_candle("X", "5m", {"open": o, "high": h, "low": lo, "close": c,
+                                         "volume": 1, "open_time": (t0 + 300 * i) * 1000})
+        eng = type("E", (), {"data_store": st})()
+        now = t0 + 200 * 300
+        W.step(eng, now=now, path=led.path, deriv_path="")
+        return W.summary(path=led.path, now=now)
+    finally:
+        sys.path.remove(str(ENGINE_REPO))
+
+
+def test_contract_walk_v2_blocks_are_where_this_page_reads_them(tmp_path):
+    if not ENGINE_REPO.exists():
+        pytest.skip(ENGINE_ABSENT)
+    real = _walked_engine_summary(tmp_path)
+    rows = {r["key"]: r for r in analyst.arm_rows(real["by_arm"])}
+    assert all(r["known"] for r in rows.values()), "an engine arm has no label here"
+    a = rows["analyst"]
+    assert a["basis"] and a["basis"].startswith("realized")
+    # One limit filled, one never reached: realized counts the second at 0.00%.
+    assert a["n"] == 2 and a["filled_n"] == 1 and a["missed_n"] == 1
+    assert a["avg_net_pct"] < a["old_avg"], "the old headline scored the miss at market"
+    assert a["cost_n"] is not None and a["cost_unknown"] is not None
+    assert rows["market"]["missed_n"] is None, "a market entry never misses"
+    assert a["n_days"] == 1
+    assert {"baseline", "expiry_2h", "expiry_4h", "cancel_if_tp1_first"} <= set(
+        real["analyst_whatif"])
+    assert "three_outcome" in real["calibration"]
+    days = analyst.day_rows(real["by_arm"])
+    assert days and days[0]["analyst"]["n"] == 2
+
+
+def test_v2_payload_renders_realized_and_the_missed_card(monkeypatch, tmp_path):
+    if not ENGINE_REPO.exists():
+        pytest.skip(ENGINE_ABSENT)
+    real = _walked_engine_summary(tmp_path)
+    body = _get(monkeypatch, outcomes={"ok": True, "error": "", "result": real})
+    assert "Realized %" in body and "OLD ENGINE" not in body
+    assert "What a missed limit would have made" in body
+    assert "rules that only remove fills" in body
+    assert "Half at TP1" in body or "half at TP1" in body
+
+
+def test_an_engine_without_a_basis_is_badged_old_not_read_as_realized(monkeypatch):
+    body = _get(monkeypatch)
+    assert "OLD ENGINE" in body and "Avg net %" in body
+    assert "Realized %" not in body
+    assert "predates walk v2" in body
