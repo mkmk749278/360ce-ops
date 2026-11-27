@@ -41,6 +41,7 @@ STATE_OK = "ok"
 ARM_LABELS = {
     "analyst": "Analyst — limit at its first entry level",
     "tranche": "Analyst — its own tranches",
+    "ladder": "Analyst — half at TP1, half to TP2",
     "fixed_rule": "Fixed rule — same menu, mechanical levels",
     "market": "Market at submit",
     "none": "No trade",
@@ -73,7 +74,26 @@ def arm_rows(by_arm: dict) -> list[dict]:
     for k in keys:
         a = by_arm.get(k) or {}
         trim = a.get("without_top_1pct") or {}
+        filled = a.get("filled") or {}
+        cost = a.get("cost_model") or {}
+        old = a.get("with_unfilled_at_market") or {}
+        missed = a.get("missed_market") or {}
+        day = a.get("by_day") or {}
         rows.append({
+            # The engine says what its headline is (walk v2, 2026-11-27: realized
+            # per setup posted, an unfilled limit = 0.00%). An engine predating it
+            # sends no basis, and its headline pooled unfilled rows at market.
+            "basis": a.get("basis"),
+            "filled_n": filled.get("n"), "filled_avg": filled.get("avg_net_pct"),
+            "cost_n": cost.get("n"), "cost_avg": cost.get("avg_net_pct"),
+            "cost_unknown": cost.get("unknown"),
+            "cost_known_filled": cost.get("known_filled"),
+            "cost_flat_same": cost.get("flat_fee_same_rows_avg_pct"),
+            "old_avg": old.get("avg_net_pct"), "missed_n": missed.get("n"),
+            "missed_avg": missed.get("avg_net_pct"),
+            "n_days": day.get("n_days"), "days_positive": day.get("days_positive"),
+            "avg_day_total": day.get("avg_day_total_pct"),
+            "excluded_blend_defect": a.get("excluded_blend_defect"),
             "key": k, "label": ARM_LABELS.get(k, k), "known": k in ARM_LABELS,
             "n": a.get("n", 0), "win_rate": a.get("win_rate"),
             "avg_net_pct": a.get("avg_net_pct"), "total_net_pct": a.get("total_net_pct"),
@@ -84,6 +104,15 @@ def arm_rows(by_arm: dict) -> list[dict]:
             "no_valid_trade": a.get("no_valid_trade"),
         })
     return rows
+
+
+def day_rows(by_arm: dict, arms: tuple = ("analyst", "market", "fixed_rule")) -> list[dict]:
+    """Per UTC submit day, each arm's realized total side by side. Days come
+    from the engine's rows; a day one arm lacks reads as missing, not zero."""
+    per = {k: {d["day"]: d for d in ((by_arm.get(k) or {}).get("by_day") or {}).get("days") or []}
+           for k in arms}
+    days = sorted({d for m in per.values() for d in m}, reverse=True)
+    return [{"day": d, **{k: per[k].get(d) for k in arms}} for d in days]
 
 
 @router.get("/analyst")
@@ -111,6 +140,10 @@ async def analyst_page(request: Request):
         "note": outcomes.get("note"),
         # Each None = an engine predating it (2026-11-25), rendered as such.
         "split": outcomes.get("analyst_split"),
+        "whatif": outcomes.get("analyst_whatif"),
+        "calibration": outcomes.get("calibration"),
+        "walk_version": outcomes.get("walk_version"),
+        "days": day_rows(outcomes.get("by_arm") or {}),
         "book": outcomes.get("active_book"),
         "recent_closed": outcomes.get("recent_closed"),
         "plans_state": plans_state, "plans_detail": plans_detail,
