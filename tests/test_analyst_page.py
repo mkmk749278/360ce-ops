@@ -413,3 +413,56 @@ def test_an_engine_without_a_basis_is_badged_old_not_read_as_realized(monkeypatc
     assert "OLD ENGINE" in body and "Avg net %" in body
     assert "Realized %" not in body
     assert "predates walk v2" in body
+
+
+# ── analyst vs the existing system (2026-11-27) ─────────────────────────────
+
+
+def test_comparison_without_the_engine_block_is_a_deploy_question(monkeypatch):
+    assert analyst.comparison(OUTCOMES["result"]) is None
+    body = _get(monkeypatch)
+    assert "it predates the comparison" in body
+
+
+def test_contract_the_comparison_is_where_this_page_reads_it(tmp_path, monkeypatch):
+    if not ENGINE_REPO.exists():
+        pytest.skip(ENGINE_ABSENT)
+    real = _walked_engine_summary(tmp_path)
+    if real.get("walk_version") is None or "existing_signals" not in real:
+        # An engine predating the comparison renders as one, never as empty.
+        assert analyst.comparison(real) is None
+        return
+    cmp = analyst.comparison(real)
+    assert cmp is not None and cmp["rows"][0]["label"].startswith("Existing system")
+    assert {r["label"] for r in cmp["rows"][1:]} >= {ARM for ARM in (
+        analyst.ARM_LABELS["analyst"], analyst.ARM_LABELS["market"])}
+    assert "by_prompt_version" in real and "analyst_by_archetype_side" in real
+    body = _get(monkeypatch, outcomes={"ok": True, "error": "", "result": real})
+    assert "Analyst vs the existing system" in body and "By prompt version" in body
+
+
+def test_existing_rows_render_first_with_their_numbers(monkeypatch):
+    out = dict(OUTCOMES["result"])
+    out["existing_signals"] = {
+        "readable": True, "since": 1_795_000_000, "n": 404, "win_rate": 0.35,
+        "avg_net_pct": 0.165, "total_net_pct": 66.7,
+        "without_top_1pct": {"dropped": 4, "n": 400, "avg_net_pct": 0.09},
+        "by_day": {"n_days": 7, "days_positive": 4, "days": [
+            {"day": "2026-11-26", "n": 56, "total_pct": 0.3}]},
+        "by_setup_side": [{"key": "QUIET_COMPRESSION_BREAK SHORT", "n": 40,
+                           "win_rate": 0.35, "avg_net_pct": 0.4, "total_net_pct": 16.0,
+                           "without_top_1pct": {"avg_net_pct": 0.3}}]}
+    cmp = analyst.comparison(out)
+    assert cmp["rows"][0]["n"] == 404 and cmp["rows"][0]["days_pos"] == 4
+    days = analyst.day_rows(out["by_arm"], existing=out["existing_signals"])
+    assert days[0]["existing"]["n"] == 56
+    body = _get(monkeypatch, outcomes={"ok": True, "error": "", "result": out})
+    assert "Existing system — signals users received" in body
+    assert "QUIET_COMPRESSION_BREAK SHORT" in body
+
+
+def test_an_unreadable_existing_record_names_its_cause(monkeypatch):
+    out = dict(OUTCOMES["result"])
+    out["existing_signals"] = {"readable": False, "reason": "unreadable"}
+    body = _get(monkeypatch, outcomes={"ok": True, "error": "", "result": out})
+    assert "could not be read" in body and "unreadable" in body
