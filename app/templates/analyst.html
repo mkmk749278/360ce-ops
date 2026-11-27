@@ -6,6 +6,57 @@
 <p class="small"><a href="/signals/analyst">Each setup as a signal card →</a></p>
 
 <div class="card">
+  <div class="card-title"><h2>Analyst vs the existing system</h2>
+    {% call info("What is compared, and what is not") %}
+      <p>The <strong>existing system</strong> row is every signal users actually
+        received that closed inside the analyst's window, from the recorded
+        track record (never reconstructed), minus the same flat 0.07% fee the
+        analyst arms pay. The analyst rows are its dark walk: realized per setup
+        posted, an unfilled limit counted at 0.00%.</p>
+      <p>They trade different symbols at different times, so this is a
+        same-window comparison, not a per-trade pairing. The existing system is
+        bucketed by close day, the analyst by submit day; they differ by under
+        a day. Read <em>w/o top 1%</em> and <em>days +</em> before the average:
+        a handful of large trades or one good day can carry either.</p>
+    {% endcall %}
+  </div>
+  {% if out_state != 'ok' %}
+    <p class="muted">Needs the outcomes read above.</p>
+  {% elif cmp is none %}
+    <p class="muted">Not reported by this engine (it predates the comparison): a deploy question.</p>
+  {% elif not cmp.readable %}
+    <p class="warn">The existing system's record could not be read: <code>{{ cmp.reason }}</code></p>
+  {% else %}
+    <p class="small muted">Window: from {{ cmp.since|when }} to now.</p>
+    <div class="table-scroll"><table class="data-table">
+      <thead><tr><th>Who</th><th class="num">n</th><th class="num">Win %</th>
+        <th class="num">Avg net %</th><th class="num">w/o top 1%</th><th class="num">Total %</th>
+        <th class="num">Days + / days</th></tr></thead>
+      <tbody>{% for r in cmp.rows %}
+        <tr><td>{% if loop.first %}<strong>{{ r.label }}</strong>{% else %}{{ r.label }}{% endif %}</td>
+          <td class="num"><strong>{{ r.n }}</strong></td>
+          <td class="num">{{ (r.win_rate * 100)|pct if r.win_rate is not none else '—' }}</td>
+          <td class="num"><strong>{{ r.avg|pct }}</strong></td><td class="num">{{ r.trim|pct }}</td>
+          <td class="num">{{ r.total|pct }}</td>
+          <td class="num">{% if r.n_days %}{{ r.days_pos }} / {{ r.n_days }}{% else %}—{% endif %}</td></tr>
+      {% endfor %}</tbody></table></div>
+    {% if cmp.by_setup_side %}
+    <details class="small"><summary>Existing system by setup and side, same window</summary>
+      <div class="table-scroll"><table class="data-table">
+        <thead><tr><th>Setup · side</th><th class="num">n</th><th class="num">Win %</th>
+          <th class="num">Avg net %</th><th class="num">w/o top 1%</th><th class="num">Total %</th></tr></thead>
+        <tbody>{% for g in cmp.by_setup_side %}
+          <tr><td class="nowrap">{{ g.key }}</td><td class="num"><strong>{{ g.n }}</strong></td>
+            <td class="num">{{ (g.win_rate * 100)|pct if g.win_rate is not none else '—' }}</td>
+            <td class="num">{{ g.avg_net_pct|pct }}</td><td class="num">{{ (g.without_top_1pct or {}).avg_net_pct|pct }}</td>
+            <td class="num">{{ g.total_net_pct|pct }}</td></tr>
+        {% endfor %}</tbody></table></div>
+    </details>
+    {% endif %}
+  {% endif %}
+</div>
+
+<div class="card">
   <div class="card-title"><h2>Does the model add anything?</h2>
     {% call info("How to read this") %}
       <p>The hourly analyst picks levels by id from the engine's menu. Every
@@ -195,14 +246,47 @@
     <p class="muted">Not reported by this engine (it predates walk v2), or no row has resolved.</p>
   {% else %}
   <div class="table-scroll"><table class="data-table">
-    <thead><tr><th>Day (UTC)</th><th class="num">Analyst</th><th class="num">Market</th><th class="num">Fixed rule</th></tr></thead>
+    <thead><tr><th>Day (UTC)</th><th class="num">Existing system</th><th class="num">Analyst</th><th class="num">Market</th><th class="num">Fixed rule</th></tr></thead>
     <tbody>{% for d in days %}
       <tr><td class="nowrap">{{ d.day }}</td>
-      {% for k in ('analyst', 'market', 'fixed_rule') %}
+      {% for k in ('existing', 'analyst', 'market', 'fixed_rule') %}
         {% set c = d.get(k) %}
         <td class="num">{% if c %}{{ c.total_pct|pct }} <span class="muted small">({{ c.n }})</span>{% else %}—{% endif %}</td>
       {% endfor %}</tr>
     {% endfor %}</tbody></table></div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-title"><h2>By prompt version, and by archetype</h2>
+    {% call info("Why split by prompt") %}
+      <p>Each prompt change is judged on its own rows. Pooled, a new prompt is
+        averaged with the old one and looks like it. Plans before 2026-11-25
+        carried no version stamp and read <em>unstamped (v1)</em>. Realized per
+        setup posted.</p>
+    {% endcall %}
+  </div>
+  {% if by_prompt is none %}
+    <p class="muted">Not reported by this engine (it predates the split).</p>
+  {% else %}
+  <div class="table-scroll"><table class="data-table">
+    <thead><tr><th>Prompt</th><th>Arm</th><th class="num">n</th><th class="num">Win %</th>
+      <th class="num">Avg %</th><th class="num">w/o top 1%</th></tr></thead>
+    <tbody>{% for arm, vers in by_prompt.items() %}{% for v, a in vers.items() %}
+      <tr><td class="nowrap"><code>{{ v }}</code></td><td>{{ arm }}</td><td class="num"><strong>{{ a.n }}</strong></td>
+        <td class="num">{{ (a.win_rate * 100)|pct if a.win_rate is not none else '—' }}</td>
+        <td class="num">{{ a.avg_net_pct|pct }}</td><td class="num">{{ (a.without_top_1pct or {}).avg_net_pct|pct }}</td></tr>
+    {% endfor %}{% endfor %}</tbody></table></div>
+  {% if by_arch %}
+  <div class="table-scroll"><table class="data-table">
+    <thead><tr><th>Analyst archetype · side</th><th class="num">n</th><th class="num">Win %</th>
+      <th class="num">Avg %</th><th class="num">Total %</th></tr></thead>
+    <tbody>{% for k, a in by_arch.items() %}
+      <tr><td class="nowrap">{{ k }}</td><td class="num"><strong>{{ a.n }}</strong></td>
+        <td class="num">{{ (a.win_rate * 100)|pct if a.win_rate is not none else '—' }}</td>
+        <td class="num">{{ a.avg_net_pct|pct }}</td><td class="num">{{ a.total_net_pct|pct }}</td></tr>
+    {% endfor %}</tbody></table></div>
+  {% endif %}
   {% endif %}
 </div>
 

@@ -106,13 +106,41 @@ def arm_rows(by_arm: dict) -> list[dict]:
     return rows
 
 
-def day_rows(by_arm: dict, arms: tuple = ("analyst", "market", "fixed_rule")) -> list[dict]:
-    """Per UTC submit day, each arm's realized total side by side. Days come
-    from the engine's rows; a day one arm lacks reads as missing, not zero."""
+def day_rows(by_arm: dict, arms: tuple = ("analyst", "market", "fixed_rule"),
+             existing: dict | None = None) -> list[dict]:
+    """Per UTC day, each arm's realized total side by side, plus the existing
+    system's delivered signals (by CLOSE day) when the engine publishes them.
+    A day one column lacks reads as missing, not zero."""
     per = {k: {d["day"]: d for d in ((by_arm.get(k) or {}).get("by_day") or {}).get("days") or []}
            for k in arms}
+    if existing and existing.get("readable"):
+        per["existing"] = {d["day"]: d for d in (existing.get("by_day") or {}).get("days") or []}
     days = sorted({d for m in per.values() for d in m}, reverse=True)
-    return [{"day": d, **{k: per[k].get(d) for k in arms}} for d in days]
+    return [{"day": d, **{k: m.get(d) for k, m in per.items()}} for d in days]
+
+
+def comparison(outcomes: dict) -> dict | None:
+    """The existing system against the analyst, same window, one fee basis.
+    None = an engine that does not publish the comparison (a deploy question)."""
+    ex = outcomes.get("existing_signals")
+    if ex is None:
+        return None
+    by_arm = outcomes.get("by_arm") or {}
+    rows = [("Existing system — signals users received", ex if ex.get("readable") else {})]
+    for k in ("analyst", "tranche", "market", "fixed_rule"):
+        if k in by_arm:
+            rows.append((ARM_LABELS.get(k, k), by_arm[k]))
+    out = []
+    for label, a in rows:
+        trim = a.get("without_top_1pct") or {}
+        day = a.get("by_day") or {}
+        out.append({"label": label, "n": a.get("n", 0), "win_rate": a.get("win_rate"),
+                    "avg": a.get("avg_net_pct"), "trim": trim.get("avg_net_pct"),
+                    "total": a.get("total_net_pct"), "days_pos": day.get("days_positive"),
+                    "n_days": day.get("n_days")})
+    return {"readable": bool(ex.get("readable")), "reason": ex.get("reason"),
+            "since": ex.get("since"), "rows": out,
+            "by_setup_side": ex.get("by_setup_side") or []}
 
 
 @router.get("/analyst")
@@ -143,7 +171,11 @@ async def analyst_page(request: Request):
         "whatif": outcomes.get("analyst_whatif"),
         "calibration": outcomes.get("calibration"),
         "walk_version": outcomes.get("walk_version"),
-        "days": day_rows(outcomes.get("by_arm") or {}),
+        "days": day_rows(outcomes.get("by_arm") or {},
+                         existing=outcomes.get("existing_signals")),
+        "cmp": comparison(outcomes),
+        "by_prompt": outcomes.get("by_prompt_version"),
+        "by_arch": outcomes.get("analyst_by_archetype_side"),
         "book": outcomes.get("active_book"),
         "recent_closed": outcomes.get("recent_closed"),
         "plans_state": plans_state, "plans_detail": plans_detail,
