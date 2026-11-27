@@ -331,18 +331,22 @@ def _walked_engine_summary(tmp_path):
         from src.historical_data import HistoricalDataStore  # type: ignore
         led = P.Ledger(str(tmp_path / "plans.sqlite"))
         con = led._connect()
+        v2 = getattr(W, "WALK_VERSION", 1) >= 2
         t0 = 1_800_000_000.0
         with con:
             con.execute("INSERT INTO plans (plan_id, submitted_at) VALUES ('p', ?)", (t0,))
             for i, (entry, stop) in enumerate(((99.0, 97.0), (90.0, 88.0))):
-                con.execute(
-                    "INSERT INTO setups (setup_id, plan_id, idx, symbol, side, status,"
-                    " entries_json, stop_price, targets_json, expires_at, submitted_at,"
-                    " p_target, p_stop) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (f"p:{i}", "p", i, "X", "long", "accepted",
-                     _json.dumps([{"id": "e", "price": entry, "weight": 1.0}]), stop,
-                     _json.dumps([{"id": "t", "price": 103.0}, {"id": "t2", "price": 106.0}]),
-                     t0 + 3600, t0, 0.4, 0.35))
+                row = {"setup_id": f"p:{i}", "plan_id": "p", "idx": i, "symbol": "X",
+                       "side": "long", "status": "accepted",
+                       "entries_json": _json.dumps([{"id": "e", "price": entry, "weight": 1.0}]),
+                       "stop_price": stop,
+                       "targets_json": _json.dumps([{"id": "t", "price": 103.0},
+                                                    {"id": "t2", "price": 106.0}]),
+                       "expires_at": t0 + 3600, "submitted_at": t0, "p_target": 0.4}
+                if v2:  # p_stop arrived with walk v2
+                    row["p_stop"] = 0.35
+                con.execute(f"INSERT INTO setups ({', '.join(row)}) VALUES "
+                            f"({', '.join('?' * len(row))})", tuple(row.values()))
         con.close()
         st = HistoricalDataStore()
         bars = [(100, 100.5, 99.5, 100), (100, 100, 98.8, 99.2)] + \
@@ -352,19 +356,30 @@ def _walked_engine_summary(tmp_path):
                                          "volume": 1, "open_time": (t0 + 300 * i) * 1000})
         eng = type("E", (), {"data_store": st})()
         now = t0 + 200 * 300
-        W.step(eng, now=now, path=led.path, deriv_path="")
+        if v2:
+            W.step(eng, now=now, path=led.path, deriv_path="")
+        else:
+            W.step(eng, now=now, path=led.path)
         return W.summary(path=led.path, now=now)
     finally:
         sys.path.remove(str(ENGINE_REPO))
 
 
 def test_contract_walk_v2_blocks_are_where_this_page_reads_them(tmp_path):
+    """Asserts whichever contract the engine at hand publishes. A v1 engine
+    (no walk_version) must read as OLD here, never as realized; a v2 engine
+    must carry every block this page reads. Never a skip: the contracts job
+    fails on one, and either branch is a real assertion."""
     if not ENGINE_REPO.exists():
         pytest.skip(ENGINE_ABSENT)
     real = _walked_engine_summary(tmp_path)
     rows = {r["key"]: r for r in analyst.arm_rows(real["by_arm"])}
     assert all(r["known"] for r in rows.values()), "an engine arm has no label here"
     a = rows["analyst"]
+    if real.get("walk_version") is None:
+        assert a["basis"] is None, "a v1 engine must not look realized"
+        assert a["filled_n"] is None and a["missed_n"] is None
+        return
     assert a["basis"] and a["basis"].startswith("realized")
     # One limit filled, one never reached: realized counts the second at 0.00%.
     assert a["n"] == 2 and a["filled_n"] == 1 and a["missed_n"] == 1
@@ -384,6 +399,9 @@ def test_v2_payload_renders_realized_and_the_missed_card(monkeypatch, tmp_path):
         pytest.skip(ENGINE_ABSENT)
     real = _walked_engine_summary(tmp_path)
     body = _get(monkeypatch, outcomes={"ok": True, "error": "", "result": real})
+    if real.get("walk_version") is None:  # a v1 engine renders as one
+        assert "OLD ENGINE" in body and "Realized %" not in body
+        return
     assert "Realized %" in body and "OLD ENGINE" not in body
     assert "What a missed limit would have made" in body
     assert "rules that only remove fills" in body
