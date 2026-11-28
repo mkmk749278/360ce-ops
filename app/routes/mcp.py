@@ -60,6 +60,40 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
          "properties": {"symbol": {"type": "string"},
                         "tf": {"enum": ["15m", "1h", "4h", "1d"]},
                         "bars": {"type": "integer", "minimum": 10, "maximum": 300}}}),
+    "chart_image": (
+        "read.analyst_chart_image",
+        "The same closed candles as chart, drawn as a candlestick PNG with volume, so "
+        "you can READ the chart as a trader does: swings, trend, ranges, wicks, "
+        "compression, failed breaks. Optional 'levels' (up to 10 prices) are drawn as "
+        "dashed lines. The image is content[0] (base64 PNG): decode it to a file and "
+        "view it. Take exact prices from the chart tool's numbers, not from the image.",
+        {"type": "object", "required": ["symbol"], "additionalProperties": False,
+         "properties": {"symbol": {"type": "string"},
+                        "tf": {"enum": ["15m", "1h", "4h", "1d"]},
+                        "bars": {"type": "integer", "minimum": 20, "maximum": 200},
+                        "levels": {"type": "array", "maxItems": 10,
+                                   "items": {"type": "number"}}}}),
+    "pair_flow": (
+        "read.analyst_flow",
+        "Who is trading one coin: long and short liquidations (15m/1h/4h) and their "
+        "price clusters; aggressive buy/sell volume by price over ~2h (tick footprint, "
+        "40 pairs); 15m CVD changes; live book depth and imbalance (40 pairs); volume "
+        "profile (POC, value area); funding and OI. Each block says whether it could be "
+        "read: unreadable = unknown, never zero. Context at a level, never the trigger.",
+        _SYMBOL_SCHEMA),
+    "pair_profile": (
+        "read.analyst_profile",
+        "How one coin behaves, computed by the engine from stored candles: beta and "
+        "correlation to BTC (1h, 4h, on BTC up vs down bars, last 48h) and whether it "
+        "has decoupled now; volatility percentile and wick share; trending vs "
+        "mean-reverting and breakout follow-through; returns by BTC regime; liquidity; "
+        "funding z-score and OI; unlocks. Every figure carries its n.", _SYMBOL_SCHEMA),
+    "pair_book": (
+        "read.analyst_book",
+        "Your memory of one coin: every level you marked before and how price treated "
+        "it (respected / broke / swept_reclaimed / untested / pending), your own earlier "
+        "pair_notes (hypotheses, not facts), and your last setups there. Read it before "
+        "charting a coin you have traded.", _SYMBOL_SCHEMA),
     "watchlist": (
         "read.analyst_watchlist",
         "Pairs within 1.5x 1h-ATR of a level scoring >= 60, best first, with refusals "
@@ -79,9 +113,11 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
     "plan_outcomes": (
         "read.analyst_outcomes",
         "How your past accepted setups did, walked forward dark on 5m bars, per arm "
-        "(your limit entry, your tranches, market at submit, no trade): n, win rate, "
-        "average net of a 0.07% round trip, with and without the top 1%. Unfilled "
-        "limits are scored at market. Also: analyst_split (filled vs scored-at-market, "
+        "(your limit entry, your tranches, a ladder, market at submit, a fixed rule, no "
+        "trade): n, win rate, average net of a 0.07% round trip, with and without the "
+        "top 1%. REALIZED per setup posted: a limit never filled earns 0.00%. by_setup "
+        "(archetype|side) and by_bias (bias|side) split it per cell, with market and "
+        "fixed_rule on the same setups. Also: analyst_split (filled vs scored-at-market, "
         "and how filled setups ended: target / stop / 12h time exit), active_book (your "
         "setups still pending or running, by side: read it BEFORE planning), and "
         "recent_closed (your last 10 closed setups with p_target, R:R, entry distance, "
@@ -107,6 +143,12 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
                  "prompt_version": {"type": "string", "maxLength": 40},
                  "bias": {"enum": ["risk_on", "risk_off", "neutral", "stand_aside"]},
                  "notes": {"type": "string", "maxLength": 500},
+                 "pair_notes": {"type": "object", "maxProperties": 6,
+                                "description": "SYMBOL -> your thesis, key levels and what "
+                                               "you are waiting for; stored as a hypothesis "
+                                               "and shown back in pair_book",
+                                "additionalProperties": {"type": "string",
+                                                         "maxLength": 300}},
                  "setups": {"type": "array", "maxItems": 5, "items": {
                      "type": "object",
                      "required": ["symbol", "side", "archetype", "invalidation"],
@@ -130,6 +172,7 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
                          "scenario": {"type": "string", "maxLength": 500},
                          "p_target": {"type": "number", "exclusiveMinimum": 0,
                                       "exclusiveMaximum": 1},
+                         "p_stop": {"type": "number", "minimum": 0, "maximum": 1},
                          "expiry_hours": {"type": "number", "minimum": 1, "maximum": 24},
                          "invalidation": {"type": "string", "maxLength": 500}}}}}}}}),
 }
@@ -155,7 +198,7 @@ def _auth(request: Request) -> dict[str, Any] | None:
 def _tool_args(name: str, args: Any, label: str) -> dict[str, Any]:
     """The engine args for *name*, or ValueError. Ops passes no free-form target."""
     args = args if isinstance(args, dict) else {}
-    if name == "pair_snapshot":
+    if name in ("pair_snapshot", "pair_flow", "pair_profile", "pair_book"):
         sym = str(args.get("symbol") or "").upper()
         if not _SYMBOL_RE.match(sym):
             raise ValueError("symbol must look like XXXUSDT")
@@ -171,6 +214,22 @@ def _tool_args(name: str, args: Any, label: str) -> dict[str, Any]:
         if not isinstance(bars, int) or not 10 <= bars <= 300:
             raise ValueError("bars must be an integer 10-300")
         return {"symbol": sym, "tf": tf, "bars": bars}
+    if name == "chart_image":
+        sym = str(args.get("symbol") or "").upper()
+        if not _SYMBOL_RE.match(sym):
+            raise ValueError("symbol must look like XXXUSDT")
+        tf = args.get("tf", "1h")
+        if tf not in ("15m", "1h", "4h", "1d"):
+            raise ValueError("tf must be one of 15m, 1h, 4h, 1d")
+        bars = args.get("bars", 120)
+        if not isinstance(bars, int) or not 20 <= bars <= 200:
+            raise ValueError("bars must be an integer 20-200")
+        levels = args.get("levels", [])
+        if (not isinstance(levels, list) or len(levels) > 10
+                or not all(isinstance(x, (int, float)) and not isinstance(x, bool)
+                           for x in levels)):
+            raise ValueError("levels must be a list of at most 10 numbers")
+        return {"symbol": sym, "tf": tf, "bars": bars, "levels": levels}
     if name == "recent_plans":
         lim = args.get("limit", 5)
         if not isinstance(lim, int) or not 1 <= lim <= 20:
@@ -267,5 +326,16 @@ async def mcp_post(request: Request) -> Response:
          "plan_id": (payload or {}).get("plan_id"),
          "n_accepted": (payload or {}).get("n_accepted")},
         ok=ok, actor=f"machine:{label}")
-    return _rpc(id_, result={"isError": not ok, "content": [
-        {"type": "text", "text": json.dumps(payload, default=str)}]})
+    return _rpc(id_, result={"isError": not ok, "content": _content(payload)})
+
+
+def _content(payload: Any) -> list[dict[str, Any]]:
+    """MCP content blocks. A rendered chart travels as an image block, first,
+    with its metadata (minus the base64) as text beside it, so a client that
+    shows images shows the chart and the text stays readable."""
+    if isinstance(payload, dict) and isinstance(payload.get("png_base64"), str):
+        meta = {k: v for k, v in payload.items() if k != "png_base64"}
+        return [{"type": "image", "data": payload["png_base64"],
+                 "mimeType": payload.get("mime_type") or "image/png"},
+                {"type": "text", "text": json.dumps(meta, default=str)}]
+    return [{"type": "text", "text": json.dumps(payload, default=str)}]
