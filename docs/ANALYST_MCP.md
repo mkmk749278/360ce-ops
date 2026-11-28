@@ -20,6 +20,7 @@ engine diagnostic-catalog key; the engine decides what that key may do.
 | `pair_flow(symbol)` | `read.analyst_flow` | no |
 | `pair_profile(symbol)` | `read.analyst_profile` | no |
 | `pair_book(symbol)` | `read.analyst_book` | no |
+| `plan_feed(limit)` | `read.analyst_feed` | no |
 | `plan_outcomes` | `read.analyst_outcomes` | no |
 | `derivatives_status` | `read.deriv_history` | no |
 | `submit_plan(plan)` | `action.analyst_submit_plan` | appends to the engine's analyst ledger |

@@ -39,12 +39,13 @@ STATE_OK = "ok"
 #: The engine's arm keys, in display order. Labels only: an arm the engine
 #: publishes and this map lacks still renders, under its raw key.
 ARM_LABELS = {
-    "analyst": "Analyst — limit at its first entry level",
+    "analyst": "Analyst — its chosen entry (limit, market or confirmed watch)",
     "tranche": "Analyst — its own tranches",
     "ladder": "Analyst — half at TP1, half to TP2",
     "fixed_rule": "Fixed rule — same menu, mechanical levels",
     "market": "Market at submit",
     "none": "No trade",
+    "zone_limit": "Watch control — resting limit at the watch zone",
 }
 
 

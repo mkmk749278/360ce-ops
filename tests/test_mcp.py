@@ -219,3 +219,21 @@ def test_a_refused_chart_image_stays_a_text_block(ctx):
                                         "arguments": {"symbol": "ETHUSDT"}}).json()["result"]
     assert [b["type"] for b in res["content"]] == ["text"]
     assert json.loads(res["content"][0]["text"])["reason"] == "short_series"
+
+
+def test_plan_feed_is_a_bounded_read_of_the_engines_feed(ctx):
+    c, token, _ = ctx
+    r = _rpc(c, token, "tools/call", {"name": "plan_feed", "arguments": {"limit": 200}})
+    assert r.json()["result"]["isError"] is False
+    assert app.state.engine_api.calls[-1] == ("read.analyst_feed", {"limit": 200})
+    n = len(app.state.engine_api.calls)
+    bad = _rpc(c, token, "tools/call", {"name": "plan_feed", "arguments": {"limit": 5000}})
+    assert bad.json()["result"]["isError"] is True and len(app.state.engine_api.calls) == n
+
+
+def test_submit_plan_advertises_the_entry_types_the_engine_accepts():
+    item = mcp.TOOLS["submit_plan"][2]["properties"]["plan"]["properties"]["setups"]["items"]
+    props = item["properties"]
+    assert props["entry_type"]["enum"] == ["pullback", "immediate", "watch"]
+    assert props["watch"]["properties"]["confirm"]["properties"]["rule"]["enum"] == [
+        "close_beyond_zone", "rejection_wick"]
