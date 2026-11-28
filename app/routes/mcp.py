@@ -122,6 +122,16 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
         "setups still pending or running, by side: read it BEFORE planning), and "
         "recent_closed (your last 10 closed setups with p_target, R:R, entry distance, "
         "7d-range position, exit, MFE and MAE). Read n before any average.", _EMPTY),
+    "plan_feed": (
+        "read.analyst_feed",
+        "Your accepted setups one by one, newest first (limit 1-300): symbol, side, "
+        "archetype, entry type, levels, scenario, p_target, state (pending / active / "
+        "tp_hit / sl_hit / time_exit / not_filled), and beside each the market and "
+        "fixed_rule arms on the SAME setup. Use it to look at a specific day or coin; "
+        "plan_outcomes is the aggregate.",
+        {"type": "object", "properties": {"limit": {"type": "integer", "minimum": 1,
+                                                    "maximum": 300}},
+         "additionalProperties": False}),
     "derivatives_status": (
         "read.deriv_history",
         "State of the hourly OI/funding/premium/taker recorder (it may be switched off).",
@@ -174,7 +184,28 @@ TOOLS: dict[str, tuple[str, str, dict]] = {
                                       "exclusiveMaximum": 1},
                          "p_stop": {"type": "number", "minimum": 0, "maximum": 1},
                          "expiry_hours": {"type": "number", "minimum": 1, "maximum": 24},
-                         "invalidation": {"type": "string", "maxLength": 500}}}}}}}}),
+                         "invalidation": {"type": "string", "maxLength": 500},
+                         "entry_type": {"enum": ["pullback", "immediate", "watch"],
+                                        "description": "pullback = resting limit at "
+                                        "entry_prices (default); immediate = enter at "
+                                        "market now (omit entry_prices); watch = wait for "
+                                        "price to reach 'watch.zone' and enter only on the "
+                                        "confirming close (omit entry_prices)"},
+                         "watch": {"type": "object", "properties": {
+                             "zone": {"type": "array", "minItems": 2, "maxItems": 2,
+                                      "items": {"type": "number"}},
+                             "confirm": {"type": "object", "properties": {
+                                 "rule": {"enum": ["close_beyond_zone", "rejection_wick"]},
+                                 "tf": {"enum": ["5m", "15m"]},
+                                 "min_wick_ratio": {"type": "number", "minimum": 0.2,
+                                                    "maximum": 0.9}}},
+                             "cancel": {"type": "array", "maxItems": 3, "items": {
+                                 "type": "object", "properties": {
+                                     "rule": {"enum": ["close_through", "btc_beyond"]},
+                                     "level": {"type": "number"},
+                                     "tf": {"enum": ["5m", "15m"]},
+                                     "price": {"type": "number"},
+                                     "dir": {"enum": ["above", "below"]}}}}}}}}}}}}}),
 }
 
 
@@ -230,6 +261,11 @@ def _tool_args(name: str, args: Any, label: str) -> dict[str, Any]:
                            for x in levels)):
             raise ValueError("levels must be a list of at most 10 numbers")
         return {"symbol": sym, "tf": tf, "bars": bars, "levels": levels}
+    if name == "plan_feed":
+        lim = args.get("limit", 50)
+        if not isinstance(lim, int) or not 1 <= lim <= 300:
+            raise ValueError("limit must be an integer 1-300")
+        return {"limit": lim}
     if name == "recent_plans":
         lim = args.get("limit", 5)
         if not isinstance(lim, int) or not 1 <= lim <= 20:

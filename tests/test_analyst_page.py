@@ -56,7 +56,7 @@ def _get(monkeypatch, outcomes=OUTCOMES, plans=PLANS) -> str:
 def test_arms_render_beside_each_other_with_n_and_the_trim(monkeypatch):
     body = _get(monkeypatch)
     assert "Fixed rule — same menu, mechanical levels" in body
-    assert "Analyst — limit at its first entry level" in body
+    assert "Analyst — its chosen entry (limit, market or confirmed watch)" in body
     assert "Not built yet, so not zero: existing_signals" in body
 
 
