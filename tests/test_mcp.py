@@ -171,3 +171,51 @@ def test_chart_tool_bounds_its_arguments_before_the_engine(ctx):
         n = len(app.state.engine_api.calls)
         res = _rpc(c, token, "tools/call", {"name": "chart", "arguments": bad}).json()["result"]
         assert res["isError"] is True and len(app.state.engine_api.calls) == n
+
+
+def test_the_phase1_reads_forward_only_their_own_keys(ctx):
+    c, token, _ = ctx
+    for name, key in (("pair_flow", "read.analyst_flow"),
+                      ("pair_profile", "read.analyst_profile"),
+                      ("pair_book", "read.analyst_book")):
+        r = _rpc(c, token, "tools/call", {"name": name, "arguments": {"symbol": "solusdt"}})
+        assert r.json()["result"]["isError"] is False
+        assert app.state.engine_api.calls[-1] == (key, {"symbol": "SOLUSDT"})
+        n = len(app.state.engine_api.calls)
+        bad = _rpc(c, token, "tools/call", {"name": name, "arguments": {"symbol": "x"}})
+        assert bad.json()["result"]["isError"] is True and len(app.state.engine_api.calls) == n
+
+
+def test_chart_image_is_bounded_and_returned_as_an_image_block(ctx):
+    c, token, _ = ctx
+    app.state.engine_api = FakeEngine(reply={"ok": True, "key": "read.analyst_chart_image",
+                                             "error": "", "result": {
+                                                 "readable": True, "mime_type": "image/png",
+                                                 "png_base64": "iVBORw0KGgo=", "bars": 80}})
+    r = _rpc(c, token, "tools/call", {"name": "chart_image", "arguments": {
+        "symbol": "ethusdt", "tf": "4h", "bars": 80, "levels": [3000, 2950.5]}})
+    res = r.json()["result"]
+    assert res["isError"] is False
+    assert res["content"][0] == {"type": "image", "data": "iVBORw0KGgo=",
+                                 "mimeType": "image/png"}
+    meta = json.loads(res["content"][1]["text"])
+    assert "png_base64" not in meta and meta["bars"] == 80
+    assert app.state.engine_api.calls[-1] == (
+        "read.analyst_chart_image",
+        {"symbol": "ETHUSDT", "tf": "4h", "bars": 80, "levels": [3000, 2950.5]})
+    for bad in ({"symbol": "ETHUSDT", "bars": 300}, {"symbol": "ETHUSDT", "levels": ["x"]},
+                {"symbol": "ETHUSDT", "levels": [1] * 11}, {"symbol": "ETHUSDT", "tf": "5m"}):
+        n = len(app.state.engine_api.calls)
+        res = _rpc(c, token, "tools/call", {"name": "chart_image",
+                                            "arguments": bad}).json()["result"]
+        assert res["isError"] is True and len(app.state.engine_api.calls) == n
+
+
+def test_a_refused_chart_image_stays_a_text_block(ctx):
+    c, token, _ = ctx
+    app.state.engine_api = FakeEngine(reply={"ok": True, "key": "k", "error": "", "result": {
+        "readable": False, "reason": "short_series"}})
+    res = _rpc(c, token, "tools/call", {"name": "chart_image",
+                                        "arguments": {"symbol": "ETHUSDT"}}).json()["result"]
+    assert [b["type"] for b in res["content"]] == ["text"]
+    assert json.loads(res["content"][0]["text"])["reason"] == "short_series"

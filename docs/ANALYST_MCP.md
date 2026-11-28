@@ -16,6 +16,10 @@ engine diagnostic-catalog key; the engine decides what that key may do.
 | `watchlist` | `read.analyst_watchlist` | no |
 | `pair_snapshot(symbol)` | `read.analyst_pair` | no |
 | `recent_plans(limit)` | `read.analyst_plans` | no |
+| `chart_image(symbol, tf, bars, levels)` | `read.analyst_chart_image` | no — returns an MCP image block |
+| `pair_flow(symbol)` | `read.analyst_flow` | no |
+| `pair_profile(symbol)` | `read.analyst_profile` | no |
+| `pair_book(symbol)` | `read.analyst_book` | no |
 | `plan_outcomes` | `read.analyst_outcomes` | no |
 | `derivatives_status` | `read.deriv_history` | no |
 | `submit_plan(plan)` | `action.analyst_submit_plan` | appends to the engine's analyst ledger |
@@ -23,8 +27,12 @@ engine diagnostic-catalog key; the engine decides what that key may do.
 `submit_plan` reaches no subscriber, signal queue or order. The engine asserts
 this per catalog entry, by AST. It needs `DIAG_ACTIONS_ENABLED` on the engine.
 
-Not yet tools (the engine does not publish them yet): book state, the unlock
-calendar as its own view.
+Phase 1 of the analyst desk plan (360-v2
+`docs/ANALYST_DESK_PLAN_2026_11_28.md`) added the four tools above. `submit_plan`
+also accepts `pair_notes` (SYMBOL → ≤300 chars, at most 6), stored as hypotheses
+and shown back by `pair_book`.
+
+Not yet tools: the unlock calendar as its own view.
 
 ## Credentials
 
